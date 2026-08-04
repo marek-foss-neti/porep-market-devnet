@@ -18,7 +18,12 @@ export type ContractAbis = {
 const cache = new Map<string, ContractAbis>();
 
 export function artifactAbis(context: ScenarioContext): ContractAbis {
-  const filecoinPayRoot = join(context.projectRoot, ".runtime/contracts/work/filecoin-pay");
+  const filecoinPayRoot = join(
+    context.projectRoot,
+    ".runtime/deployments",
+    context.config.deploymentId,
+    "work/filecoin-pay",
+  );
   const harnessRoot = join(context.projectRoot, ".runtime/contracts");
   const cacheKey = `${context.config.porepSourceDir}:${filecoinPayRoot}:${harnessRoot}`;
   const cached = cache.get(cacheKey);

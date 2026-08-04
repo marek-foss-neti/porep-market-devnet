@@ -10,7 +10,10 @@ import { createScenarioContext } from "../src/runtime.js";
 test("artifactAbis loads the current runtime build artifacts", () => {
   const root = mkdtempSync(join(tmpdir(), "porep-e2e-abis-"));
   const porep = join(root, ".runtime/contracts/work/porep-market");
-  const filecoinPay = join(root, ".runtime/contracts/work/filecoin-pay");
+  const filecoinPay = join(
+    root,
+    ".runtime/deployments/deployment-test/work/filecoin-pay",
+  );
   const harness = join(root, ".runtime/contracts");
   for (const [name, fn] of [
     ["SPRegistry.sol/SPRegistry.json", "isProviderRegistered"],
