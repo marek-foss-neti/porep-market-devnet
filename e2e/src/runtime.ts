@@ -1,36 +1,53 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { E2EConfig } from "./config.js";
+import {
+  scenarioStepSlug,
+  writeRunMarkdownSummary,
+} from "./report.js";
+import type { RunSummary, ScenarioStepResult } from "./report.js";
 import { StateStore } from "./state.js";
 import { run } from "./shell.js";
 
+export type { RunSummary, ScenarioStepResult } from "./report.js";
+
 export type ScenarioContext = {
   config: E2EConfig;
+  scenario: string;
   runId: string;
   runDir: string;
   stateFile: string;
   projectRoot: string;
   scriptsRoot: string;
   state: StateStore;
+  startedAt: string;
+  startedAtMs: number;
   steps: string[];
+  stepResults: ScenarioStepResult[];
 };
 
 export function createScenarioContext(
   config: E2EConfig,
   runDir: string,
   runId = runDir.split("/").at(-1) ?? "scenario-run",
+  scenario = runId,
 ): ScenarioContext {
   mkdirSync(runDir, { recursive: true });
+  const startedAtMs = Date.now();
 
   return {
     config,
+    scenario,
     runId,
     runDir,
     stateFile: join(runDir, "scenario.state.json"),
     projectRoot: config.projectRoot,
     scriptsRoot: config.projectRoot,
     state: new StateStore(join(runDir, "scenario.state.json")),
-    steps: []
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    steps: [],
+    stepResults: [],
   };
 }
 
@@ -39,7 +56,8 @@ export async function runStep<T>(
   name: string,
   action: () => T | Promise<T>
 ): Promise<T> {
-  const label = `${context.steps.length + 1} ${name}`;
+  const index = context.steps.length + 1;
+  const label = `${index} ${name}`;
   const started = Date.now();
   context.steps.push(name);
   console.log(`\n== ${label} ==`);
@@ -47,22 +65,34 @@ export async function runStep<T>(
   try {
     const result = await action();
     const elapsedMs = Date.now() - started;
+    const artifact = `${String(index).padStart(2, "0")}-${scenarioStepSlug(name)}.json`;
     writeFileSync(
-      join(context.runDir, `${String(context.steps.length).padStart(2, "0")}-${slug(name)}.json`),
+      join(context.runDir, artifact),
       `${JSON.stringify({ name, elapsedMs, result }, stringifyBigInt, 2)}\n`
     );
+    context.stepResults.push({ index, name, status: "passed", elapsedMs, artifact });
     console.log(`Completed ${name} in ${elapsedMs}ms`);
     return result;
   } catch (error) {
     const elapsedMs = Date.now() - started;
+    const message = error instanceof Error ? error.message : String(error);
+    const artifact = `${String(index).padStart(2, "0")}-${scenarioStepSlug(name)}.error.json`;
     writeFileSync(
-      join(context.runDir, `${String(context.steps.length).padStart(2, "0")}-${slug(name)}.error.json`),
+      join(context.runDir, artifact),
       `${JSON.stringify({
         name,
         elapsedMs,
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       }, null, 2)}\n`
     );
+    context.stepResults.push({
+      index,
+      name,
+      status: "failed",
+      elapsedMs,
+      artifact,
+      error: message,
+    });
     throw error;
   }
 }
@@ -73,25 +103,35 @@ export function writeRunSummary(
   error?: unknown,
 ): string {
   const summaryPath = join(context.runDir, "summary.json");
+  const summaryMarkdownPath = join(context.runDir, "summary.md");
+  const completedAtMs = Date.now();
+  const summary: RunSummary = {
+    startedAt: context.startedAt,
+    completedAt: new Date(completedAtMs).toISOString(),
+    durationMs: Math.max(0, completedAtMs - context.startedAtMs),
+    result,
+    scenario: context.scenario,
+    runId: context.runId,
+    deploymentId: context.config.deploymentId,
+    deploymentRevision: context.config.deploymentRevision,
+    deploymentRecordPath: context.config.deploymentRecordPath,
+    runDir: context.runDir,
+    stateFile: context.stateFile,
+    summaryMarkdownPath,
+    steps: context.steps,
+    stepResults: context.stepResults,
+    state: context.state.all(),
+    ...(error === undefined
+      ? {}
+      : { error: error instanceof Error ? error.message : String(error) }),
+  };
   writeFileSync(
     summaryPath,
-    `${JSON.stringify({
-      completedAt: new Date().toISOString(),
-      result,
-      runId: context.runId,
-      deploymentId: context.config.deploymentId,
-      deploymentRevision: context.config.deploymentRevision,
-      deploymentRecordPath: context.config.deploymentRecordPath,
-      runDir: context.runDir,
-      stateFile: context.stateFile,
-      steps: context.steps,
-      state: context.state.all(),
-      ...(error === undefined
-        ? {}
-        : { error: error instanceof Error ? error.message : String(error) }),
-    }, null, 2)}\n`
+    `${JSON.stringify(summary, null, 2)}\n`
   );
+  writeRunMarkdownSummary(summaryPath);
   console.log(`\nRun summary: ${summaryPath}`);
+  console.log(`Run report: ${summaryMarkdownPath}`);
   return summaryPath;
 }
 
@@ -139,10 +179,6 @@ export function defaultDepositAmountHuman(context: ScenarioContext): string {
   const pricePerMonth = envBigInt(context, "V2_PRICE_PER_32GIB_MONTH", 86_400_000_000n);
   const withMargin = (pricePerMonth * 110n + 99n) / 100n;
   return ((withMargin + 999_999n) / 1_000_000n).toString();
-}
-
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function stringifyBigInt(_key: string, value: unknown): unknown {

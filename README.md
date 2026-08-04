@@ -57,6 +57,31 @@ just test-e2e contract
 The checkout may be dirty. The harness snapshots it before testing or
 deployment, so later edits cannot change the running test.
 
+## Run the seal/unseal baseline
+
+The baseline uses the pinned, unmodified Curio and Filecoin Stacked PoRep path.
+Run a fresh end-to-end roundtrip against the active deployment with:
+
+```sh
+just test-seal-unseal
+```
+
+The scenario generates a fresh CAR and CommP, submits an MK20 deal, waits for
+Curio to seal the sector and publish ProveCommit, and confirms that the sealed
+replica exists while the unsealed replica does not. It then requests unseal,
+checks the resulting CommD, recovers the exact CAR bytes from `FTUnsealed`, and
+verifies the source and recovered SHA-256, CommP, padded piece size, sealed
+replica, and on-chain sector.
+
+The test starts unseal as soon as the sector is committed on-chain. It does not
+wait for the first WindowPoSt or require the sector to enter the active-sector
+set. This keeps the baseline faithful to the normal seal/unseal implementation
+without adding the proving-period delay to the local test.
+
+Each run writes `summary.json` and a descriptive `summary.md` under
+`.runtime/runs/<run-id>/`. The Markdown report contains the final verdict,
+per-step timings, seal/unseal checks, recovered hashes, and failure diagnostics.
+
 ## Run scenarios
 
 Run one scenario:
@@ -89,8 +114,10 @@ be a contract finding rather than a harness failure. Matrix reports separate
 infrastructure failures from behavior failures and record skipped
 capabilities.
 
-Run summaries and bounded failure diagnostics are written under
-`.runtime/runs/`.
+Run summaries are written under `.runtime/runs/` as both machine-readable
+`summary.json` and a descriptive `summary.md`. The Markdown report includes
+the final verdict, per-step timings, seal/unseal checks, recorded state, and
+the failing step and diagnostics link when a run fails.
 
 ## Deployments and external tooling
 

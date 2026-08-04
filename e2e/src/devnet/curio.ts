@@ -4,7 +4,7 @@ import type { ScenarioContext } from "../runtime.js";
 import { envNumber } from "../runtime.js";
 import { run, sleep } from "../shell.js";
 import type { PieceInfo } from "./piece.js";
-import { dockerExec, dockerExecEnv, requireDevnet } from "./docker.js";
+import { containerName, dockerExec, dockerExecEnv, requireDevnet } from "./docker.js";
 
 type CurioStatus = {
   generation?: unknown;
@@ -232,7 +232,7 @@ export async function waitForCurioCommitFailure(
 function readCommitRejection(context: ScenarioContext, pieceCid: string): string {
   const result = run(
     "docker",
-    ["logs", "--since", "15m", "porep-market-curio-devnet-curio-1"],
+    ["logs", "--since", "15m", containerName("curio")],
     context.projectRoot,
   );
   const lines = `${result.stdout}\n${result.stderr}`.split("\n");

@@ -37,7 +37,7 @@ try {
     throw new Error("scenario run directory escapes the runtime root");
   }
   mkdirSync(runDir, { recursive: true });
-  context = createScenarioContext(config, runDir, runId);
+  context = createScenarioContext(config, runDir, runId, scenario);
   const facts = collectPreflightFacts(context);
   assertPreflightFacts(facts);
   writeFileSync(

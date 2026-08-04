@@ -43,6 +43,9 @@ test-unit:
     @node scripts/run-with-timeout.mjs --timeout-ms 600000 -- npm --prefix e2e run test:unit
     @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- bash scripts/static-checks.sh
 
+test-seal-unseal deployment='active' resume='':
+    @SEAL_UNSEAL_RESUME_RUN_DIR='{{resume}}' just test-scenario seal-unseal-roundtrip '{{deployment}}'
+
 test-scenario name deployment='active':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
     @node scripts/run-with-timeout.mjs --timeout-ms 7200000 -- npm --prefix e2e run scenario -- '{{name}}'

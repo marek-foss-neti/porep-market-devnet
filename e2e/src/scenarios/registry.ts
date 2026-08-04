@@ -26,6 +26,7 @@ import { runSectorStatusActive, runSectorStatusNegative } from "./sectorStatus.j
 import { runUpgradeContinuity } from "./upgradeContinuity.js";
 import { runTerminationSettlement } from "./terminationSettlement.js";
 import { runCurioRestartReplay } from "./curioRestartReplay.js";
+import { runSealUnsealRoundtrip } from "./sealUnsealRoundtrip.js";
 import {
   runAcceptedDealExpiration,
   runAcceptedDealRejection,
@@ -134,6 +135,7 @@ export const scenarioDefinitions: Record<string, ScenarioDefinition> = {
     requiredContracts: [],
   },
   "proposal-smoke": contract(runProposalSmoke),
+  "seal-unseal-roundtrip": sealing(runSealUnsealRoundtrip),
   "sector-status-active": {
     run: runSectorStatusActive,
     tags: ["curio", "sealing"],

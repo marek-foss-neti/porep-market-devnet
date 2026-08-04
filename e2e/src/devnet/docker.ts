@@ -34,7 +34,7 @@ export function dockerExecOk(context: ScenarioContext, container: string, args: 
   return run("docker", ["exec", containerName(container), ...args], context.projectRoot).status === 0;
 }
 
-function containerName(service: string): string {
+export function containerName(service: string): string {
   const services = new Set([
     "lotus", "lotus-miner", "curio", "piece-server", "indexer", "yugabyte",
   ]);

@@ -48,7 +48,9 @@ test("nextProposalManifest preserves explicit manifest env values", () => {
 
 function testContext(env: Record<string, string | undefined> = {}): ScenarioContext {
   const dir = mkdtempSync(join(tmpdir(), "porep-e2e-deal-"));
+  const startedAtMs = Date.now();
   return {
+    scenario: "test",
     runId: "run-test",
     config: {
       cwd: dir,
@@ -98,6 +100,9 @@ function testContext(env: Record<string, string | undefined> = {}): ScenarioCont
     projectRoot: dir,
     scriptsRoot: dir,
     state: new StateStore(join(dir, "state.json")),
-    steps: []
+    startedAt: new Date(startedAtMs).toISOString(),
+    startedAtMs,
+    steps: [],
+    stepResults: [],
   };
 }
