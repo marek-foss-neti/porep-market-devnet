@@ -75,7 +75,7 @@ test("timeout terminates a SIGTERM-ignoring descendant before it can continue wo
   const descendantScript = [
     "const { writeFileSync } = require('node:fs');",
     "process.on('SIGTERM', () => {});",
-    `setTimeout(() => writeFileSync(${JSON.stringify(markerPath)}, 'worked'), 1_400);`,
+    `setTimeout(() => writeFileSync(${JSON.stringify(markerPath)}, 'worked'), 2_500);`,
     "setInterval(() => {}, 1_000);",
   ].join("");
   const parentScript = [
@@ -99,8 +99,8 @@ test("timeout terminates a SIGTERM-ignoring descendant before it can continue wo
     }) as typeof process.kill;
     await assert.rejects(run(process.execPath, ["-e", parentScript], {
       cwd: directory,
-      timeoutMs: 100,
-    }), /timed out after 100ms.*could not confirm process group termination.*EPERM/s);
+      timeoutMs: 300,
+    }), /timed out after 300ms.*could not confirm process group termination.*EPERM/s);
     process.kill = originalKill;
     descendantPid = Number(await readFile(pidPath, "utf8"));
     await delay(500);

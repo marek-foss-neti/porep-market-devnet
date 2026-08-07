@@ -8,6 +8,7 @@ devnet_require_command jq
 devnet_require_command node
 devnet_require_runtime_tree
 devnet_require_ownership_marker
+proof_backend="$(devnet_current_proof_backend)"
 status_path="${DEVNET_ROOT}/.runtime/devnet/status/latest.json"
 mkdir -p "$(dirname "${status_path}")"
 # Keep ten seconds of margin below the documented 20-minute wall budget.
@@ -127,6 +128,14 @@ while ((SECONDS < deadline)); do
   [[ "${market_health}" == "Service is up and running" ]] && market_ready=true
   task_count="$(bounded_compose exec -T yugabyte bin/ysqlsh -h yugabyte -U yugabyte -d yugabyte -Atc \
     'select count(*) from curio.harmony_task;' 2>/dev/null | tail -1 || true)"
+  lotus_fil_proofs_use_zigzag="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_USE_ZIGZAG:-}"' 2>/dev/null || true)"
+  curio_fil_proofs_use_zigzag="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_USE_ZIGZAG:-}"' 2>/dev/null || true)"
+  curio_zigzag_generate_missing_params="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS:-}"' 2>/dev/null || true)"
+  expected_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
+  expected_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
 
   build_curio="$(jq -r '.curioCommit' "${DEVNET_BUILD_DIR}/images.json")"
   build_lotus="$(jq -r '.lotusCommit' "${DEVNET_BUILD_DIR}/images.json")"
@@ -147,6 +156,9 @@ while ((SECONDS < deadline)); do
     || "${api_ready}" != true
     || "${market_ready}" != true
     || ! "${task_count}" =~ ^[0-9]+$
+    || "${lotus_fil_proofs_use_zigzag}" != "${expected_zigzag}"
+    || "${curio_fil_proofs_use_zigzag}" != "${expected_zigzag}"
+    || "${curio_zigzag_generate_missing_params}" != "${expected_generate_missing_params}"
     || -z "${generation}"
   ]]; then
     last_state="semantic probes incomplete at epoch ${epoch}"
@@ -161,6 +173,10 @@ while ((SECONDS < deadline)); do
     --arg buildCurio "${build_curio}" \
     --arg buildLotus "${build_lotus}" \
     --arg platform "${build_platform}" \
+    --arg proofBackend "${proof_backend}" \
+    --arg lotusZigZag "${lotus_fil_proofs_use_zigzag}" \
+    --arg curioZigZag "${curio_fil_proofs_use_zigzag}" \
+    --arg curioGenerateMissingParams "${curio_zigzag_generate_missing_params}" \
     --argjson compose "${compose_status}" \
     --arg chainId "${chain_id}" \
     --argjson epoch "${epoch}" \
@@ -179,6 +195,14 @@ while ((SECONDS < deadline)); do
       generatedAt: $generatedAt,
       generation: $generation,
       build: {curioCommit: $buildCurio, lotusCommit: $buildLotus, platform: $platform},
+      proof: {
+        backend: $proofBackend,
+        lotus: {FIL_PROOFS_USE_ZIGZAG: $lotusZigZag},
+        curio: {
+          FIL_PROOFS_USE_ZIGZAG: $curioZigZag,
+          FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: $curioGenerateMissingParams
+        }
+      },
       compose: $compose,
       chain: {
         chainId: $chainId,

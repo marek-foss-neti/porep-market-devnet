@@ -20,6 +20,23 @@ COPY --from=blst-source /LICENSE ./LICENSE
 RUN ./build.sh \
     && test -s libblst.a
 
+FROM scratch AS rust-fil-proofs-local
+
+COPY --from=rust-fil-proofs /Cargo.toml /Cargo.toml
+COPY --from=rust-fil-proofs /Cargo.lock /Cargo.lock
+COPY --from=rust-fil-proofs /parameters.json /parameters.json
+COPY --from=rust-fil-proofs /srs-inner-product.json /srs-inner-product.json
+COPY --from=rust-fil-proofs /fil-proofs-param /fil-proofs-param
+COPY --from=rust-fil-proofs /fil-proofs-tooling /fil-proofs-tooling
+COPY --from=rust-fil-proofs /filecoin-hashers /filecoin-hashers
+COPY --from=rust-fil-proofs /filecoin-proofs /filecoin-proofs
+COPY --from=rust-fil-proofs /fr32 /fr32
+COPY --from=rust-fil-proofs /sha2raw /sha2raw
+COPY --from=rust-fil-proofs /storage-proofs-core /storage-proofs-core
+COPY --from=rust-fil-proofs /storage-proofs-porep /storage-proofs-porep
+COPY --from=rust-fil-proofs /storage-proofs-post /storage-proofs-post
+COPY --from=rust-fil-proofs /storage-proofs-update /storage-proofs-update
+
 FROM ${GO_BUILDER_IMAGE} AS curio-builder
 
 RUN apt-get update \
@@ -56,6 +73,27 @@ COPY . .
 COPY --from=harness-overlay patches/curio/0001-sptool-mk20-notification-flags.patch /tmp/sptool-mk20-notification-flags.patch
 RUN git apply --check /tmp/sptool-mk20-notification-flags.patch \
     && git apply /tmp/sptool-mk20-notification-flags.patch
+COPY --from=harness-overlay patches/curio/0003-zigzag-devnet-unseal.patch /tmp/curio-zigzag-devnet-unseal.patch
+RUN git apply --check /tmp/curio-zigzag-devnet-unseal.patch \
+    && git apply /tmp/curio-zigzag-devnet-unseal.patch
+RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
+COPY --from=rust-fil-proofs-local / /opt/curio/extern/rust-fil-proofs
+COPY --from=harness-overlay patches/filecoin-ffi/0001-zigzag-devnet-ffi.patch /tmp/filecoin-ffi-zigzag-devnet.patch
+RUN git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch \
+    && git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch
+COPY --from=harness-overlay patches/fvm/0001-zigzag-devnet-verifier.patch /tmp/fvm-zigzag-devnet-verifier.patch
+COPY --from=harness-overlay patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+RUN set -eu; \
+    fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
+    test -n "${fvm_source}"; \
+    rm -rf extern/fvm-4.8.2-zigzag; \
+    cp -a "${fvm_source}" extern/fvm-4.8.2-zigzag; \
+    chmod -R u+w extern/fvm-4.8.2-zigzag; \
+    git apply --check --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
+    git apply --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
+    git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
+    git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
+    rm -f /tmp/fvm-zigzag-devnet-verifier.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
 COPY --from=blst-builder /opt/blst /opt/curio/extern/supraseal/deps/blst
 
 ARG CURIO_COMMIT
@@ -73,6 +111,66 @@ RUN mkdir -p build \
        make build \
          CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
          CURIO_TAGS="${CURIO_TAGS}"
+
+FROM ${GO_BUILDER_IMAGE} AS lotus-builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      clang \
+      git \
+      jq \
+      libhwloc-dev \
+      make \
+      ocl-icd-libopencl1 \
+      ocl-icd-opencl-dev \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
+COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
+
+ENV CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:${PATH} \
+    XDG_CACHE_HOME=/tmp
+
+WORKDIR /opt/lotus
+COPY --from=lotus-source /go.mod /go.sum ./
+COPY --from=lotus-source /extern/filecoin-ffi/go.mod /extern/filecoin-ffi/go.sum ./extern/filecoin-ffi/
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+COPY --from=lotus-source / .
+RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
+COPY --from=rust-fil-proofs-local / /opt/lotus/extern/rust-fil-proofs
+COPY --from=harness-overlay patches/filecoin-ffi/0001-zigzag-devnet-ffi.patch /tmp/filecoin-ffi-zigzag-devnet.patch
+RUN git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch \
+    && git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch
+COPY --from=harness-overlay patches/fvm/0001-zigzag-devnet-verifier.patch /tmp/fvm-zigzag-devnet-verifier.patch
+COPY --from=harness-overlay patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+RUN set -eu; \
+    fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
+    test -n "${fvm_source}"; \
+    rm -rf extern/fvm-4.8.2-zigzag; \
+    cp -a "${fvm_source}" extern/fvm-4.8.2-zigzag; \
+    chmod -R u+w extern/fvm-4.8.2-zigzag; \
+    git apply --check --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
+    git apply --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
+    git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
+    git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
+    rm -f /tmp/fvm-zigzag-devnet-verifier.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+
+RUN mkdir -p build \
+    && touch build/.update-modules \
+    && FFI_BUILD_FROM_SOURCE=1 \
+       FFI_USE_OPENCL=1 \
+       CARGO_BUILD_JOBS=2 \
+       GOMAXPROCS=2 \
+       make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed
 
 FROM ${GO_BUILDER_IMAGE} AS service-tool-builder
 
@@ -128,10 +226,10 @@ COPY --from=foundry /usr/local/bin/cast /usr/local/bin/cast
 COPY --from=foundry /usr/local/bin/anvil /usr/local/bin/anvil
 COPY --from=foundry /usr/local/bin/chisel /usr/local/bin/chisel
 
-COPY --from=lotus-test /usr/local/bin/lotus /usr/local/bin/lotus
-COPY --from=lotus-test /usr/local/bin/lotus-seed /usr/local/bin/lotus-seed
-COPY --from=lotus-test /usr/local/bin/lotus-shed /usr/local/bin/lotus-shed
-COPY --from=lotus-test /usr/local/bin/lotus-miner /usr/local/bin/lotus-miner
+COPY --from=lotus-builder /opt/lotus/lotus /usr/local/bin/lotus
+COPY --from=lotus-builder /opt/lotus/lotus-seed /usr/local/bin/lotus-seed
+COPY --from=lotus-builder /opt/lotus/lotus-shed /usr/local/bin/lotus-shed
+COPY --from=lotus-builder /opt/lotus/lotus-miner /usr/local/bin/lotus-miner
 COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio
 COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool
 COPY --from=service-tool-builder /go/bin/car /usr/local/bin/car
@@ -161,12 +259,16 @@ ARG CURIO_COMMIT
 ARG LOTUS_COMMIT
 ARG BLST_COMMIT
 ARG DOCKERFILE_SHA256
+ARG ZIGZAG_FILECOIN_FFI_PATCH_SHA256
+ARG ZIGZAG_RUST_FIL_PROOFS_API_SHA256
 
 LABEL org.opencontainers.image.revision="${CURIO_COMMIT}" \
       io.porep-market.curio.commit="${CURIO_COMMIT}" \
       io.porep-market.lotus.commit="${LOTUS_COMMIT}" \
       io.porep-market.blst.commit="${BLST_COMMIT}" \
-      io.porep-market.dockerfile.sha256="${DOCKERFILE_SHA256}"
+      io.porep-market.dockerfile.sha256="${DOCKERFILE_SHA256}" \
+      io.porep-market.zigzag.filecoin-ffi.patch.sha256="${ZIGZAG_FILECOIN_FFI_PATCH_SHA256}" \
+      io.porep-market.zigzag.rust-fil-proofs.api.sha256="${ZIGZAG_RUST_FIL_PROOFS_API_SHA256}"
 
 ENV CURIO_MK12_CLIENT_REPO=/var/lib/curio-client \
     CURIO_REPO_PATH=/var/lib/curio \

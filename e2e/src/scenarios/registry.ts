@@ -26,7 +26,12 @@ import { runSectorStatusActive, runSectorStatusNegative } from "./sectorStatus.j
 import { runUpgradeContinuity } from "./upgradeContinuity.js";
 import { runTerminationSettlement } from "./terminationSettlement.js";
 import { runCurioRestartReplay } from "./curioRestartReplay.js";
-import { runSealUnsealRoundtrip } from "./sealUnsealRoundtrip.js";
+import { runBenchRetrieval } from "./benchRetrieval.js";
+import { runBenchSealUnseal, runSealUnsealRoundtrip } from "./sealUnsealRoundtrip.js";
+import {
+  runBenchDeliverSealUnsealRetrieval,
+  runDeliverSealUnsealRetrieval,
+} from "./deliverSealUnsealRetrieval.js";
 import {
   runAcceptedDealExpiration,
   runAcceptedDealRejection,
@@ -34,6 +39,7 @@ import {
 import { runDealTermination } from "./dealTermination.js";
 
 export type ScenarioTag =
+  | "benchmark"
   | "contract"
   | "curio"
   | "infra"
@@ -88,6 +94,15 @@ function sealing(
   };
 }
 
+function benchmark(run: ScenarioDefinition["run"]): ScenarioDefinition {
+  return {
+    run,
+    tags: ["benchmark"],
+    timeoutMs: CURIO_TIMEOUT_MS,
+    requiredContracts: [...MARKET_CONTRACTS],
+  };
+}
+
 export const scenarioDefinitions: Record<string, ScenarioDefinition> = {
   "access-control-guards": contract(runAccessControlGuards, ["contract", "security"]),
   "accepted-deal-expiration": contract(runAcceptedDealExpiration, ["contract", "security"]),
@@ -103,6 +118,10 @@ export const scenarioDefinitions: Record<string, ScenarioDefinition> = {
     ...sealing(runAdapterDisable),
     destructive: true,
   },
+  "bench-retrieval": benchmark(runBenchRetrieval),
+  "bench-seal-unseal": benchmark(runBenchSealUnseal),
+  "bench-deliver-seal-unseal-retrieval": benchmark(runBenchDeliverSealUnsealRetrieval),
+  "deliver-seal-unseal-retrieval": sealing(runDeliverSealUnsealRetrieval),
   "direct-onboarding-notification": {
     run: runDirectOnboardingNotification,
     tags: ["curio", "sealing"],
@@ -202,10 +221,11 @@ export function resolveSuite(name: string): string[] {
   if (name === "full") {
     return scenarioNames.filter((scenario) =>
       !scenarioDefinitions[scenario]!.tags.includes("upgrade")
+        && !scenarioDefinitions[scenario]!.tags.includes("benchmark")
         && !scenarioDefinitions[scenario]!.destructive
     );
   }
-  if (name === "contract" || name === "curio" || name === "security") {
+  if (name === "benchmark" || name === "contract" || name === "curio" || name === "security") {
     return scenarioNames.filter((scenario) =>
       scenarioDefinitions[scenario]!.tags.includes(name)
         && !scenarioDefinitions[scenario]!.destructive

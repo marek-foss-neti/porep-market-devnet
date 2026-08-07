@@ -3,11 +3,12 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/devnet-common.sh"
 
 devnet_require_command docker
+backend="$(devnet_requested_proof_backend "${1:-}")"
 devnet_require_runtime_tree
 devnet_require_owned_path "${DEVNET_DATA_DIR}" "${DEVNET_RUNTIME_DIR}/data"
 devnet_require_ownership_marker
 
-printf -v timestamp '%(%Y%m%dT%H%M%SZ)T' -1
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 evidence_root="${DEVNET_ROOT}/.runtime/reset-evidence/reset-${timestamp}"
 devnet_require_safe_write_path "${DEVNET_ROOT}/.runtime/reset-evidence" directory
 devnet_require_safe_write_path "${evidence_root}" directory
@@ -43,6 +44,7 @@ for directory in \
 done
 rm -f -- \
   "${DEVNET_COMPOSE_ENV}" \
+  "${DEVNET_PROOF_BACKEND_FILE}" \
   "${DEVNET_RUNTIME_DIR}/generation" \
   "${DEVNET_ROOT}/.runtime/deployments/active.json"
 
@@ -54,3 +56,4 @@ fi
 
 mkdir -p "${DEVNET_DATA_DIR}"
 devnet_prepare_runtime
+devnet_write_proof_backend "${backend}"

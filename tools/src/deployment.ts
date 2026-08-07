@@ -7,6 +7,7 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const CID_PATTERN = /^baf[a-z2-7]{20,}$/;
 const PROVIDER_PATTERN = /^t0[0-9]+$/;
 const DEPLOYMENT_ID_PATTERN = /^deployment-[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const PROOF_BACKEND_PATTERN = /^(stacked|zigzag)$/;
 
 export const deploymentContractNames = [
   "MockUSDC",
@@ -70,6 +71,7 @@ export interface DeploymentRuntimeIdentity {
   genesisCid: string;
   chainId: number;
   provider: string;
+  proofBackend?: "stacked" | "zigzag";
 }
 
 export type RevisionContract = {
@@ -87,6 +89,7 @@ export type DeploymentRevision = {
   parentRevision: number | null;
   generatedAt: string;
   chain: DeploymentRuntimeIdentity & { epoch: number };
+  proof: { backend: "stacked" | "zigzag" };
   target: ContractTarget;
   identities: Record<string, string>;
   contracts: Record<string, RevisionContract>;
@@ -123,6 +126,10 @@ export function parseDeploymentRevision(source: string): DeploymentRevision {
     chainId: integer(chainValue.chainId, "chain.chainId"),
     provider: matchingString(chainValue.provider, PROVIDER_PATTERN, "chain.provider"),
     epoch: integer(chainValue.epoch, "chain.epoch"),
+  };
+  const proofValue = record(root.proof, "proof");
+  const proof = {
+    backend: matchingString(proofValue.backend, PROOF_BACKEND_PATTERN, "proof.backend") as "stacked" | "zigzag",
   };
   const targetValue = record(root.target, "target");
   const mode = targetValue.mode;
@@ -203,6 +210,7 @@ export function parseDeploymentRevision(source: string): DeploymentRevision {
     parentRevision,
     generatedAt,
     chain,
+    proof,
     target,
     identities,
     contracts,
@@ -228,6 +236,9 @@ export function assertDeploymentRevisionMatchesRuntime(
   if (revision.chain.generation !== runtime.generation) throw new Error("deployment generation is stale");
   if (revision.chain.genesisCid !== runtime.genesisCid) throw new Error("deployment genesis CID is stale");
   if (revision.chain.provider !== runtime.provider) throw new Error("deployment provider is stale");
+  if (runtime.proofBackend !== undefined && revision.proof.backend !== runtime.proofBackend) {
+    throw new Error("deployment proof backend is stale");
+  }
 }
 
 export function requireDeploymentContracts(
@@ -248,6 +259,7 @@ export function formatDeploymentRevisionAddresses(revision: DeploymentRevision):
     ["chainId", String(revision.chain.chainId)],
     ["generation", revision.chain.generation],
     ["provider", revision.chain.provider],
+    ["proofBackend", revision.proof.backend],
   ];
   for (const [name, address] of Object.entries(revision.identities).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push([`identity.${name}`, address]);

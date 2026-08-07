@@ -17,8 +17,11 @@ export interface ComposeRuntimeContract {
   curioShortCommit: string;
   dataDirectory: string;
   filecoinServicesSource: string;
+  filProofsUseZigZag: string;
+  filProofsZigZagGenerateMissingParams: string;
   imageNamespace: string;
   multicall3Source: string;
+  proofBackend: "stacked" | "zigzag";
   proofParametersDirectory: string;
   yugabyteImage: string;
 }
@@ -44,8 +47,11 @@ const composeEnvironmentKeys = [
   "DEVNET_FILECOIN_SERVICES_SOURCE",
   "DEVNET_IMAGE_NAMESPACE",
   "DEVNET_MULTICALL3_SOURCE",
+  "DEVNET_PROOF_BACKEND",
   "DEVNET_PROOF_PARAMETERS_DIR",
   "DEVNET_YUGABYTE_IMAGE",
+  "FIL_PROOFS_USE_ZIGZAG",
+  "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS",
 ] as const;
 
 export function inspectCompose(source: string, lock: RuntimeLock): ComposeInspection {
@@ -119,6 +125,20 @@ export function inspectRenderedCompose(
         ? contract.yugabyteImage
         : `${contract.imageNamespace}/${name}:${contract.curioShortCommit}`;
       if (service.image !== expectedImage) throw new Error(`${name} image mismatch`);
+    }
+    const environment = environmentRecord(service.environment);
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_USE_ZIGZAG !== contract.filProofsUseZigZag
+    ) {
+      throw new Error(`${name} FIL_PROOFS_USE_ZIGZAG mismatch`);
+    }
+    if (
+      name === "curio"
+      && environment.FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS
+        !== contract.filProofsZigZagGenerateMissingParams
+    ) {
+      throw new Error("curio FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS mismatch");
     }
     images.push(service.image);
 
@@ -204,8 +224,11 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     curioShortCommit: requiredValue(values, "DEVNET_CURIO_SHORT_COMMIT"),
     dataDirectory: requiredValue(values, "DEVNET_DATA_DIR"),
     filecoinServicesSource: requiredValue(values, "DEVNET_FILECOIN_SERVICES_SOURCE"),
+    filProofsUseZigZag: requiredValue(values, "FIL_PROOFS_USE_ZIGZAG"),
+    filProofsZigZagGenerateMissingParams: requiredValue(values, "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS"),
     imageNamespace: requiredValue(values, "DEVNET_IMAGE_NAMESPACE"),
     multicall3Source: requiredValue(values, "DEVNET_MULTICALL3_SOURCE"),
+    proofBackend: proofBackendValue(requiredValue(values, "DEVNET_PROOF_BACKEND")),
     proofParametersDirectory: requiredValue(values, "DEVNET_PROOF_PARAMETERS_DIR"),
     yugabyteImage: requiredValue(values, "DEVNET_YUGABYTE_IMAGE"),
   };
@@ -248,6 +271,19 @@ export function inspectDevnetStatus(
     || (build.platform !== "linux/arm64" && build.platform !== "linux/amd64")
   ) {
     throw new Error("devnet status build evidence is invalid");
+  }
+
+  const proof = record(root.proof, "proof");
+  const proofBackend = proofBackendValue(proof.backend);
+  const expectedProofEnv = proofBackend === "zigzag" ? "1" : "0";
+  const lotusProof = record(proof.lotus, "proof.lotus");
+  const curioProof = record(proof.curio, "proof.curio");
+  if (
+    lotusProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
+    || curioProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
+    || curioProof.FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS !== expectedProofEnv
+  ) {
+    throw new Error("devnet proof backend environment is invalid");
   }
 
   const compose = array(root.compose, "compose").map((value, index) => {
@@ -368,4 +404,30 @@ function requiredValue(values: Record<string, string>, key: string): string {
   const value = values[key];
   if (value === undefined) throw new Error(`compose environment is missing ${key}`);
   return value;
+}
+
+function proofBackendValue(value: unknown): "stacked" | "zigzag" {
+  if (value === "stacked" || value === "zigzag") return value;
+  throw new Error("proof backend is invalid");
+}
+
+function environmentRecord(value: unknown): Record<string, string> {
+  if (value === undefined) return {};
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const entries: Record<string, string> = {};
+    for (const [key, entryValue] of Object.entries(value)) {
+      if (typeof entryValue === "string") entries[key] = entryValue;
+    }
+    return entries;
+  }
+  if (Array.isArray(value)) {
+    const entries: Record<string, string> = {};
+    for (const entry of value) {
+      if (typeof entry !== "string") continue;
+      const separator = entry.indexOf("=");
+      if (separator > 0) entries[entry.slice(0, separator)] = entry.slice(separator + 1);
+    }
+    return entries;
+  }
+  return {};
 }

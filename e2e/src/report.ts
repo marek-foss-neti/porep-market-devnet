@@ -29,6 +29,34 @@ export type RunSummary = {
   error?: string;
 };
 
+type ResourceSummaryReport = {
+  scope?: string;
+  durationMs?: number;
+  sampleCount?: number;
+  metricsPath?: string;
+  summaryPath?: string;
+  totals?: {
+    cpuTimeMs?: number | null;
+    averageCpuCores?: number | null;
+    peakObservedMemoryBytes?: number | null;
+    cgroupPeakMemoryBytes?: number | null;
+    ioReadBytes?: number | null;
+    ioWriteBytes?: number | null;
+  };
+  services?: Array<{
+    service?: string;
+    sampleCount?: number;
+    errorCount?: number;
+    cpuTimeMs?: number | null;
+    averageCpuCores?: number | null;
+    finalMemoryBytes?: number | null;
+    peakObservedMemoryBytes?: number | null;
+    cgroupPeakMemoryBytes?: number | null;
+    ioReadBytes?: number | null;
+    ioWriteBytes?: number | null;
+  }>;
+};
+
 export function scenarioStepSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -71,6 +99,15 @@ export function renderRunMarkdownSummary(summary: RunSummary, artifactDir = summ
 
   if (isSealUnsealSummary(summary)) {
     lines.push(...renderSealUnsealChecks(summary, steps));
+  }
+
+  if (isRetrievalBenchmarkSummary(summary)) {
+    lines.push(...renderRetrievalBenchmark(summary));
+  }
+
+  if (isBenchmarkSummary(summary)) {
+    lines.push(...renderBenchmarkEnvironment(summary));
+    lines.push(...renderBenchmarkResources(summary));
   }
 
   lines.push(
@@ -175,6 +212,7 @@ function renderSealUnsealChecks(
     /ProveCommit on-chain without waiting for WindowPoSt|verify resumed sector and source are unchanged/i.test(step.name));
   const commd = steps.find((step) => /verify unsealed CommD/i.test(step.name));
   const recovered = steps.find((step) => /recover exact piece bytes/i.test(step.name));
+  const sectorRecovered = steps.find((step) => /forced sector retrieval after cold unseal/i.test(step.name));
   const unchanged = steps.find((step) => /sealed replica and on-chain sector remain unchanged/i.test(step.name));
   const sourceHash = summary.state.SOURCE_SHA256;
   const recoveredHash = summary.state.RECOVERED_SHA256;
@@ -186,6 +224,7 @@ function renderSealUnsealChecks(
     "",
     "| Check | Result | Evidence |",
     "| --- | --- | --- |",
+    proofBackendRow(summary),
     checkRow(
       "Sector committed on-chain",
       committed,
@@ -199,8 +238,10 @@ function renderSealUnsealChecks(
     checkRow("Unsealed CommD verified", commd, summary.state.UNSEALED_CID === undefined
       ? "Curio CommD check"
       : `\`${escapeInline(summary.state.UNSEALED_CID)}\``),
-    checkRow("Exact piece bytes recovered", recovered, summary.state.RECOVERED_CAR === undefined
-      ? "FR32 extraction"
+    checkRow("Exact piece bytes recovered", recovered ?? sectorRecovered, summary.state.RECOVERED_CAR === undefined
+      ? summary.state.RETRIEVAL_SECTOR_COLD_OUTPUT === undefined
+        ? "FR32 extraction"
+        : reportPathLink(summary.state.RETRIEVAL_SECTOR_COLD_OUTPUT, summary.runDir)
       : reportPathLink(summary.state.RECOVERED_CAR, summary.runDir)),
     `| Source/recovered SHA-256 | ${!hashesPresent ? "— not reached" : hashesMatch ? "✅ passed" : "❌ failed"} | ${!hashesPresent
       ? "Both hashes were not recorded"
@@ -210,6 +251,30 @@ function renderSealUnsealChecks(
       : `\`${escapeInline(summary.state.SEALED_SHA256)}\``),
     "",
   ];
+}
+
+function proofBackendRow(summary: RunSummary): string {
+  const backend = summary.state.PROOF_BACKEND;
+  const result = backend === "zigzag"
+    ? "✅ ZigZag"
+    : backend === "sdr"
+      ? "✅ SDR"
+      : "— not recorded";
+  const proof = summary.state.REGISTERED_SEAL_PROOF;
+  const proofName = summary.state.REGISTERED_SEAL_PROOF_NAME;
+  const sectorSize = formatRecordedBytes(summary.state.REGISTERED_SEAL_PROOF_SECTOR_SIZE_BYTES);
+  const evidence = [
+    proofName === undefined && proof === undefined
+      ? undefined
+      : `registered proof \`${escapeInline(proofName ?? "unknown")}\`${proof === undefined ? "" : ` (${escapeInline(proof)})`}`,
+    sectorSize === undefined ? undefined : `sector size \`${sectorSize}\``,
+    summary.state.PROOF_BACKEND_REASON,
+    summary.state.UNSEAL_PATH === undefined ? undefined : `unseal path: ${summary.state.UNSEAL_PATH}`,
+  ].filter((value): value is string => value !== undefined && value.length > 0)
+    .map(escapeMarkdown)
+    .join("<br>");
+
+  return `| Proof backend | ${result} | ${evidence || "not recorded"} |`;
 }
 
 function checkRow(label: string, step: ScenarioStepResult | undefined, evidence: string): string {
@@ -223,7 +288,303 @@ function checkRow(label: string, step: ScenarioStepResult | undefined, evidence:
 
 function isSealUnsealSummary(summary: RunSummary): boolean {
   return summary.scenario === "seal-unseal-roundtrip"
+    || summary.scenario === "bench-seal-unseal"
+    || summary.scenario === "deliver-seal-unseal-retrieval"
+    || summary.scenario === "bench-deliver-seal-unseal-retrieval"
     || summary.runId.endsWith("-seal-unseal-roundtrip");
+}
+
+function isBenchmarkSummary(summary: RunSummary): boolean {
+  return summary.scenario === "bench-seal-unseal"
+    || summary.scenario === "bench-retrieval"
+    || summary.state.BENCHMARK_KIND !== undefined
+    || Object.keys(summary.state).some((key) => key.endsWith("_RESOURCE_SUMMARY"));
+}
+
+function isRetrievalBenchmarkSummary(summary: RunSummary): boolean {
+  return summary.scenario === "bench-retrieval"
+    || summary.scenario === "bench-deliver-seal-unseal-retrieval"
+    || summary.state.BENCHMARK_KIND === "retrieval";
+}
+
+function renderRetrievalBenchmark(summary: RunSummary): string[] {
+  if (summary.state.BENCHMARK_KIND === "deliver-seal-unseal-retrieval") {
+    return renderDeliverRetrievalBenchmark(summary);
+  }
+  const modes = ["cold", "hot"] as const;
+  const rows = modes
+    .map((mode) => retrievalRow(summary, mode))
+    .filter((row): row is string => row !== undefined);
+  if (rows.length === 0) return [];
+
+  const lines = [
+    "## Retrieval benchmark",
+    "",
+    summary.state.RETRIEVAL_BENCH_SCOPE
+      ? escapeMarkdown(summary.state.RETRIEVAL_BENCH_SCOPE)
+      : "Curio HTTP retrieval via `/piece/{cid}`.",
+    "",
+  ];
+  if (summary.state.RETRIEVAL_BENCH_CAVEAT !== undefined) {
+    lines.push(`Note: ${escapeMarkdown(summary.state.RETRIEVAL_BENCH_CAVEAT)}`, "");
+  }
+  if (summary.state.RETRIEVAL_BENCH_SOURCE_NOTE !== undefined) {
+    lines.push(`Source note: ${escapeMarkdown(summary.state.RETRIEVAL_BENCH_SOURCE_NOTE)}`, "");
+  }
+  lines.push(
+    "| Mode | Initial storage | Final storage | Result | Bytes | TTFB | Total | Throughput | SHA-256 | Artifact |",
+    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ...rows,
+    "",
+  );
+  return lines;
+}
+
+function renderDeliverRetrievalBenchmark(summary: RunSummary): string[] {
+  const rows = [
+    retrievalPathRow(summary, "HTTP cold", "RETRIEVAL_HTTP_COLD", true),
+    retrievalPathRow(summary, "HTTP hot", "RETRIEVAL_HTTP_HOT", true),
+    retrievalPathRow(summary, "Sector cold", "RETRIEVAL_SECTOR_COLD", false),
+    retrievalPathRow(summary, "Sector hot", "RETRIEVAL_SECTOR_HOT", false),
+  ].filter((row): row is string => row !== undefined);
+  if (rows.length === 0) return [];
+
+  const lines = [
+    "## Retrieval benchmark",
+    "",
+    summary.state.DELIVER_RETRIEVAL_BENCH_SCOPE
+      ? escapeMarkdown(summary.state.DELIVER_RETRIEVAL_BENCH_SCOPE)
+      : "Deliver/seal/unseal/retrieval benchmark.",
+    "",
+  ];
+  if (summary.state.RETRIEVAL_BENCH_SOURCE_NOTE !== undefined) {
+    lines.push(`Source note: ${escapeMarkdown(summary.state.RETRIEVAL_BENCH_SOURCE_NOTE)}`, "");
+  }
+  if (summary.state.RETRIEVAL_CACHE_ISOLATION !== undefined) {
+    lines.push(`Cache isolation: ${escapeMarkdown(summary.state.RETRIEVAL_CACHE_ISOLATION)}`, "");
+  }
+  lines.push(
+    "| Path | Initial storage | Final storage | Result | Bytes | TTFB | Total | Throughput | SHA-256 | Artifact |",
+    "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- |",
+    ...rows,
+    "",
+  );
+  return lines;
+}
+
+function retrievalPathRow(
+  summary: RunSummary,
+  label: string,
+  prefix: string,
+  http: boolean,
+): string | undefined {
+  const bytes = numberFromState(summary, `${prefix}_BYTES`);
+  const ttfbMs = http ? numberFromState(summary, `${prefix}_TTFB_MS`) : undefined;
+  const totalMs = http ? numberFromState(summary, `${prefix}_TOTAL_MS`) : undefined;
+  const throughput = http ? numberFromState(summary, `${prefix}_THROUGHPUT_BYTES_PER_SECOND`) : undefined;
+  const sha256 = summary.state[`${prefix}_SHA256`];
+  const sha256Match = summary.state[`${prefix}_SHA256_MATCH`];
+  const output = summary.state[`${prefix}_OUTPUT`];
+  if (bytes === undefined && sha256 === undefined) return undefined;
+  const status = http ? summary.state[`${prefix}_HTTP_STATUS`] : undefined;
+  const result = sha256Match === "true"
+    ? http ? `✅ HTTP ${escapeInline(status ?? "unknown")}, hash match` : "✅ sector bytes, hash match"
+    : sha256Match === "false"
+      ? "❌ hash mismatch"
+      : "— not reached";
+  const digest = sha256 === undefined
+    ? "not recorded"
+    : sha256Match === "true"
+      ? `match \`${shortDigest(sha256)}\``
+      : `\`${shortDigest(sha256)}\``;
+  return [
+    label,
+    escapeMarkdown(summary.state[`${prefix}_STORAGE_BEFORE`] ?? "not recorded"),
+    escapeMarkdown(summary.state[`${prefix}_STORAGE_AFTER`] ?? "not recorded"),
+    result,
+    formatBytesHuman(bytes),
+    formatDuration(ttfbMs),
+    formatDuration(totalMs),
+    formatThroughput(throughput),
+    digest,
+    output === undefined ? "not recorded" : reportPathLink(output, summary.runDir),
+  ].join(" | ").replace(/^/, "| ").replace(/$/, " |");
+}
+
+function retrievalRow(summary: RunSummary, mode: "cold" | "hot"): string | undefined {
+  const prefix = `RETRIEVAL_${mode.toUpperCase()}`;
+  const status = summary.state[`${prefix}_HTTP_STATUS`];
+  const bytes = numberFromState(summary, `${prefix}_BYTES`);
+  const ttfbMs = numberFromState(summary, `${prefix}_TTFB_MS`);
+  const totalMs = numberFromState(summary, `${prefix}_TOTAL_MS`);
+  const throughput = numberFromState(summary, `${prefix}_THROUGHPUT_BYTES_PER_SECOND`);
+  const sha256 = summary.state[`${prefix}_SHA256`];
+  const sha256Match = summary.state[`${prefix}_SHA256_MATCH`];
+  const output = summary.state[`${prefix}_OUTPUT`];
+  if (status === undefined && bytes === undefined && sha256 === undefined) return undefined;
+
+  const result = status === "200" && sha256Match === "true"
+    ? "✅ HTTP 200, hash match"
+    : status === undefined
+      ? "— not reached"
+      : `❌ HTTP ${escapeInline(status)}${sha256Match === "false" ? ", hash mismatch" : ""}`;
+  const digest = sha256 === undefined
+    ? "not recorded"
+    : sha256Match === "true"
+      ? `match \`${shortDigest(sha256)}\``
+      : `\`${shortDigest(sha256)}\``;
+
+  return [
+    mode,
+    escapeMarkdown(summary.state[`${prefix}_STORAGE_BEFORE`] ?? "not recorded"),
+    escapeMarkdown(summary.state[`${prefix}_STORAGE_AFTER`] ?? "not recorded"),
+    result,
+    formatBytesHuman(bytes),
+    formatDuration(ttfbMs),
+    formatDuration(totalMs),
+    formatThroughput(throughput),
+    digest,
+    output === undefined ? "not recorded" : reportPathLink(output, summary.runDir),
+  ].join(" | ").replace(/^/, "| ").replace(/$/, " |");
+}
+
+function renderBenchmarkResources(summary: RunSummary): string[] {
+  const resources = Object.entries(summary.state)
+    .filter(([key]) => key.endsWith("_RESOURCE_SUMMARY"))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([stateKey, path]) => ({
+      stateKey,
+      path,
+      summary: readResourceSummary(path),
+    }));
+  if (resources.length === 0) return [];
+
+  const lines = [
+    "## Resource metrics",
+    "",
+    "Resource samples are read from container cgroup files. Peak sampled memory is the maximum observed `memory.current`; cgroup peak is the container-lifetime peak reported by the runtime.",
+    "",
+    "| Scope | Duration | CPU time | Avg CPU cores | Peak sampled memory | IO read | IO write | Samples | Files |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+  ];
+
+  for (const resource of resources) {
+    const report = resource.summary;
+    if (report === undefined) {
+      lines.push(
+        `| ${escapeMarkdown(resourceScopeFromKey(resource.stateKey))} | not recorded | not recorded | not recorded | not recorded | not recorded | not recorded | not recorded | ${reportPathLink(resource.path, summary.runDir)} |`,
+      );
+      continue;
+    }
+    const files = [
+      report.summaryPath ?? resource.path,
+      report.metricsPath,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0)
+      .map((path) => reportPathLink(path, summary.runDir))
+      .join("<br>");
+    lines.push([
+      report.scope ?? resourceScopeFromKey(resource.stateKey),
+      formatDuration(report.durationMs),
+      formatDuration(nullableNumber(report.totals?.cpuTimeMs)),
+      formatCores(nullableNumber(report.totals?.averageCpuCores)),
+      formatBytesHuman(nullableNumber(report.totals?.peakObservedMemoryBytes)),
+      formatBytesHuman(nullableNumber(report.totals?.ioReadBytes)),
+      formatBytesHuman(nullableNumber(report.totals?.ioWriteBytes)),
+      report.sampleCount?.toString() ?? "not recorded",
+      files || reportPathLink(resource.path, summary.runDir),
+    ].map((value) => escapeMarkdown(value)).join(" | ").replace(/^/, "| ").replace(/$/, " |"));
+  }
+  lines.push("");
+
+  for (const resource of resources) {
+    if (resource.summary === undefined || resource.summary.services === undefined) continue;
+    lines.push(
+      "<details>",
+      `<summary>Service metrics: ${escapeMarkdown(resource.summary.scope ?? resourceScopeFromKey(resource.stateKey))}</summary>`,
+      "",
+      "| Service | CPU time | Avg CPU cores | Peak sampled memory | Cgroup peak | IO read | IO write | Samples | Errors |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    );
+    for (const service of resource.summary.services) {
+      lines.push([
+        service.service ?? "unknown",
+        formatDuration(nullableNumber(service.cpuTimeMs)),
+        formatCores(nullableNumber(service.averageCpuCores)),
+        formatBytesHuman(nullableNumber(service.peakObservedMemoryBytes)),
+        formatBytesHuman(nullableNumber(service.cgroupPeakMemoryBytes)),
+        formatBytesHuman(nullableNumber(service.ioReadBytes)),
+        formatBytesHuman(nullableNumber(service.ioWriteBytes)),
+        service.sampleCount?.toString() ?? "not recorded",
+        service.errorCount?.toString() ?? "not recorded",
+      ].map((value) => escapeMarkdown(value)).join(" | ").replace(/^/, "| ").replace(/$/, " |"));
+    }
+    lines.push("", "</details>", "");
+  }
+
+  return lines;
+}
+
+function renderBenchmarkEnvironment(summary: RunSummary): string[] {
+  const rows = [
+    environmentRow("Proof backend selector", summary.state.DEVNET_PROOF_BACKEND),
+    environmentRow("Runtime proof path", summary.state.PROOF_BACKEND),
+    environmentRow("Proof parameter cache", proofParameterCacheLabel(summary)),
+    environmentRow("Curio source commit", shortCommit(summary.state.DEVNET_CURIO_COMMIT ?? summary.state.STATUS_CURIO_COMMIT)),
+    environmentRow("Lotus source commit", shortCommit(summary.state.DEVNET_LOTUS_COMMIT ?? summary.state.STATUS_LOTUS_COMMIT)),
+    environmentRow("Build platform", summary.state.DEVNET_IMAGE_PLATFORM ?? summary.state.STATUS_IMAGE_PLATFORM),
+    environmentRow("Curio image", imageLabel(summary, "IMAGE_CURIO")),
+    environmentRow("Lotus image", imageLabel(summary, "IMAGE_LOTUS")),
+    environmentRow("Docker", dockerLabel(summary)),
+  ].filter((row): row is string => row !== undefined);
+  if (rows.length === 0) return [];
+
+  return [
+    "## Benchmark environment",
+    "",
+    "| Field | Value |",
+    "| --- | --- |",
+    ...rows,
+    "",
+  ];
+}
+
+function environmentRow(label: string, value: string | undefined): string | undefined {
+  if (value === undefined || value.length === 0) return undefined;
+  return `| ${escapeMarkdown(label)} | ${escapeMarkdown(value)} |`;
+}
+
+function proofParameterCacheLabel(summary: RunSummary): string | undefined {
+  const status = summary.state.PROOF_PARAMETER_CACHE_STATUS;
+  if (status === undefined) return undefined;
+  const files = numberFromState(summary, "PROOF_PARAMETER_CACHE_FILE_COUNT");
+  const bytes = numberFromState(summary, "PROOF_PARAMETER_CACHE_BYTES");
+  return [
+    status,
+    files === undefined ? undefined : `${files} files`,
+    bytes === undefined ? undefined : formatBytesHuman(bytes),
+  ].filter((value): value is string => value !== undefined).join(", ");
+}
+
+function imageLabel(summary: RunSummary, prefix: string): string | undefined {
+  const reference = summary.state[`${prefix}_REFERENCE`];
+  const id = summary.state[`${prefix}_ID`];
+  if (reference === undefined && id === undefined) return undefined;
+  return [
+    reference === undefined ? undefined : `\`${escapeInline(reference)}\``,
+    id === undefined ? undefined : `\`${shortDigest(id)}\``,
+  ].filter((value): value is string => value !== undefined).join("<br>");
+}
+
+function dockerLabel(summary: RunSummary): string | undefined {
+  const version = summary.state.DOCKER_SERVER_VERSION;
+  const cpus = summary.state.DOCKER_CPU_COUNT;
+  const memory = formatBytesHuman(numberFromState(summary, "DOCKER_TOTAL_MEMORY_BYTES"));
+  const parts = [
+    version === undefined ? undefined : `version ${version}`,
+    cpus === undefined ? undefined : `${cpus} CPUs`,
+    memory === "not recorded" ? undefined : memory,
+  ].filter((value): value is string => value !== undefined);
+  return parts.length === 0 ? undefined : parts.join(", ");
 }
 
 function scenarioLabel(summary: RunSummary): string {
@@ -259,6 +620,70 @@ function formatDuration(value: number | undefined): string {
   return hours > 0
     ? `${hours}h ${minutes}m ${seconds}s`
     : `${minutes}m ${seconds}s`;
+}
+
+function formatRecordedBytes(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const bytes = Number(value);
+  if (!Number.isSafeInteger(bytes) || bytes < 0) return value;
+  if (bytes === 2 * 1024) return "2 KiB";
+  if (bytes === 8 * 1024 * 1024) return "8 MiB";
+  if (bytes === 512 * 1024 * 1024) return "512 MiB";
+  if (bytes === 32 * 1024 * 1024 * 1024) return "32 GiB";
+  if (bytes === 64 * 1024 * 1024 * 1024) return "64 GiB";
+  return `${bytes} bytes`;
+}
+
+function readResourceSummary(path: string): ResourceSummaryReport | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as ResourceSummaryReport;
+  } catch {
+    return undefined;
+  }
+}
+
+function numberFromState(summary: RunSummary, key: string): number | undefined {
+  const value = summary.state[key];
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function nullableNumber(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatBytesHuman(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "not recorded";
+  if (value < 1024) return `${Math.round(value)} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let scaled = value / 1024;
+  for (const unit of units) {
+    if (scaled < 1024) return `${scaled.toFixed(scaled < 10 ? 2 : 1)} ${unit}`;
+    scaled /= 1024;
+  }
+  return `${scaled.toFixed(1)} PiB`;
+}
+
+function formatThroughput(value: number | undefined): string {
+  return value === undefined ? "not recorded" : `${formatBytesHuman(value)}/s`;
+}
+
+function formatCores(value: number | undefined): string {
+  if (value === undefined) return "not recorded";
+  return value.toFixed(value < 1 ? 3 : 2).replace(/\.?0+$/, "");
+}
+
+function shortDigest(value: string): string {
+  return value.length <= 16 ? value : `${value.slice(0, 12)}...`;
+}
+
+function shortCommit(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : `\`${escapeInline(value.slice(0, 12))}\``;
+}
+
+function resourceScopeFromKey(key: string): string {
+  return key.replace(/_RESOURCE_SUMMARY$/, "").toLowerCase().replace(/_/g, "-");
 }
 
 function escapeMarkdown(value: string): string {

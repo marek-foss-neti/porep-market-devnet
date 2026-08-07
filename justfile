@@ -12,8 +12,8 @@ build-contracts:
 test-contracts source='':
     @bash scripts/contracts-test-target.sh '{{source}}'
 
-up:
-    @bash scripts/devnet-up.sh
+up backend='stacked':
+    @bash scripts/devnet-up.sh '{{backend}}'
 
 status:
     @bash scripts/devnet-status.sh
@@ -46,13 +46,28 @@ test-unit:
 test-seal-unseal deployment='active' resume='':
     @SEAL_UNSEAL_RESUME_RUN_DIR='{{resume}}' just test-scenario seal-unseal-roundtrip '{{deployment}}'
 
-test-scenario name deployment='active':
+test-deliver-seal-unseal-retrieval deployment='active':
+    @just test-scenario deliver-seal-unseal-retrieval '{{deployment}}'
+
+bench-deliver-seal-unseal-retrieval deployment='active':
+    @just test-scenario bench-deliver-seal-unseal-retrieval '{{deployment}}' 14400000
+
+bench-seal-unseal deployment='active':
+    @just test-scenario bench-seal-unseal '{{deployment}}' 14400000
+
+bench-retrieval mode='both' deployment='active':
+    @RETRIEVAL_BENCH_MODE='{{mode}}' just test-scenario bench-retrieval '{{deployment}}' 14400000
+
+test-scenario name deployment='active' timeout_ms='7200000':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
-    @node scripts/run-with-timeout.mjs --timeout-ms 7200000 -- npm --prefix e2e run scenario -- '{{name}}'
+    @node scripts/run-with-timeout.mjs --timeout-ms '{{timeout_ms}}' -- npm --prefix e2e run scenario -- '{{name}}'
 
 test-e2e suite='contract' deployment='active':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
     @node scripts/run-with-timeout.mjs --timeout-ms 43200000 -- npm --prefix e2e run matrix -- '{{suite}}'
+
+bench-proof-backends:
+    @bash scripts/bench-proof-backends.sh
 
 verify-runtime:
     @npm --prefix tools run cli -- runtime lock verify
@@ -83,6 +98,6 @@ logs service='':
 down:
     @bash scripts/devnet-down.sh
 
-reset:
-    @bash scripts/devnet-reset.sh
-    @bash scripts/devnet-up.sh
+reset backend='stacked':
+    @bash scripts/devnet-reset.sh '{{backend}}'
+    @bash scripts/devnet-up.sh '{{backend}}'

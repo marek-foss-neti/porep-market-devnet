@@ -19,7 +19,11 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/contracts-test-target.sh
     scripts/devnet-upgrade.sh
     scripts/devnet-test-upgrade.sh
+    scripts/bench-proof-backends.sh
     docker/compose.curio-devnet.yaml
+    patches/curio/0003-zigzag-devnet-unseal.patch
+    patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch
+    patches/fvm/0001-zigzag-devnet-verifier.patch
     tools/test/devnet.test.ts
   )
   for build_file in "${build_files[@]}"; do
@@ -29,7 +33,7 @@ if [[ -f versions.lock.yaml ]]; then
     }
   done
 
-  bash -n scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh
+  bash -n scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh
   rg -q '^build:' justfile
   if rg -n -i \
     '(latest|@master|@main|foundryup|nodesource|git[[:space:]]+clone|git[[:space:]]+submodule[[:space:]]+update)' \

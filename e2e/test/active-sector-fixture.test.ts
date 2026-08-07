@@ -136,6 +136,7 @@ function config(projectRoot: string): E2EConfig {
     deploymentPorepCommit: "a".repeat(40), deploymentTargetMode: "locked",
     deploymentTargetDirty: false,
     deploymentId: "deployment-test", deploymentRevision: 0,
+    proofBackend: "stacked",
     deploymentRecordPath: join(projectRoot, "000.json"),
     privateKeyTest: key, privateKeySp: key,
     identityKeys: {

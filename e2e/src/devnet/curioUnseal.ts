@@ -13,6 +13,46 @@ import {
 
 const FT_UNSEALED = 1;
 const FT_SEALED = 2;
+const ZIGZAG_DEVNET_ENV = "FIL_PROOFS_USE_ZIGZAG";
+const KIB = 1024;
+const MIB = KIB * KIB;
+const GIB = KIB * MIB;
+const ZIGZAG_SUPPORTED_SECTOR_SIZES = new Set([2 * KIB, 8 * MIB]);
+
+const REGISTERED_SEAL_PROOFS = new Map<number, { name: string; sectorSizeBytes: number }>([
+  [0, { name: "StackedDrg2KiBV1", sectorSizeBytes: 2 * KIB }],
+  [1, { name: "StackedDrg8MiBV1", sectorSizeBytes: 8 * MIB }],
+  [2, { name: "StackedDrg512MiBV1", sectorSizeBytes: 512 * MIB }],
+  [3, { name: "StackedDrg32GiBV1", sectorSizeBytes: 32 * GIB }],
+  [4, { name: "StackedDrg64GiBV1", sectorSizeBytes: 64 * GIB }],
+  [5, { name: "StackedDrg2KiBV1_1", sectorSizeBytes: 2 * KIB }],
+  [6, { name: "StackedDrg8MiBV1_1", sectorSizeBytes: 8 * MIB }],
+  [7, { name: "StackedDrg512MiBV1_1", sectorSizeBytes: 512 * MIB }],
+  [8, { name: "StackedDrg32GiBV1_1", sectorSizeBytes: 32 * GIB }],
+  [9, { name: "StackedDrg64GiBV1_1", sectorSizeBytes: 64 * GIB }],
+  [10, { name: "StackedDrg2KiBV1_1_Feat_SyntheticPoRep", sectorSizeBytes: 2 * KIB }],
+  [11, { name: "StackedDrg8MiBV1_1_Feat_SyntheticPoRep", sectorSizeBytes: 8 * MIB }],
+  [12, { name: "StackedDrg512MiBV1_1_Feat_SyntheticPoRep", sectorSizeBytes: 512 * MIB }],
+  [13, { name: "StackedDrg32GiBV1_1_Feat_SyntheticPoRep", sectorSizeBytes: 32 * GIB }],
+  [14, { name: "StackedDrg64GiBV1_1_Feat_SyntheticPoRep", sectorSizeBytes: 64 * GIB }],
+  [15, { name: "StackedDrg2KiBV1_2_Feat_NonInteractivePoRep", sectorSizeBytes: 2 * KIB }],
+  [16, { name: "StackedDrg8MiBV1_2_Feat_NonInteractivePoRep", sectorSizeBytes: 8 * MIB }],
+  [17, { name: "StackedDrg512MiBV1_2_Feat_NonInteractivePoRep", sectorSizeBytes: 512 * MIB }],
+  [18, { name: "StackedDrg32GiBV1_2_Feat_NonInteractivePoRep", sectorSizeBytes: 32 * GIB }],
+  [19, { name: "StackedDrg64GiBV1_2_Feat_NonInteractivePoRep", sectorSizeBytes: 64 * GIB }],
+]);
+
+export type ProofBackend = "sdr" | "zigzag";
+
+export type ProofBackendInfo = {
+  backend: ProofBackend;
+  label: "SDR" | "ZigZag";
+  registeredSealProof: number;
+  registeredSealProofName: string;
+  sectorSizeBytes?: number;
+  reason: string;
+  unsealPath: string;
+};
 
 export type CurioSectorPiece = {
   spId: number;
@@ -60,6 +100,62 @@ export type OnChainSectorInfo = {
   expiration: number;
   sealedCid: string;
 };
+
+export function resolveProofBackend(
+  context: ScenarioContext,
+  registeredSealProof: number,
+): ProofBackendInfo {
+  const curioZigZagEnv = dockerExec(context, "curio", [
+    "sh", "-c", `printf '%s' "\${${ZIGZAG_DEVNET_ENV}:-}"`,
+  ]).trim();
+  return resolveProofBackendFromEnv(
+    { ...context.config.env, [ZIGZAG_DEVNET_ENV]: curioZigZagEnv },
+    registeredSealProof,
+  );
+}
+
+export function resolveProofBackendFromEnv(
+  env: Record<string, string | undefined>,
+  registeredSealProof: number,
+): ProofBackendInfo {
+  const proof = REGISTERED_SEAL_PROOFS.get(registeredSealProof);
+  const registeredSealProofName = proof?.name ?? `unknown(${registeredSealProof})`;
+  const zigzagEnv = env[ZIGZAG_DEVNET_ENV] ?? "";
+  const zigzagEnabled = truthyEnv(zigzagEnv);
+  const supportedByZigZag = proof !== undefined
+    && ZIGZAG_SUPPORTED_SECTOR_SIZES.has(proof.sectorSizeBytes);
+
+  if (zigzagEnabled && supportedByZigZag) {
+    return {
+      backend: "zigzag",
+      label: "ZigZag",
+      registeredSealProof,
+      registeredSealProofName,
+      sectorSizeBytes: proof.sectorSizeBytes,
+      reason: `${ZIGZAG_DEVNET_ENV}=${zigzagEnv} and ${registeredSealProofName} has a ZigZag-supported ${formatBytes(proof.sectorSizeBytes)} sector size`,
+      unsealPath: "ZigZag filecoinffi.Unseal; SDRKeyRegen is skipped as a scheduler-compatible no-op",
+    };
+  }
+
+  const reason = zigzagEnabled
+    ? `${ZIGZAG_DEVNET_ENV}=${zigzagEnv} but ${registeredSealProofName} is not a ZigZag-supported devnet sector size`
+    : `${ZIGZAG_DEVNET_ENV} is not enabled`;
+  return {
+    backend: "sdr",
+    label: "SDR",
+    registeredSealProof,
+    registeredSealProofName,
+    ...(proof === undefined ? {} : { sectorSizeBytes: proof.sectorSizeBytes }),
+    reason,
+    unsealPath: "StackedDRG SDRKeyRegen and DecodeSDR",
+  };
+}
+
+export function unsealWaitStepName(proofBackend: ProofBackend): string {
+  return proofBackend === "zigzag"
+    ? "wait for ZigZag UnsealDecode with SDRKeyRegen skipped"
+    : "wait for SDRKeyRegen and UnsealDecode";
+}
 
 export function parseSha256(output: string): string {
   const digest = output.match(/^([0-9a-f]{64})(?:\s|$)/m)?.[1];
@@ -179,6 +275,7 @@ export function setCurioUnsealTarget(
 export async function waitForCurioUnseal(
   context: ScenarioContext,
   piece: CurioSectorPiece,
+  proofBackend: ProofBackend = "sdr",
 ): Promise<{ pipeline: CurioUnsealPipeline; storage: CurioStorageState }> {
   const timeoutSeconds = envNumber(context, "CURIO_UNSEAL_TIMEOUT_SECONDS", 7200);
   let sawSdrComplete = false;
@@ -190,7 +287,7 @@ export async function waitForCurioUnseal(
       return { pipeline, storage };
     }
     if (elapsed === 0 || elapsed % 30 === 0) {
-      console.log(`  ${describeUnsealProgress(pipeline, storage, sawSdrComplete)}`);
+      console.log(`  ${describeUnsealProgress(pipeline, storage, sawSdrComplete, proofBackend)}`);
     }
     await sleep(2000);
   }
@@ -201,21 +298,24 @@ export function describeUnsealProgress(
   pipeline: CurioUnsealPipeline | undefined,
   storage: CurioStorageState,
   sawSdrComplete = false,
+  proofBackend: ProofBackend = "sdr",
 ): string {
+  const keyStep = proofBackend === "zigzag" ? "ZigZag SDRKeyRegen skip" : "SDRKeyRegen";
+  const decodeStep = proofBackend === "zigzag" ? "ZigZag UnsealDecode" : "UnsealDecode";
   if (!pipeline) return `waiting for unseal pipeline; FTUnsealed=${storage.unsealed}`;
   if (pipeline.taskIdUnsealSdr !== null) {
-    return `SDRKeyRegen running (task ${pipeline.taskIdUnsealSdr}); FTUnsealed=${storage.unsealed}`;
+    return `${keyStep} running (task ${pipeline.taskIdUnsealSdr}); FTUnsealed=${storage.unsealed}`;
   }
   if (!pipeline.afterUnsealSdr && !sawSdrComplete) {
-    return `SDRKeyRegen waiting for scheduler; FTUnsealed=${storage.unsealed}`;
+    return `${keyStep} waiting for scheduler; FTUnsealed=${storage.unsealed}`;
   }
   if (pipeline.taskIdDecodeSector !== null) {
-    return `UnsealDecode running (task ${pipeline.taskIdDecodeSector}); FTUnsealed=${storage.unsealed}`;
+    return `${decodeStep} running (task ${pipeline.taskIdDecodeSector}); FTUnsealed=${storage.unsealed}`;
   }
   if (!pipeline.afterDecodeSector) {
-    return `SDRKeyRegen complete; UnsealDecode waiting for scheduler; FTUnsealed=${storage.unsealed}`;
+    return `${keyStep} complete; ${decodeStep} waiting for scheduler; FTUnsealed=${storage.unsealed}`;
   }
-  return `UnsealDecode complete; FTUnsealed=${storage.unsealed}`;
+  return `${decodeStep} complete; FTUnsealed=${storage.unsealed}`;
 }
 
 export function readCurioUnsealInfo(
@@ -333,6 +433,7 @@ function sectorFileSize(context: ScenarioContext, sectorFilePath: string): numbe
 export function recoverPieceFromUnsealed(
   context: ScenarioContext,
   piece: CurioSectorPiece,
+  artifactName = "recovered.car",
 ): RecoveredPiece {
   const maxUnpadded = Math.floor(piece.pieceSize / 128) * 127;
   if (piece.pieceSize <= 0 || piece.pieceSize % 128 !== 0 ||
@@ -349,8 +450,9 @@ export function recoverPieceFromUnsealed(
   }
 
   const safeRunId = context.runId.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const containerPath = `/tmp/${safeRunId}-recovered.car`;
-  const recoveredPath = join(context.runDir, "recovered.car");
+  const safeArtifactName = artifactName.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const containerPath = `/tmp/${safeRunId}-${safeArtifactName}`;
+  const recoveredPath = join(context.runDir, safeArtifactName);
 
   try {
     dockerExec(context, "curio", [
@@ -448,6 +550,19 @@ function queryScalar(context: ScenarioContext, sql: string): string {
 function sqlToken(value: string): string {
   if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error(`invalid database lookup token: ${value}`);
   return value;
+}
+
+function truthyEnv(value: string): boolean {
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+function formatBytes(value: number): string {
+  if (value === 2 * KIB) return "2 KiB";
+  if (value === 8 * MIB) return "8 MiB";
+  if (value === 512 * MIB) return "512 MiB";
+  if (value === 32 * GIB) return "32 GiB";
+  if (value === 64 * GIB) return "64 GiB";
+  return `${value} bytes`;
 }
 
 export function readCurioSectorFilePath(

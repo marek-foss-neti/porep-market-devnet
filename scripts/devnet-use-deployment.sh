@@ -36,12 +36,13 @@ status="${DEVNET_RUNTIME_DIR}/status/latest.json"
 generation="$(jq -r '.generation' "${status}")"
 chain_id="$(($(jq -r '.chain.chainId' "${status}")))"
 provider="$(jq -r '.miner.provider' "${status}")"
+proof_backend="$(jq -r '.proof.backend' "${status}")"
 genesis_cid="$(
   devnet_compose exec -T lotus lotus chain list --epoch 0 --count 1 --format '<tipset>' |
     tr -d '\r\n'
 )"
 npm --prefix "${DEVNET_ROOT}/tools" run cli -- deployment revision inspect \
-  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" <"${manifest}"
+  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" <"${manifest}"
 devnet_verify_deployment_code "${manifest}"
 
 revision="$(jq -r '.revision' "${manifest}")"

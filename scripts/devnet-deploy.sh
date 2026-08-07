@@ -16,6 +16,7 @@ chain_hex="$(jq -r '.chain.chainId' "${status}")"
 chain_id="$((chain_hex))"
 epoch="$(jq -r '.chain.epoch' "${status}")"
 provider="$(jq -r '.miner.provider' "${status}")"
+proof_backend="$(jq -r '.proof.backend' "${status}")"
 genesis_cid="$(
   devnet_compose exec -T lotus lotus chain list --epoch 0 --count 1 --format '<tipset>' |
     tr -d '\r\n'
@@ -88,6 +89,7 @@ normalized_runtime_hash() {
 verify_target_runtime_bytecode() {
   local deployment_manifest="$1" target_root="$2"
   local contract_name kind implementation artifact artifact_path runtime live_hash target_hash
+  local live_hash_lower target_hash_lower
   while IFS=$'\t' read -r contract_name kind implementation; do
     artifact="${contract_name}"
     [[ "${kind}" == beacon ]] && artifact=Validator
@@ -98,7 +100,9 @@ verify_target_runtime_bytecode() {
       --rpc-url http://lotus:1234/rpc/v1 | awk '{print $1}')"
     live_hash="$(normalized_runtime_hash "${artifact_path}" "${runtime}")"
     target_hash="$(normalized_runtime_hash "${artifact_path}")"
-    [[ "${live_hash,,}" == "${target_hash,,}" ]] ||
+    live_hash_lower="$(printf '%s' "${live_hash}" | tr '[:upper:]' '[:lower:]')"
+    target_hash_lower="$(printf '%s' "${target_hash}" | tr '[:upper:]' '[:lower:]')"
+    [[ "${live_hash_lower}" == "${target_hash_lower}" ]] ||
       devnet_die "runtime bytecode mismatch for ${contract_name}"
   done < <(jq -r '
     .contracts | to_entries[]
@@ -122,7 +126,7 @@ filecoin_pay_commit="$(awk -F '\t' '$1 == "filecoin_pay" {print $3}' <<<"${sourc
 meta_commit="$(awk -F '\t' '$1 == "contract_metaallocator" {print $3}' <<<"${source_output}")"
 [[ "${porep_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "PoRep Market source HEAD is invalid"
 
-printf -v timestamp '%(%Y%m%dT%H%M%SZ)T' -1
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 deployment_id="deployment-${timestamp}-${porep_commit:0:12}"
 deployments_root="${DEVNET_ROOT}/.runtime/deployments"
 deployment_dir="${deployments_root}/${deployment_id}"
@@ -165,6 +169,7 @@ node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" --timeout-ms 1800000 -- \
   -e "CHAIN_ID=${chain_id}" \
   -e "EPOCH=${epoch}" \
   -e "PROVIDER=${provider}" \
+  -e "PROOF_BACKEND=${proof_backend}" \
   -e "DEPLOYMENT_ID=${deployment_id}" \
   -e "DEPLOYMENT_ROOT=/workspace/.runtime/deployments/${deployment_id}" \
   -e "POREP_TARGET_ROOT=/workspace/${porep_snapshot#"${DEVNET_ROOT}/"}" \
@@ -177,7 +182,7 @@ node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" --timeout-ms 1800000 -- \
   "${image}" /workspace/scripts/contracts-deploy-in-container.sh
 
 npm --prefix "${DEVNET_ROOT}/tools" run cli -- deployment revision inspect \
-  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" <"${temporary}"
+  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" <"${temporary}"
 devnet_verify_deployment_code "${temporary}"
 verify_target_runtime_bytecode "${temporary}" "${porep_snapshot}"
 ensure_meta_allocator_notary "${temporary}"

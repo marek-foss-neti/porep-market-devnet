@@ -7,6 +7,7 @@ set -euo pipefail
 : "${CHAIN_ID:?}"
 : "${EPOCH:?}"
 : "${PROVIDER:?}"
+: "${PROOF_BACKEND:?}"
 : "${OUTPUT_MANIFEST:?}"
 : "${DEPLOYMENT_ID:?}"
 : "${DEPLOYMENT_ROOT:?}"
@@ -261,6 +262,7 @@ jq -n \
   --argjson chainId "${CHAIN_ID}" \
   --argjson epoch "${EPOCH}" \
   --arg provider "${PROVIDER}" \
+  --arg proofBackend "${PROOF_BACKEND}" \
   --slurpfile target "${TARGET_JSON}" \
   --arg deployer "${deployer}" \
   --arg client "${identity_addresses[client]}" \
@@ -284,6 +286,7 @@ jq -n \
       epoch:$epoch,
       provider:$provider
     },
+    proof:{backend:$proofBackend},
     target:$target[0],
     identities:{
       deployer:$deployer,

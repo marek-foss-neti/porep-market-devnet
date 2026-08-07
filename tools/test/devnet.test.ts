@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   cp,
@@ -37,6 +38,36 @@ const sptoolPatchPath = join(
   "curio",
   "0001-sptool-mk20-notification-flags.patch",
 );
+const filecoinFfiPatchPath = join(
+  repositoryRoot,
+  "patches",
+  "filecoin-ffi",
+  "0001-zigzag-devnet-ffi.patch",
+);
+const filecoinFfiFvm4PathPatchPath = join(
+  repositoryRoot,
+  "patches",
+  "filecoin-ffi",
+  "0002-zigzag-devnet-fvm4-path.patch",
+);
+const fvmZigzagPatchPath = join(
+  repositoryRoot,
+  "patches",
+  "fvm",
+  "0001-zigzag-devnet-verifier.patch",
+);
+const lotusEntrypointPatchPath = join(
+  repositoryRoot,
+  "patches",
+  "curio",
+  "0002-lotus-entrypoint-zigzag-runtime-only.patch",
+);
+const curioZigzagUnsealPatchPath = join(
+  repositoryRoot,
+  "patches",
+  "curio",
+  "0003-zigzag-devnet-unseal.patch",
+);
 const commonScriptPath = join(repositoryRoot, "scripts", "devnet-common.sh");
 const runtimeLockPath = join(repositoryRoot, "versions.lock.yaml");
 const composePath = join(repositoryRoot, "docker", "compose.curio-devnet.yaml");
@@ -45,6 +76,7 @@ const downScriptPath = join(repositoryRoot, "scripts", "devnet-down.sh");
 const resetScriptPath = join(repositoryRoot, "scripts", "devnet-reset.sh");
 const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
+const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
 const derivedImageServices = [
   "lotus",
@@ -54,6 +86,46 @@ const derivedImageServices = [
   "piece-server",
   "indexer",
 ] as const;
+const dockerSurfaceInputs = [
+  "docker/curio-all-in-one.Dockerfile",
+  "docker/lotus/Dockerfile",
+  "docker/contracts-bootstrap/Dockerfile",
+  "docker/lotus-miner/Dockerfile",
+  "docker/curio/Dockerfile",
+  "docker/piece-server/Dockerfile",
+  "docker/indexer/Dockerfile",
+  "patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch",
+  "patches/curio/0003-zigzag-devnet-unseal.patch",
+  "patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch",
+  "patches/fvm/0001-zigzag-devnet-verifier.patch",
+] as const;
+
+async function sha256File(path: string): Promise<string> {
+  return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function sha256ZigzagApiSurface(rustFilProofsRoot: string): Promise<string> {
+  const zigzagApi = join(rustFilProofsRoot, "filecoin-proofs", "src", "api", "zigzag.rs");
+  const zigzagCaches = join(rustFilProofsRoot, "filecoin-proofs", "src", "caches.rs");
+  const input = [
+    "filecoin-proofs/src/api/zigzag.rs",
+    await sha256File(zigzagApi),
+    "filecoin-proofs/src/caches.rs",
+    await sha256File(zigzagCaches),
+    "",
+  ].join("\n");
+
+  return createHash("sha256").update(input).digest("hex");
+}
+
+async function sha256DockerSurface(root: string): Promise<string> {
+  const chunks: string[] = [];
+  for (const path of dockerSurfaceInputs) {
+    chunks.push(path, await sha256File(join(root, path)));
+  }
+  chunks.push("");
+  return createHash("sha256").update(chunks.join("\n")).digest("hex");
+}
 
 test("Curio build exposes the existing MK20 notification fields through sptool", async () => {
   const [dockerfile, buildScript, patch] = await Promise.all([
@@ -76,6 +148,85 @@ test("Curio build exposes the existing MK20 notification fields through sptool",
   assert.match(buildScript, /sources verify/);
 });
 
+test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus verification", async () => {
+  const [
+    dockerfile,
+    lotusDockerfile,
+    buildScript,
+    commonScript,
+    compose,
+    patch,
+    filecoinFfiFvm4PathPatch,
+    fvmZigzagPatch,
+    lotusEntrypointPatch,
+    curioZigzagUnsealPatch,
+  ] = await Promise.all([
+    readFile(dockerfilePath, "utf8"),
+    readFile(join(repositoryRoot, "docker", "lotus", "Dockerfile"), "utf8"),
+    readFile(buildScriptPath, "utf8"),
+    readFile(commonScriptPath, "utf8"),
+    readFile(composePath, "utf8"),
+    readFile(filecoinFfiPatchPath, "utf8"),
+    readFile(filecoinFfiFvm4PathPatchPath, "utf8"),
+    readFile(fvmZigzagPatchPath, "utf8"),
+    readFile(lotusEntrypointPatchPath, "utf8"),
+    readFile(curioZigzagUnsealPatchPath, "utf8"),
+  ]);
+
+  assert.match(patch, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(patch, /zigzag_prove_from_cache/);
+  assert.match(patch, /zigzag_pre_commit_phase1_with_replica_id/);
+  assert.match(patch, /zigzag_verify_seal/);
+  assert.match(filecoinFfiFvm4PathPatch, /fvm-4\.8\.2-zigzag/);
+  assert.match(fvmZigzagPatch, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(fvmZigzagPatch, /read_zigzag_proof_sidecar/);
+  assert.match(fvmZigzagPatch, /zigzag_verify_seal/);
+  assert.match(curioZigzagUnsealPatch, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(curioZigzagUnsealPatch, /unseal skip sdr key for zigzag/);
+  assert.match(curioZigzagUnsealPatch, /filecoinffi\.Unseal/);
+  assert.match(curioZigzagUnsealPatch, /fr32\.NewPadWriter/);
+  assert.match(commonScript, /DEVNET_RUST_FIL_PROOFS_SOURCE/);
+  assert.match(buildScript, /zigzag_prove_from_cache/);
+  assert.match(buildScript, /zigzag_pre_commit_phase1_with_replica_id/);
+  assert.match(buildScript, /parameters\.json srs-inner-product\.json/);
+  assert.match(buildScript, /--build-context "lotus-source=\$\{lotus_source_relative\}"/);
+  assert.match(buildScript, /--build-context "rust-fil-proofs=\$\{rust_fil_proofs_source\}"/);
+  assert.match(buildScript, /--build-context "harness-overlay=\."/);
+  assert.match(commonScript, /devnet_docker_surface_sha256/);
+
+  assert.match(dockerfile, /FROM scratch AS rust-fil-proofs-local/);
+  assert.match(dockerfile, /COPY --from=rust-fil-proofs \/parameters\.json \/parameters\.json/);
+  assert.match(dockerfile, /COPY --from=rust-fil-proofs \/srs-inner-product\.json \/srs-inner-product\.json/);
+  assert.match(dockerfile, /COPY --from=rust-fil-proofs \/filecoin-proofs \/filecoin-proofs/);
+  assert.match(dockerfile, /COPY --from=rust-fil-proofs-local \/ \/opt\/curio\/extern\/rust-fil-proofs/);
+  assert.match(dockerfile, /COPY --from=rust-fil-proofs-local \/ \/opt\/lotus\/extern\/rust-fil-proofs/);
+  assert.match(dockerfile, /0003-zigzag-devnet-unseal\.patch/);
+  assert.match(dockerfile, /git apply --check .*curio-zigzag-devnet-unseal\.patch/);
+  assert.match(dockerfile, /git apply --check --directory=extern\/filecoin-ffi .*filecoin-ffi-zigzag-devnet\.patch/);
+  assert.match(dockerfile, /cargo fetch --manifest-path extern\/filecoin-ffi\/rust\/Cargo\.toml/);
+  assert.match(dockerfile, /fvm-4\.8\.2-zigzag/);
+  assert.match(dockerfile, /fvm-zigzag-devnet-verifier\.patch/);
+  assert.match(dockerfile, /filecoin-ffi-zigzag-devnet-fvm4-path\.patch/);
+  assert.match(dockerfile, /FROM \$\{GO_BUILDER_IMAGE\} AS lotus-builder/);
+  assert.match(dockerfile, /COPY --from=lotus-source \/ \./);
+  assert.match(dockerfile, /make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed/);
+  assert.match(dockerfile, /COPY --from=lotus-builder \/opt\/lotus\/lotus /);
+  assert.doesNotMatch(dockerfile, /ENV[\s\S]*FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(lotusDockerfile, /0002-lotus-entrypoint-zigzag-runtime-only\.patch/);
+  assert.match(lotusDockerfile, /git apply \/tmp\/lotus-entrypoint-zigzag-runtime-only\.patch/);
+  assert.match(lotusEntrypointPatch, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
+  assert.match(lotusEntrypointPatch, /without_zigzag_proofs lotus-seed .*pre-seal/);
+
+  const lotusService = compose.match(/  lotus:\n[\s\S]*?\n  contracts-bootstrap:/)?.[0] ?? "";
+  const lotusMinerService = compose.match(/  lotus-miner:\n[\s\S]*?\n  curio:/)?.[0] ?? "";
+  const curioService = compose.match(/  curio:\n[\s\S]*?\n  yugabyte:/)?.[0] ?? "";
+  assert.match(curioService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
+  assert.match(curioService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=\$\{FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS\}/);
+  assert.match(lotusService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
+  assert.doesNotMatch(lotusService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
+  assert.doesNotMatch(lotusMinerService, /FIL_PROOFS_USE_ZIGZAG/);
+});
+
 test("devnet status accepts only complete semantic readiness evidence", async () => {
   const lock = await loadRuntimeLock(runtimeLockPath);
   const provider = "t01001";
@@ -87,6 +238,14 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
       curioCommit: curioSourceCommit,
       lotusCommit: "154c0c3a46e92006008818bb06aaf959e2e705a9",
       platform: "linux/arm64",
+    },
+    proof: {
+      backend: "zigzag",
+      lotus: { FIL_PROOFS_USE_ZIGZAG: "1" },
+      curio: {
+        FIL_PROOFS_USE_ZIGZAG: "1",
+        FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: "1",
+      },
     },
     compose: lock.runtime.services.map((service) => ({
       service,
@@ -156,6 +315,28 @@ test("public status command is bounded and reports a stopped project precisely",
   assert.match(statusScript, /127\.0\.0\.1:22310\/health/);
 });
 
+test("proof backend benchmark runner performs fresh isolated comparisons and aggregates evidence", async () => {
+  const [justfile, script] = await Promise.all([
+    readFile(join(repositoryRoot, "justfile"), "utf8"),
+    readFile(benchProofBackendsScriptPath, "utf8"),
+  ]);
+
+  assert.match(justfile, /bench-proof-backends:\n\s+@bash scripts\/bench-proof-backends\.sh/);
+  assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
+  assert.match(script, /BENCH_REPETITIONS:-1/);
+  assert.match(script, /prewarm_zigzag_if_needed/);
+  assert.match(script, /just reset zigzag/);
+  assert.match(script, /just test-deliver-seal-unseal-retrieval active/);
+  assert.match(script, /just reset "\$\{backend\}"/);
+  assert.match(script, /just deploy/);
+  assert.match(script, /just bench-deliver-seal-unseal-retrieval active/);
+  assert.match(script, /proofParameterCacheStatus/);
+  assert.match(script, /curioImageId/);
+  assert.match(script, /dockerTotalMemoryBytes/);
+  assert.match(script, /summary\.json/);
+  assert.match(script, /Proof backend benchmark comparison/);
+});
+
 async function renderTaskThreeCompose(): Promise<{
   contract: ComposeRuntimeContract;
   rendered: string;
@@ -188,10 +369,13 @@ async function renderTaskThreeCompose(): Promise<{
       `DEVNET_IMAGE_NAMESPACE=${imageNamespace}`,
       `DEVNET_CURIO_SHORT_COMMIT=${curioShortCommit}`,
       `DEVNET_DATA_DIR=${dataDirectory}`,
+      "DEVNET_PROOF_BACKEND=stacked",
       `DEVNET_PROOF_PARAMETERS_DIR=${proofParametersDirectory}`,
       `DEVNET_FILECOIN_SERVICES_SOURCE=${filecoinServicesSource}`,
       `DEVNET_MULTICALL3_SOURCE=${multicall3Source}`,
       `DEVNET_YUGABYTE_IMAGE=${yugabyteImage}`,
+      "FIL_PROOFS_USE_ZIGZAG=0",
+      "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0",
       "",
     ].join("\n"),
     "utf8",
@@ -232,8 +416,11 @@ async function renderTaskThreeCompose(): Promise<{
       curioShortCommit,
       dataDirectory,
       filecoinServicesSource,
+      filProofsUseZigZag: "0",
+      filProofsZigZagGenerateMissingParams: "0",
       imageNamespace,
       multicall3Source,
+      proofBackend: "stacked",
       proofParametersDirectory,
       yugabyteImage,
     },
@@ -348,10 +535,13 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
         `DEVNET_IMAGE_NAMESPACE=${contract.imageNamespace}`,
         `DEVNET_CURIO_SHORT_COMMIT=${contract.curioShortCommit}`,
         `DEVNET_DATA_DIR=${contract.dataDirectory}`,
+        `DEVNET_PROOF_BACKEND=${contract.proofBackend}`,
         `DEVNET_PROOF_PARAMETERS_DIR=${contract.proofParametersDirectory}`,
         `DEVNET_FILECOIN_SERVICES_SOURCE=${contract.filecoinServicesSource}`,
         `DEVNET_MULTICALL3_SOURCE=${contract.multicall3Source}`,
         `DEVNET_YUGABYTE_IMAGE=${contract.yugabyteImage}`,
+        `FIL_PROOFS_USE_ZIGZAG=${contract.filProofsUseZigZag}`,
+        `FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${contract.filProofsZigZagGenerateMissingParams}`,
         "",
       ].join("\n"),
       "utf8",
@@ -400,7 +590,55 @@ async function createLifecycleFixture(): Promise<{
   const commandLog = join(fixtureBase, "commands.log");
   await mkdir(join(root, "scripts"), { recursive: true });
   await mkdir(join(root, "docker"), { recursive: true });
+  await mkdir(join(root, "patches", "filecoin-ffi"), { recursive: true });
+  await mkdir(join(root, "patches", "curio"), { recursive: true });
+  await mkdir(join(root, "patches", "fvm"), { recursive: true });
+  for (const service of derivedImageServices) {
+    await mkdir(join(root, "docker", service), { recursive: true });
+  }
+  await mkdir(
+    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "api"),
+    { recursive: true },
+  );
   await mkdir(stubBin, { recursive: true });
+  await writeFile(
+    join(root, "patches", "filecoin-ffi", "0001-zigzag-devnet-ffi.patch"),
+    "fixture ZigZag filecoin-ffi patch\n",
+    "utf8",
+  );
+  await writeFile(
+    join(root, "patches", "filecoin-ffi", "0002-zigzag-devnet-fvm4-path.patch"),
+    "fixture ZigZag filecoin-ffi FVM4 path patch\n",
+    "utf8",
+  );
+  await writeFile(
+    join(root, "patches", "curio", "0002-lotus-entrypoint-zigzag-runtime-only.patch"),
+    "fixture Lotus ZigZag runtime-only patch\n",
+    "utf8",
+  );
+  await writeFile(
+    join(root, "patches", "curio", "0003-zigzag-devnet-unseal.patch"),
+    "fixture Curio ZigZag unseal patch\n",
+    "utf8",
+  );
+  await writeFile(
+    join(root, "patches", "fvm", "0001-zigzag-devnet-verifier.patch"),
+    "fixture ZigZag FVM verifier patch\n",
+    "utf8",
+  );
+  for (const path of dockerSurfaceInputs.filter((path) => path.startsWith("docker/"))) {
+    await writeFile(join(root, path), "FROM scratch\n", "utf8");
+  }
+  await writeFile(
+    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "api", "zigzag.rs"),
+    "pub fn zigzag_prove_from_cache() {}\npub fn zigzag_pre_commit_phase1_with_replica_id() {}\n",
+    "utf8",
+  );
+  await writeFile(
+    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "caches.rs"),
+    "pub fn get_zigzag_params() {}\npub fn get_zigzag_verifying_key() {}\n",
+    "utf8",
+  );
   for (const name of [
     "devnet-common.sh",
     "devnet-up.sh",
@@ -426,6 +664,8 @@ if [[ "$1" == image && "$2" == inspect ]]; then
     *"io.porep-market.lotus.commit"*) printf '%s\\n' "\${DEVNET_TEST_LOTUS_COMMIT:-}" ;;
     *"io.porep-market.blst.commit"*) printf '%s\\n' "\${DEVNET_TEST_BLST_COMMIT:-}" ;;
     *"io.porep-market.dockerfile.sha256"*) printf '%s\\n' "\${DEVNET_TEST_DOCKERFILE_HASH:-}" ;;
+    *"io.porep-market.zigzag.filecoin-ffi.patch.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_PATCH_HASH:-}" ;;
+    *"io.porep-market.zigzag.rust-fil-proofs.api.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_API_HASH:-}" ;;
     *"{{.Os}}/{{.Architecture}}"*) printf '%s\\n' "linux/arm64" ;;
     *"{{json .Config.Volumes}}"*)
       if [[ "$3" == yugabytedb/* ]]; then
@@ -667,13 +907,13 @@ test("up fixture writes only the validated tree and starts only after typed rend
   const imageId = `sha256:${"d".repeat(64)}`;
   try {
     await writeFile(join(fixture.root, "docker", "curio-all-in-one.Dockerfile"), "FROM scratch\n", "utf8");
-    const digestResult = spawnSync(
-      "shasum",
-      ["-a", "256", join(fixture.root, "docker", "curio-all-in-one.Dockerfile")],
-      { encoding: "utf8" },
+    const dockerfileHash = await sha256DockerSurface(fixture.root);
+    const zigzagPatchHash = await sha256File(
+      join(fixture.root, "patches", "filecoin-ffi", "0001-zigzag-devnet-ffi.patch"),
     );
-    assert.equal(digestResult.status, 0, digestResult.stderr);
-    const dockerfileHash = digestResult.stdout.split(/\s+/)[0]!;
+    const zigzagApiHash = await sha256ZigzagApiSurface(
+      join(dirname(fixture.root), "rust-fil-proofs"),
+    );
     const buildDirectory = join(fixture.root, ".runtime", "devnet", "build");
     await mkdir(buildDirectory, { recursive: true });
     await writeFile(
@@ -691,6 +931,8 @@ test("up fixture writes only the validated tree and starts only after typed rend
         platform: "linux/arm64",
         schemaVersion: 1,
         tag: curioCommit.slice(0, 12),
+        zigzagFilecoinFfiPatchSha256: zigzagPatchHash,
+        zigzagRustFilProofsApiSha256: zigzagApiHash,
       }, null, 2)}\n`,
       "utf8",
     );
@@ -735,6 +977,8 @@ exit 65
           DEVNET_TEST_DOCKERFILE_HASH: dockerfileHash,
           DEVNET_TEST_IMAGE_ID: imageId,
           DEVNET_TEST_LOTUS_COMMIT: lotusCommit,
+          DEVNET_TEST_ZIGZAG_API_HASH: zigzagApiHash,
+          DEVNET_TEST_ZIGZAG_PATCH_HASH: zigzagPatchHash,
           PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
         },
       },
@@ -746,6 +990,9 @@ exit 65
     );
     assert.match(composeEnvironment, new RegExp(`DEVNET_DATA_DIR=${fixture.root}/\\.runtime/devnet/data`));
     assert.match(composeEnvironment, /DEVNET_IMAGE_NAMESPACE=porep-market-curio-devnet/);
+    assert.match(composeEnvironment, /DEVNET_PROOF_BACKEND=stacked/);
+    assert.match(composeEnvironment, /FIL_PROOFS_USE_ZIGZAG=0/);
+    assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0/);
     assert.doesNotMatch(composeEnvironment, /hostile/);
     assert.equal(
       await readFile(
@@ -760,7 +1007,7 @@ exit 65
     const start = commands.indexOf("<up> <--detach>");
     assert.ok(renderedInspection >= 0, commands);
     assert.ok(start > renderedInspection, commands);
-    assert.equal((commands.match(/<--project-name> <porep-market-curio-devnet>/g) ?? []).length, 3);
+    assert.equal((commands.match(/<--project-name> <porep-market-curio-devnet>/g) ?? []).length, 4);
     assert.doesNotMatch(commands, /hostile/);
   } finally {
     await rm(fixture.fixtureBase, { recursive: true, force: true });
@@ -1064,7 +1311,7 @@ test("devnet build uses only immutable Docker and source inputs", async () => {
     "node_runtime",
     "foundry",
   ] as const) {
-    assert.match(buildScript, new RegExp(`image_references\\[${imageName}\\]`));
+    assert.match(buildScript, new RegExp(`${imageName}_image_reference`));
     assert.match(lock.images[imageName].resolvedReference, /@sha256:[0-9a-f]{64}$/);
   }
 });
@@ -1149,7 +1396,7 @@ test("devnet build supplies exact BLST through a minimal verified named context"
   assert.equal(blst.managedSource, "blst");
   assert.match(blst.commit, /^[0-9a-f]{40}$/);
   assert.match(commonScript, /\.cache\/sources\/blst\/\$\{BLST_COMMIT\}/);
-  assert.match(buildScript, /tool_commits\[blst\]/);
+  assert.match(buildScript, /blst_tool_commit/);
   assert.match(buildScript, /blst_state/);
   assert.match(buildScript, /blst_source_reported/);
   assert.match(
@@ -1218,7 +1465,7 @@ test("devnet build is bounded and records inspected local image evidence", async
   assert.match(commonScript, /DEVNET_BUILD_TIMEOUT_MS=5400000/);
   assert.match(buildScript, /run-with-timeout\.mjs/);
   assert.doesNotMatch(buildScript, /docker buildx imagetools inspect/);
-  assert.match(buildScript, /devnet_write_compose_env >\/dev\/null 2>&1/);
+  assert.match(buildScript, /\(devnet_write_compose_env >\/dev\/null 2>&1\)/);
   assert.match(buildScript, /reusing validated local images/);
   assert.match(buildScript, /docker image inspect/);
   assert.match(buildScript, /\.runtime\/devnet\/build\/images\.json/);
@@ -1236,6 +1483,8 @@ test("devnet build is bounded and records inspected local image evidence", async
     "io.porep-market.curio.commit",
     "io.porep-market.lotus.commit",
     "io.porep-market.dockerfile.sha256",
+    "io.porep-market.zigzag.filecoin-ffi.patch.sha256",
+    "io.porep-market.zigzag.rust-fil-proofs.api.sha256",
   ]) {
     assert.match(dockerfile, new RegExp(label.replaceAll(".", "\\.")));
     assert.match(buildScript, new RegExp(label.replaceAll(".", "\\.")));
@@ -1375,6 +1624,8 @@ test("project build manifest validation rejects volumes on every inspected image
     const lotusCommit = "1".repeat(40);
     const blstCommit = "b".repeat(40);
     const dockerfileSha256 = "d".repeat(64);
+    const zigzagPatchSha256 = "e".repeat(64);
+    const zigzagApiSha256 = "f".repeat(64);
     const tag = curioCommit.slice(0, 12);
     const namespace = "porep-market-curio-devnet";
     const imageNames = ["curio-all-in-one", ...derivedImageServices];
@@ -1383,6 +1634,8 @@ test("project build manifest validation rejects volumes on every inspected image
       "io.porep-market.lotus.commit": lotusCommit,
       "io.porep-market.blst.commit": blstCommit,
       "io.porep-market.dockerfile.sha256": dockerfileSha256,
+      "io.porep-market.zigzag.filecoin-ffi.patch.sha256": zigzagPatchSha256,
+      "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagApiSha256,
     };
 
     for (const [volumeIndex, imageName] of imageNames.entries()) {
@@ -1416,6 +1669,8 @@ test("project build manifest validation rejects volumes on every inspected image
           lotusCommit,
           blstCommit,
           dockerfileSha256,
+          zigzagPatchSha256,
+          zigzagApiSha256,
           tag,
           namespace,
         ],
@@ -1485,7 +1740,7 @@ test("all project Dockerfiles omit VOLUME and derived definitions transparently 
       "Dockerfile",
     );
     const upstream = await readFile(upstreamPath, "utf8");
-    const expected = upstream
+    let expected = upstream
       .replace(
         /^ARG CURIO_TEST_IMAGE=.*$/m,
         `ARG CURIO_TEST_IMAGE=${exactBaseImage}`,
@@ -1493,6 +1748,19 @@ test("all project Dockerfiles omit VOLUME and derived definitions transparently 
       .split("\n")
       .filter((line) => !/^\s*VOLUME(?:\s|$)/.test(line))
       .join("\n");
+    if (service === "lotus") {
+      expected = expected.replace(
+        "COPY entrypoint.sh /app\n\nUSER root",
+        [
+          "COPY entrypoint.sh /app",
+          "COPY --from=harness-overlay patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch /tmp/lotus-entrypoint-zigzag-runtime-only.patch",
+          "RUN git apply /tmp/lotus-entrypoint-zigzag-runtime-only.patch \\",
+          "    && rm -f /tmp/lotus-entrypoint-zigzag-runtime-only.patch",
+          "",
+          "USER root",
+        ].join("\n"),
+      );
+    }
     if (result.value.text !== expected) {
       violations.push(`${service} Dockerfile differs beyond base default and VOLUME`);
     }

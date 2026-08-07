@@ -3,8 +3,10 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/devnet-common.sh"
 devnet_require_command docker
 devnet_require_command lsof
+backend="$(devnet_requested_proof_backend "${1:-}")"
 [[ -f "${DEVNET_COMPOSE}" ]] || devnet_die "compose file is missing"
 devnet_prepare_runtime
+devnet_require_proof_backend "${backend}"
 devnet_write_compose_env
 devnet_check_start_ports
 devnet_inspect_rendered_compose >/dev/null

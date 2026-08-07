@@ -229,13 +229,27 @@ adapter that represents Lotus null epochs as empty Ethereum-shaped blocks.
 This prevents Foundry's block lookup retries from stalling deployment while
 leaving Lotus, Curio, and scenario RPC traffic unchanged.
 
-## ZigZag boundary
+## Proof backend selection
 
-ZigZag is not a contract scenario or runtime toggle. It changes
-genesis, consensus, and proof integration and therefore belongs in a separate
-DevNet build lane or sibling harness.
+The local DevNet defaults to the Stacked DRG proof backend. Start from a fresh
+runtime to select a backend explicitly:
 
-The scenario package and deployment revision format can be reused against that
-lane. This harness does not add a generic runtime profile or proof backend
-before a concrete ZigZag node image, genesis builder, and readiness contract
-exist.
+```sh
+just reset stacked
+just reset zigzag
+```
+
+The selected backend is recorded in `.runtime/devnet/proof-backend`,
+`.runtime/devnet/status/latest.json`, and every deployment revision. Lifecycle
+commands refuse to reuse an existing runtime or deployment revision whose proof
+backend differs from the selected runtime backend.
+
+`DEVNET_PROOF_BACKEND=stacked|zigzag` is the public selector. Lifecycle scripts
+render the effective container proof environment into the generated Compose
+environment: `FIL_PROOFS_USE_ZIGZAG=1` only for ZigZag, and
+`FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=1` only for ZigZag Curio. Manual
+Compose YAML edits are not part of the supported workflow.
+
+Proof parameters under `.cache/proof-parameters/` survive resets. Benchmark
+recipes warm missing ZigZag parameters outside measured windows and report the
+selected backend in scenario summaries.

@@ -57,7 +57,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   }
 
   if (
-    args.length === 7
+    (args.length === 7 || args.length === 8)
     && args[0] === "deployment"
     && args[1] === "revision"
     && args[2] === "inspect"
@@ -72,6 +72,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       genesisCid: args[4] ?? "",
       chainId,
       provider: args[6] ?? "",
+      ...(args[7] === undefined ? {} : { proofBackend: normalizeProofBackend(args[7]) }),
     });
     console.log("deployment revision is current");
     return;
@@ -247,7 +248,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   throw new Error(
     "usage: cli.ts deployment inspect <generation> <genesis-cid> <chain-id> <provider> | "
     + "deployment addresses | deployment revision inspect <generation> <genesis-cid> "
-    + "<chain-id> <provider> | deployment revision addresses | "
+    + "<chain-id> <provider> [proof-backend] | deployment revision addresses | "
     + "devnet status inspect | devnet compose inspect <compose.env> | "
     + "contract-target prepare <deployment-seed> [--source <absolute-path>] | "
     + "runtime lock verify | lock verify | sources fetch | sources verify",
@@ -281,6 +282,11 @@ function matches(args: string[], first: string, second: string): boolean {
 
 function matchesThree(args: string[], first: string, second: string, third: string): boolean {
   return args.length === 3 && args[0] === first && args[1] === second && args[2] === third;
+}
+
+function normalizeProofBackend(value: string): "stacked" | "zigzag" {
+  if (value === "stacked" || value === "zigzag") return value;
+  throw new Error("proof backend must be stacked or zigzag");
 }
 
 function printState(state: SourceState): void {

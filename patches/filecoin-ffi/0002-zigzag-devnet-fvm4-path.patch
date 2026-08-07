@@ -1,0 +1,39 @@
+diff --git a/rust/Cargo.lock b/rust/Cargo.lock
+index 4a6f069..fd82a8b 100644
+--- a/rust/Cargo.lock
++++ b/rust/Cargo.lock
+@@ -1560,13 +1560,12 @@ dependencies = [
+ [[package]]
+ name = "fvm"
+ version = "4.8.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "eede0a393f51614b9d8b4035701875ff59c47da3f2d91b11e33fa1fabc05fd5b"
+ dependencies = [
+  "ambassador",
+  "anyhow",
+  "cid",
+  "derive_more",
++ "filecoin-proofs",
+  "filecoin-proofs-api",
+  "fvm-wasm-instrument 0.4.0",
+  "fvm_ipld_amt",
+@@ -1583,6 +1582,7 @@ dependencies = [
+  "rayon",
+  "replace_with",
+  "serde",
++ "serde_json",
+  "static_assertions",
+  "thiserror 2.0.12",
+  "wasmtime",
+diff --git a/rust/Cargo.toml b/rust/Cargo.toml
+index a301707..447c19a 100644
+--- a/rust/Cargo.toml
++++ b/rust/Cargo.toml
+@@ -34,6 +34,6 @@ rand_chacha = "0.3.1"
+ rayon = "1.10.0"
+ anyhow = "1.0.97"
+ serde_json = "1.0.140"
+ rust-gpu-tools = { version = "0.7", optional = true, default-features = false }
+-fvm4 = { package = "fvm", version = "~4.8.2", default-features = false, features = ["verify-signature", "nv29-dev"], optional = true  }
++fvm4 = { package = "fvm", path = "../../fvm-4.8.2-zigzag", default-features = false, features = ["verify-signature", "nv29-dev"], optional = true  }
+ fvm4_shared = { package = "fvm_shared", version = "~4.8.2", optional = true  }

@@ -62,21 +62,45 @@ printf 'resource docker="%s" platform=linux/%s cpus=%s memory_bytes=%s host_free
 runtime_lock_output="$(npm --prefix tools run cli -- runtime lock verify)"
 source_verify_output="$(npm --prefix tools run cli -- sources verify)"
 
-declare -A image_references=()
-declare -A tool_commits=()
-declare -A tool_managed_sources=()
+lotus_devnet_image_reference=""
+yugabyte_image_reference=""
+go_builder_image_reference=""
+rust_toolchain_image_reference=""
+ubuntu_runtime_image_reference=""
+node_runtime_image_reference=""
+foundry_image_reference=""
+go_car_tool_commit=""
+piece_server_tool_commit=""
+storetheindex_tool_commit=""
+go_ethereum_tool_commit=""
+blst_tool_commit=""
+blst_tool_managed_source=""
 while IFS=$'\t' read -r record_kind record_name field_three field_four field_five; do
   case "${record_kind}" in
     image)
-      image_references["${record_name}"]="${field_three}"
+      case "${record_name}" in
+        lotus_devnet) lotus_devnet_image_reference="${field_three}" ;;
+        yugabyte) yugabyte_image_reference="${field_three}" ;;
+        go_builder) go_builder_image_reference="${field_three}" ;;
+        rust_toolchain) rust_toolchain_image_reference="${field_three}" ;;
+        ubuntu_runtime) ubuntu_runtime_image_reference="${field_three}" ;;
+        node_runtime) node_runtime_image_reference="${field_three}" ;;
+        foundry) foundry_image_reference="${field_three}" ;;
+      esac
       ;;
     tool)
-      if [[ -n "${field_four:-}" ]]; then
-        tool_commits["${record_name}"]="${field_four}"
-      fi
-      if [[ "${field_five:-}" == managed-source=* ]]; then
-        tool_managed_sources["${record_name}"]="${field_five#managed-source=}"
-      fi
+      case "${record_name}" in
+        go_car) go_car_tool_commit="${field_four:-}" ;;
+        piece_server) piece_server_tool_commit="${field_four:-}" ;;
+        storetheindex) storetheindex_tool_commit="${field_four:-}" ;;
+        go_ethereum) go_ethereum_tool_commit="${field_four:-}" ;;
+        blst)
+          blst_tool_commit="${field_four:-}"
+          if [[ "${field_five:-}" == managed-source=* ]]; then
+            blst_tool_managed_source="${field_five#managed-source=}"
+          fi
+          ;;
+      esac
       ;;
   esac
 done <<<"${runtime_lock_output}"
@@ -85,6 +109,7 @@ curio_commit=""
 lotus_commit=""
 blst_commit=""
 curio_source_reported=""
+lotus_source_reported=""
 blst_source_reported=""
 curio_state=""
 lotus_state=""
@@ -103,6 +128,7 @@ while IFS=$'\t' read -r source_name source_path expected_commit actual_commit de
       ;;
     lotus)
       lotus_commit="${expected_commit}"
+      lotus_source_reported="${source_path}"
       lotus_state="${actual_commit}:${detached_state}:${clean_state}"
       ;;
   esac
@@ -117,21 +143,27 @@ done <<<"${source_verify_output}"
   devnet_die "Lotus managed source is not exact, detached, and clean"
 [[ "${blst_state}" == "${blst_commit}:detached:clean" ]] ||
   devnet_die "BLST managed source is not exact, detached, and clean"
-[[ "${tool_managed_sources[blst]:-}" == blst ]] ||
+[[ "${blst_tool_managed_source}" == blst ]] ||
   devnet_die "typed runtime lock did not bind BLST to the blst managed source"
-[[ "${tool_commits[blst]:-}" == "${blst_commit}" ]] ||
+[[ "${blst_tool_commit}" == "${blst_commit}" ]] ||
   devnet_die "typed BLST tool commit does not match the verified managed source"
 
 curio_source="$(devnet_curio_source_path "${curio_commit}")"
+lotus_source="$(devnet_lotus_source_path "${lotus_commit}")"
 blst_source="$(devnet_blst_source_path "${blst_commit}")"
 curio_source_relative=".cache/sources/curio/${curio_commit}"
+lotus_source_relative=".cache/sources/lotus/${lotus_commit}"
 blst_source_relative=".cache/sources/blst/${blst_commit}"
 [[ "${curio_source_reported}" == "${curio_source}" ]] ||
   devnet_die "typed Curio source path does not match the managed source path"
+[[ "${lotus_source_reported}" == "${lotus_source}" ]] ||
+  devnet_die "typed Lotus source path does not match the managed source path"
 [[ "${blst_source_reported}" == "${blst_source}" ]] ||
   devnet_die "typed BLST source path does not match the managed source path"
 [[ -d "${curio_source}" && ! -L "${curio_source}" ]] ||
   devnet_die "managed Curio source path is missing or symbolic"
+[[ -d "${lotus_source}" && ! -L "${lotus_source}" ]] ||
+  devnet_die "managed Lotus source path is missing or symbolic"
 [[ -d "${blst_source}" && ! -L "${blst_source}" ]] ||
   devnet_die "managed BLST source path is missing or symbolic"
 for blst_input in build.sh build src bindings LICENSE; do
@@ -139,20 +171,57 @@ for blst_input in build.sh build src bindings LICENSE; do
     devnet_die "managed BLST source is missing required tracked input ${blst_input}"
 done
 
-for required_image in \
-  lotus_devnet yugabyte go_builder rust_toolchain ubuntu_runtime node_runtime foundry; do
-  [[ "${image_references[${required_image}]:-}" =~ @sha256:[0-9a-f]{64}$ ]] ||
+rust_fil_proofs_source="$(devnet_rust_fil_proofs_source_path)"
+[[ -d "${rust_fil_proofs_source}" && ! -L "${rust_fil_proofs_source}" ]] ||
+  devnet_die "ZigZag rust-fil-proofs source path is missing or symbolic"
+for rust_fil_proofs_input in \
+  Cargo.toml Cargo.lock parameters.json srs-inner-product.json fil-proofs-param \
+  fil-proofs-tooling filecoin-hashers filecoin-proofs fr32 sha2raw \
+  storage-proofs-core storage-proofs-porep storage-proofs-post \
+  storage-proofs-update; do
+  [[ -e "${rust_fil_proofs_source}/${rust_fil_proofs_input}" && ! -L "${rust_fil_proofs_source}/${rust_fil_proofs_input}" ]] ||
+    devnet_die "ZigZag rust-fil-proofs source is missing required input ${rust_fil_proofs_input}"
+done
+grep -Fq 'pub fn zigzag_prove_from_cache' \
+  "${rust_fil_proofs_source}/filecoin-proofs/src/api/zigzag.rs" ||
+  devnet_die "ZigZag rust-fil-proofs source does not expose zigzag_prove_from_cache"
+grep -Fq 'pub fn zigzag_pre_commit_phase1_with_replica_id' \
+  "${rust_fil_proofs_source}/filecoin-proofs/src/api/zigzag.rs" ||
+  devnet_die "ZigZag rust-fil-proofs source does not expose zigzag_pre_commit_phase1_with_replica_id"
+filecoin_ffi_zigzag_patch_sha256="$(devnet_filecoin_ffi_zigzag_patch_sha256)"
+rust_fil_proofs_zigzag_api_sha256="$(devnet_rust_fil_proofs_zigzag_api_sha256)"
+
+required_images=(
+  "lotus_devnet ${lotus_devnet_image_reference}"
+  "yugabyte ${yugabyte_image_reference}"
+  "go_builder ${go_builder_image_reference}"
+  "rust_toolchain ${rust_toolchain_image_reference}"
+  "ubuntu_runtime ${ubuntu_runtime_image_reference}"
+  "node_runtime ${node_runtime_image_reference}"
+  "foundry ${foundry_image_reference}"
+)
+for required_image_record in "${required_images[@]}"; do
+  read -r required_image image_reference <<<"${required_image_record}"
+  [[ "${image_reference}" =~ @sha256:[0-9a-f]{64}$ ]] ||
     devnet_die "typed runtime lock did not report immutable ${required_image} image"
 done
 
-for required_tool in go_car piece_server storetheindex go_ethereum blst; do
-  [[ "${tool_commits[${required_tool}]:-}" =~ ^[0-9a-f]{40}$ ]] ||
+required_tools=(
+  "go_car ${go_car_tool_commit}"
+  "piece_server ${piece_server_tool_commit}"
+  "storetheindex ${storetheindex_tool_commit}"
+  "go_ethereum ${go_ethereum_tool_commit}"
+  "blst ${blst_tool_commit}"
+)
+for required_tool_record in "${required_tools[@]}"; do
+  read -r required_tool tool_commit <<<"${required_tool_record}"
+  [[ "${tool_commit}" =~ ^[0-9a-f]{40}$ ]] ||
     devnet_die "typed runtime lock did not report exact ${required_tool} commit"
 done
 
 dockerfile_relative="docker/curio-all-in-one.Dockerfile"
 dockerfile="${DEVNET_ROOT}/${dockerfile_relative}"
-dockerfile_sha256="$(shasum -a 256 "${dockerfile}" | awk '{print $1}')"
+dockerfile_sha256="$(devnet_docker_surface_sha256)"
 curio_short_commit="${curio_commit:0:12}"
 platform="linux/${docker_architecture}"
 
@@ -167,14 +236,14 @@ indexer_image="porep-market-curio-devnet/indexer:${curio_short_commit}"
 manifest_relative=".runtime/devnet/build/images.json"
 manifest_path="${DEVNET_ROOT}/${manifest_relative}"
 if [[ -f "${manifest_path}" && ! -L "${manifest_path}" ]] &&
-  devnet_write_compose_env >/dev/null 2>&1; then
+  (devnet_write_compose_env >/dev/null 2>&1); then
   printf 'reusing validated local images manifest=%s\n' "${manifest_relative}"
   build_succeeded=1
   exit 0
 fi
 
 manifest_history_directory="${DEVNET_BUILD_DIR}/history"
-archive_name="images.before-${build_started_epoch}-${BASHPID}.json"
+archive_name="images.before-${build_started_epoch}-$$.json"
 archived_manifest="$(
   devnet_archive_active_manifest \
     "${manifest_path}" "${manifest_history_directory}" "${archive_name}"
@@ -194,22 +263,26 @@ docker buildx build \
   --target curio-all-in-one \
   --build-context "blst-source=${blst_source_relative}" \
   --build-context "harness-overlay=." \
-  --build-arg "LOTUS_TEST_IMAGE=${image_references[lotus_devnet]}" \
-  --build-arg "GO_BUILDER_IMAGE=${image_references[go_builder]}" \
-  --build-arg "RUST_TOOLCHAIN_IMAGE=${image_references[rust_toolchain]}" \
-  --build-arg "UBUNTU_RUNTIME_IMAGE=${image_references[ubuntu_runtime]}" \
-  --build-arg "NODE_RUNTIME_IMAGE=${image_references[node_runtime]}" \
-  --build-arg "FOUNDRY_IMAGE=${image_references[foundry]}" \
+  --build-context "lotus-source=${lotus_source_relative}" \
+  --build-context "rust-fil-proofs=${rust_fil_proofs_source}" \
+  --build-arg "LOTUS_TEST_IMAGE=${lotus_devnet_image_reference}" \
+  --build-arg "GO_BUILDER_IMAGE=${go_builder_image_reference}" \
+  --build-arg "RUST_TOOLCHAIN_IMAGE=${rust_toolchain_image_reference}" \
+  --build-arg "UBUNTU_RUNTIME_IMAGE=${ubuntu_runtime_image_reference}" \
+  --build-arg "NODE_RUNTIME_IMAGE=${node_runtime_image_reference}" \
+  --build-arg "FOUNDRY_IMAGE=${foundry_image_reference}" \
   --build-arg "CURIO_COMMIT=${curio_commit}" \
   --build-arg "CURIO_FFI_COMMIT=fbe802089480458d730cbce8a3ca83dcd84a4cd1" \
   --build-arg "CURIO_TAGS=cunative debug nosupraseal" \
-  --build-arg "GO_CAR_COMMIT=${tool_commits[go_car]}" \
-  --build-arg "PIECE_SERVER_COMMIT=${tool_commits[piece_server]}" \
-  --build-arg "STORETHEINDEX_COMMIT=${tool_commits[storetheindex]}" \
-  --build-arg "GO_ETHEREUM_COMMIT=${tool_commits[go_ethereum]}" \
+  --build-arg "GO_CAR_COMMIT=${go_car_tool_commit}" \
+  --build-arg "PIECE_SERVER_COMMIT=${piece_server_tool_commit}" \
+  --build-arg "STORETHEINDEX_COMMIT=${storetheindex_tool_commit}" \
+  --build-arg "GO_ETHEREUM_COMMIT=${go_ethereum_tool_commit}" \
   --build-arg "LOTUS_COMMIT=${lotus_commit}" \
   --build-arg "BLST_COMMIT=${blst_commit}" \
   --build-arg "DOCKERFILE_SHA256=${dockerfile_sha256}" \
+  --build-arg "ZIGZAG_FILECOIN_FFI_PATCH_SHA256=${filecoin_ffi_zigzag_patch_sha256}" \
+  --build-arg "ZIGZAG_RUST_FIL_PROOFS_API_SHA256=${rust_fil_proofs_zigzag_api_sha256}" \
   --tag "${base_image}" \
   "${curio_source_relative}"
 
@@ -232,6 +305,7 @@ for derived_build in "${derived_builds[@]}"; do
     --platform "${platform}" \
     --progress plain \
     --file "${relative_dockerfile}" \
+    --build-context "harness-overlay=." \
     --build-arg "CURIO_TEST_IMAGE=${base_image}" \
     --build-arg "BUILD_VERSION=${curio_short_commit}" \
     --tag "${derived_image}" \
@@ -261,6 +335,7 @@ manifest_temporary="$(mktemp "${DEVNET_BUILD_DIR}/images.json.XXXXXX")"
 node - "${inspect_evidence}" "${manifest_temporary}" \
   "${build_started_at}" "${build_finished_at}" "${build_duration_seconds}" \
   "${platform}" "${curio_commit}" "${lotus_commit}" "${blst_commit}" "${dockerfile_sha256}" \
+  "${filecoin_ffi_zigzag_patch_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
   "${curio_short_commit}" "${DEVNET_IMAGE_NAMESPACE}" <<'NODE'
 const fs = require("node:fs");
 
@@ -275,6 +350,8 @@ const [
   lotusCommit,
   blstCommit,
   dockerfileSha256,
+  zigzagFilecoinFfiPatchSha256,
+  zigzagRustFilProofsApiSha256,
   tag,
   namespace,
 ] = process.argv.slice(2);
@@ -283,6 +360,8 @@ const expectedLabels = {
   "io.porep-market.lotus.commit": lotusCommit,
   "io.porep-market.blst.commit": blstCommit,
   "io.porep-market.dockerfile.sha256": dockerfileSha256,
+  "io.porep-market.zigzag.filecoin-ffi.patch.sha256": zigzagFilecoinFfiPatchSha256,
+  "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagRustFilProofsApiSha256,
 };
 const inspections = fs.readFileSync(inspectPath, "utf8")
   .trim()
@@ -330,6 +409,8 @@ const manifest = {
   lotusCommit,
   blstCommit: blstCommit,
   dockerfileSha256,
+  zigzagFilecoinFfiPatchSha256,
+  zigzagRustFilProofsApiSha256,
   startedAt,
   finishedAt,
   durationSeconds: Number(durationText),

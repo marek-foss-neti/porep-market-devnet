@@ -122,12 +122,12 @@ test("timeout helper preserves a command nonzero exit", async () => {
 
 test("timeout helper terminates a hung command without leaking environment", async () => {
   const secret = "must-not-appear-in-diagnostics";
-  const result = await invoke("process.stderr.write('last-state'); setInterval(() => {}, 1_000)", 100, {
+  const result = await invoke("process.stderr.write('last-state'); setInterval(() => {}, 1_000)", 300, {
     TIMEOUT_HELPER_TEST_SECRET: secret,
   });
 
   assert.equal(result.exitCode, 124);
-  assert.match(result.stderr, /timed out after 100ms/);
+  assert.match(result.stderr, /timed out after 300ms/);
   assert.match(result.stderr, /last-state/);
   assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
 });

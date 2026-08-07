@@ -7,6 +7,7 @@ import {
   parseCurioStorageRoots,
   parseSectorPieceRow,
   parseSha256,
+  resolveProofBackendFromEnv,
 } from "../src/devnet/curioUnseal.js";
 
 test("resolves validated Compose container names", () => {
@@ -83,4 +84,27 @@ test("renders verbose unseal stages", () => {
     taskIdDecodeSector: 11,
     afterDecodeSector: false,
   }, storage), /UnsealDecode running \(task 11\)/);
+  assert.match(describeUnsealProgress({
+    taskIdUnsealSdr: null,
+    afterUnsealSdr: true,
+    taskIdDecodeSector: 12,
+    afterDecodeSector: false,
+  }, storage, true, "zigzag"), /ZigZag UnsealDecode running \(task 12\)/);
+});
+
+test("resolves the proof backend used by the seal-unseal scenario", () => {
+  assert.deepEqual(
+    resolveProofBackendFromEnv({ FIL_PROOFS_USE_ZIGZAG: "1" }, 6),
+    {
+      backend: "zigzag",
+      label: "ZigZag",
+      registeredSealProof: 6,
+      registeredSealProofName: "StackedDrg8MiBV1_1",
+      sectorSizeBytes: 8 * 1024 * 1024,
+      reason: "FIL_PROOFS_USE_ZIGZAG=1 and StackedDrg8MiBV1_1 has a ZigZag-supported 8 MiB sector size",
+      unsealPath: "ZigZag filecoinffi.Unseal; SDRKeyRegen is skipped as a scheduler-compatible no-op",
+    },
+  );
+  assert.equal(resolveProofBackendFromEnv({}, 6).backend, "sdr");
+  assert.equal(resolveProofBackendFromEnv({ FIL_PROOFS_USE_ZIGZAG: "true" }, 8).backend, "sdr");
 });

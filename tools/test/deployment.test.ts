@@ -112,6 +112,7 @@ function validRevision(): Record<string, unknown> {
       provider: "t01004",
       epoch: 410,
     },
+    proof: { backend: "stacked" },
     target: {
       mode: "local",
       sourcePath: "/tmp/porep",
@@ -154,6 +155,7 @@ test("deployment revision accepts extra contracts and binds only to chain identi
     generation: "generation-20260724T185524Z-23892",
     genesisCid: "bafy2bzaceco3z6z6nfdpnam52jhagkckzsg5d4ds4dr46537qsfeubzngxpiw",
     provider: "t01004",
+    proofBackend: "stacked",
   }));
   assert.doesNotThrow(() => requireDeploymentContracts(revision, ["PoRepMarket"]));
   assert.throws(
@@ -189,6 +191,7 @@ test("deployment revision address output identifies the selected revision", () =
   );
   assert.match(output, /^deploymentId\tdeployment-20260726T120000Z-aaaaaaaaaaaa$/m);
   assert.match(output, /^revision\t0$/m);
+  assert.match(output, /^proofBackend\tstacked$/m);
   assert.match(output, new RegExp(`^PoRepMarket\\t${address}$`, "m"));
   assert.doesNotMatch(output, /implementation|codeHash|sourcePath/i);
 });

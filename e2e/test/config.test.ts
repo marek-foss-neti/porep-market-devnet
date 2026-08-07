@@ -38,6 +38,7 @@ function fixture(): string {
         epoch: 210,
         provider: "t01004",
       },
+      proof: { backend: "stacked" },
       target: {
         mode: "local",
         sourcePath: snapshotPath,
@@ -74,6 +75,7 @@ function fixture(): string {
       generation: "generation-a",
       chain: { chainId: "0x1df5e76" },
       miner: { provider: "t01004" },
+      proof: { backend: "stacked" },
     }),
   );
   return projectRoot;
@@ -88,6 +90,7 @@ test("loadConfig reads current deployment, status, and test identities", () => {
   assert.equal(config.generation, "generation-a");
   assert.equal(config.deploymentId, "deployment-fixture");
   assert.equal(config.deploymentRevision, 0);
+  assert.equal(config.proofBackend, "stacked");
   assert.equal(config.provider, "t01004");
   assert.equal(config.expectedPorepCommit, "b".repeat(40));
   assert.equal(config.deploymentPorepCommit, "a".repeat(40));
@@ -114,6 +117,7 @@ test("loadConfig rejects a stale deployment generation", () => {
     generation: "generation-b",
     chain: { chainId: "0x1df5e76" },
     miner: { provider: "t01004" },
+    proof: { backend: "stacked" },
   }));
 
   assert.throws(() => loadConfig({ projectRoot, env: {} }), /deployment generation is stale/);

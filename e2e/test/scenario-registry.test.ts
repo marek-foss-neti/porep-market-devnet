@@ -17,11 +17,15 @@ test("scenario registry exposes every supported CLI scenario", () => {
     "actor-token-guards",
     "adapter-disable",
     "basic-activation",
+    "bench-deliver-seal-unseal-retrieval",
+    "bench-retrieval",
+    "bench-seal-unseal",
     "capacity-exhaustion",
     "client-funds-exhaustion",
     "curio-restart-replay",
     "datacap-malformed-input",
     "deal-termination",
+    "deliver-seal-unseal-retrieval",
     "direct-onboarding-notification",
     "direct-onboarding-notification-failure",
     "duplicate-manifest-lifecycle",
@@ -99,6 +103,7 @@ test("named suites resolve to registered scenarios", () => {
     "client-funds-exhaustion",
     "curio-restart-replay",
     "deal-termination",
+    "deliver-seal-unseal-retrieval",
     "direct-onboarding-notification",
     "direct-onboarding-notification-failure",
     "evidence-authority-guards",
@@ -127,6 +132,11 @@ test("named suites resolve to registered scenarios", () => {
     "validator-rail-smoke",
   ]);
   assert.ok(resolveSuite("security").includes("access-control-guards"));
+  assert.deepEqual(resolveSuite("benchmark"), [
+    "bench-deliver-seal-unseal-retrieval",
+    "bench-retrieval",
+    "bench-seal-unseal",
+  ]);
   const qualificationScenarios = new Set([
     ...resolveSuite("contract"),
     ...resolveSuite("curio"),
@@ -136,7 +146,12 @@ test("named suites resolve to registered scenarios", () => {
   );
   assert.deepEqual(
     resolveSuite("full"),
-    scenarioNames.filter((name) => name !== "adapter-disable" && name !== "upgrade-continuity"),
+    scenarioNames.filter((name) =>
+      name !== "adapter-disable"
+        && name !== "bench-deliver-seal-unseal-retrieval"
+        && name !== "bench-retrieval"
+        && name !== "bench-seal-unseal"
+        && name !== "upgrade-continuity"),
   );
   assert.throws(() => resolveSuite("nightly"), /unknown suite: nightly/);
 });

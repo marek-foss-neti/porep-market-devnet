@@ -6,23 +6,37 @@ import {
   type CurioSectorPiece,
   hashPieceSource,
   hashSealedSector,
+  type ProofBackendInfo,
   readCurioSectorPiece,
   readCurioStorageState,
   readCurioUnsealInfo,
   recoverPieceFromUnsealed,
+  resolveProofBackend,
   runCurioIntegrityCheck,
   setCurioUnsealTarget,
+  unsealWaitStepName,
   waitForCurioUnseal,
   waitForSealedOnly,
 } from "../devnet/curioUnseal.js";
 import { submitCurioNotification, waitForCurioSector } from "../devnet/curio.js";
 import { generatePieceAndAssertCommp, type PieceInfo } from "../devnet/piece.js";
+import { withResourceMonitor } from "../devnet/resourceMetrics.js";
 import type { ScenarioContext } from "../runtime.js";
 import { envValue, runStep } from "../runtime.js";
 
-export async function runSealUnsealRoundtrip(context: ScenarioContext): Promise<void> {
+export type SealUnsealRoundtripOptions = {
+  benchmark?: boolean;
+};
+
+export async function runSealUnsealRoundtrip(
+  context: ScenarioContext,
+  options: SealUnsealRoundtripOptions = {},
+): Promise<void> {
   const resumeRunDir = envValue(context, "SEAL_UNSEAL_RESUME_RUN_DIR").trim();
   if (resumeRunDir) {
+    if (options.benchmark) {
+      throw new Error("bench-seal-unseal does not support SEAL_UNSEAL_RESUME_RUN_DIR");
+    }
     await resumeSealUnsealRoundtrip(context, resumeRunDir);
     return;
   }
@@ -35,6 +49,30 @@ export async function runSealUnsealRoundtrip(context: ScenarioContext): Promise<
     console.log(`  source SHA256: ${sha256}`);
     return { path: piece.pieceCarPath, sha256 };
   });
+
+  if (options.benchmark) {
+    context.state.set("BENCHMARK_KIND", "seal-unseal");
+    context.state.set(
+      "SEAL_UNSEAL_BENCH_SCOPE",
+      "fresh MK20 deal submission through ProveCommit, FTUnsealed recovery, and roundtrip verification",
+    );
+    await withResourceMonitor(context, "seal-unseal", "SEAL_UNSEAL", () =>
+      completeFreshSealUnsealRoundtrip(context, piece, sourceSha256.sha256));
+    return;
+  }
+
+  await completeFreshSealUnsealRoundtrip(context, piece, sourceSha256.sha256);
+}
+
+export async function runBenchSealUnseal(context: ScenarioContext): Promise<void> {
+  await runSealUnsealRoundtrip(context, { benchmark: true });
+}
+
+async function completeFreshSealUnsealRoundtrip(
+  context: ScenarioContext,
+  piece: PieceInfo,
+  sourceSha256: string,
+): Promise<void> {
   const deal = await runStep(context, "submit fresh MK20 deal", () =>
     submitCurioNotification(context, piece, context.config.addresses.notificationReceiver));
   const pipeline = await runStep(context, "wait for seal and prove-commit", () =>
@@ -52,6 +90,7 @@ export async function runSealUnsealRoundtrip(context: ScenarioContext): Promise<
     context.state.set("RAW_SIZE", value.rawSize);
     return value;
   });
+  const proofBackend = recordProofBackend(context, sectorPiece);
 
   await runStep(context, "verify ProveCommit on-chain without waiting for WindowPoSt", async () => {
     const committed = await assertSectorCommitted(context, sectorPiece.sector);
@@ -89,13 +128,13 @@ export async function runSealUnsealRoundtrip(context: ScenarioContext): Promise<
     return { output };
   });
 
-  await runStep(context, "wait for SDRKeyRegen and UnsealDecode", () =>
-    waitForCurioUnseal(context, sectorPiece));
+  await runStep(context, unsealWaitStepName(proofBackend.backend), () =>
+    waitForCurioUnseal(context, sectorPiece, proofBackend.backend));
 
   await verifyUnsealRoundtripTail(
     context,
     piece,
-    sourceSha256.sha256,
+    sourceSha256,
     sealedBaseline.sealedSha256,
     sectorPiece,
   );
@@ -149,6 +188,7 @@ async function resumeSealUnsealRoundtrip(
     context.state.set("SECTOR_NUMBER", sectorPiece.sector);
     context.state.set("SECTOR_OFFSET", sectorPiece.sectorOffset);
     context.state.set("RAW_SIZE", sectorPiece.rawSize);
+    recordProofBackend(context, sectorPiece);
     console.log(`  checkpoint: ${statePath}`);
     console.log(`  sector: ${context.config.provider}/${sectorPiece.sector}`);
     return { piece, sourceSha256, sealedSha256, sectorPiece };
@@ -270,6 +310,25 @@ function requireCheckpoint(
     throw new Error(`missing or invalid ${key} in seal-unseal checkpoint: ${path}`);
   }
   return value;
+}
+
+export function recordProofBackend(
+  context: ScenarioContext,
+  sectorPiece: CurioSectorPiece,
+): ProofBackendInfo {
+  const proofBackend = resolveProofBackend(context, sectorPiece.regSealProof);
+  context.state.set("PROOF_BACKEND", proofBackend.backend);
+  context.state.set("PROOF_BACKEND_LABEL", proofBackend.label);
+  context.state.set("PROOF_BACKEND_REASON", proofBackend.reason);
+  context.state.set("UNSEAL_PATH", proofBackend.unsealPath);
+  context.state.set("REGISTERED_SEAL_PROOF", proofBackend.registeredSealProof);
+  context.state.set("REGISTERED_SEAL_PROOF_NAME", proofBackend.registeredSealProofName);
+  if (proofBackend.sectorSizeBytes !== undefined) {
+    context.state.set("REGISTERED_SEAL_PROOF_SECTOR_SIZE_BYTES", proofBackend.sectorSizeBytes);
+  }
+  console.log(`  proof backend: ${proofBackend.label}`);
+  console.log(`  ${proofBackend.reason}`);
+  return proofBackend;
 }
 
 function providerActorId(provider: string): number {

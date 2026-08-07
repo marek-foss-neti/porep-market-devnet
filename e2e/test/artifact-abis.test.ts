@@ -59,6 +59,7 @@ function config(projectRoot: string, porepSourceDir: string): E2EConfig {
     deploymentTargetDirty: false,
     deploymentId: "deployment-test",
     deploymentRevision: 0,
+    proofBackend: "stacked",
     deploymentRecordPath: join(projectRoot, ".runtime/deployments/latest.json"),
     privateKeyTest: testKey,
     privateKeySp: testKey,

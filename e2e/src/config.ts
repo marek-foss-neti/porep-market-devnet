@@ -38,6 +38,7 @@ export type E2EConfig = {
   deploymentTargetDirty: boolean;
   deploymentId: string;
   deploymentRevision: number;
+  proofBackend: "stacked" | "zigzag";
   deploymentRecordPath: string;
   privateKeyTest: string;
   privateKeySp: string;
@@ -68,6 +69,7 @@ type Deployment = {
     chainId?: unknown;
     provider?: unknown;
   };
+  proof?: { backend?: unknown };
   target?: {
     mode?: unknown;
     commit?: unknown;
@@ -87,6 +89,7 @@ type Status = {
   generation?: unknown;
   chain?: { chainId?: unknown };
   miner?: { provider?: unknown };
+  proof?: { backend?: unknown };
 };
 
 const DEVNET_CHAIN_ID = 31415926;
@@ -141,6 +144,10 @@ export function loadConfig(input: LoadConfigInput = {}): E2EConfig {
   if (provider !== requiredString(status.miner?.provider, "status provider")) {
     throw new Error("deployment provider is stale");
   }
+  const proofBackend = requiredProofBackend(deployment.proof?.backend, "deployment proof backend");
+  if (proofBackend !== requiredProofBackend(status.proof?.backend, "status proof backend")) {
+    throw new Error("deployment proof backend is stale");
+  }
 
   const identityKeys = Object.fromEntries(
     IDENTITY_NAMES.map((name) => [name, requiredKey(privateIdentities[name], name)]),
@@ -183,6 +190,7 @@ export function loadConfig(input: LoadConfigInput = {}): E2EConfig {
     deploymentTargetDirty,
     deploymentId,
     deploymentRevision,
+    proofBackend,
     deploymentRecordPath,
     privateKeyTest: identityKeys.client,
     privateKeySp: identityKeys.unauthorized,
@@ -233,6 +241,11 @@ function requiredAddress(value: unknown, label: string): string {
     throw new Error(`missing ${label}`);
   }
   return value;
+}
+
+function requiredProofBackend(value: unknown, label: string): "stacked" | "zigzag" {
+  if (value === "stacked" || value === "zigzag") return value;
+  throw new Error(`invalid ${label}`);
 }
 
 function requiredKey(value: unknown, name: string): string {

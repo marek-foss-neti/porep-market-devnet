@@ -8,7 +8,7 @@ devnet_require_runtime_tree
 
 source_arg="${1:-}"
 source_arg="${source_arg#source=}"
-printf -v timestamp '%(%Y%m%dT%H%M%SZ)T' -1
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 seed="contract-tests-${timestamp}-$$"
 target_args=(contract-target prepare "${seed}")
 if [[ -n "${source_arg}" ]]; then

@@ -26,6 +26,9 @@ WORKDIR /app
 RUN mkdir -p /app
 
 COPY entrypoint.sh /app
+COPY --from=harness-overlay patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch /tmp/lotus-entrypoint-zigzag-runtime-only.patch
+RUN git apply /tmp/lotus-entrypoint-zigzag-runtime-only.patch \
+    && rm -f /tmp/lotus-entrypoint-zigzag-runtime-only.patch
 
 USER root
 

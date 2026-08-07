@@ -11,7 +11,7 @@ services:
       retries: 60
       start_period: 30s
     ports: ["127.0.0.1:2234:1234"]
-    environment: [LOTUS_FEVM_ENABLEETHRPC=true, LOTUS_API_LISTENADDRESS=/dns/lotus/tcp/1234/http, LOTUS_CHAININDEXER_ENABLEINDEXER=true, LOTUS_NETWORK_VERSION=27, LOTUS_FIREHORSE_UPGRADE_EPOCH=200]
+    environment: [LOTUS_FEVM_ENABLEETHRPC=true, LOTUS_API_LISTENADDRESS=/dns/lotus/tcp/1234/http, LOTUS_CHAININDEXER_ENABLEINDEXER=true, LOTUS_NETWORK_VERSION=27, LOTUS_FIREHORSE_UPGRADE_EPOCH=200, "FIL_PROOFS_USE_ZIGZAG=${FIL_PROOFS_USE_ZIGZAG}"]
     volumes: ["${DEVNET_DATA_DIR}/lotus:/var/lib/lotus:rw", "${DEVNET_DATA_DIR}/genesis:/var/lib/genesis:rw", "${DEVNET_PROOF_PARAMETERS_DIR}:/var/tmp/filecoin-proof-parameters:rw"]
   contracts-bootstrap:
     image: ${DEVNET_IMAGE_NAMESPACE}/contracts-bootstrap:${DEVNET_CURIO_SHORT_COMMIT}
@@ -47,7 +47,7 @@ services:
       retries: 60
       start_period: 30s
     ports: ["127.0.0.1:22300:12300", "127.0.0.1:22310:12310", "127.0.0.1:24701:4701"]
-    environment: [CURIO_REPO_PATH=/var/lib/curio, CURIO_HARMONYDB_HOSTS=yugabyte, CONTRACT_ENV_FILE=/var/lib/contracts/curio-devnet.env]
+    environment: [CURIO_REPO_PATH=/var/lib/curio, CURIO_HARMONYDB_HOSTS=yugabyte, CONTRACT_ENV_FILE=/var/lib/contracts/curio-devnet.env, "FIL_PROOFS_USE_ZIGZAG=${FIL_PROOFS_USE_ZIGZAG}", "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS}"]
     volumes: ["${DEVNET_DATA_DIR}/curio:/var/lib/curio:rw", "${DEVNET_DATA_DIR}/lotus:/var/lib/lotus:ro", "${DEVNET_DATA_DIR}/lotus-miner:/var/lib/lotus-miner:ro", "${DEVNET_DATA_DIR}/contracts:/var/lib/contracts:rw", "${DEVNET_PROOF_PARAMETERS_DIR}:/var/tmp/filecoin-proof-parameters:rw"]
   yugabyte:
     image: ${DEVNET_YUGABYTE_IMAGE}
