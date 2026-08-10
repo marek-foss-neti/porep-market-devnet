@@ -21,15 +21,23 @@ async function withLock(contents: string, runTest: (path: string) => Promise<voi
   }
 }
 
-test("loads the nine checked-in managed sources", async () => {
+test("loads the ten checked-in managed sources", async () => {
   const lock = await loadVersionLock(join(workspaceRoot, "versions.lock.yaml"));
   const sources = managedSources(lock);
 
-  assert.equal(sources.length, 9);
+  assert.equal(sources.length, 10);
   assert.deepEqual(sources.find((source) => source.name === "curio")?.submodules, {
     "extern/filecoin-ffi": "fbe802089480458d730cbce8a3ca83dcd84a4cd1",
     "extern/supraseal/deps/sppark": "73c8a4586b15fc7227f8736d3f31ff6b35d261a4",
   });
+  assert.equal(
+    sources.find((source) => source.name === "rust_fil_proofs")?.repository,
+    "https://github.com/marek-foss-neti/rust-fil-proofs.git",
+  );
+  assert.equal(
+    sources.find((source) => source.name === "rust_fil_proofs")?.commit,
+    "7a4dbb741bdf68080326ae27f4e0ddf33033a280",
+  );
 });
 
 test("CLI source uses only Node-20-compatible main and path checks", async () => {
@@ -49,7 +57,7 @@ test("CLI executes its main module and prints every locked source", async () => 
   );
   const rows = result.stdout.trim().split("\n");
 
-  assert.equal(rows.length, 9);
+  assert.equal(rows.length, 10);
   assert.ok(rows.every((row) => row.split("\t").length === 3));
   assert.ok(rows.every((row) => row.split("\t")[1] === "locked"));
 });

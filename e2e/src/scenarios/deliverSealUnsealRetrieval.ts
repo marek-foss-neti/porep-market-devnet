@@ -380,6 +380,7 @@ function recordStatusSnapshot(context: ScenarioContext): void {
   const build = asRecord(status.build);
   recordString(context, "STATUS_CURIO_COMMIT", build?.curioCommit);
   recordString(context, "STATUS_LOTUS_COMMIT", build?.lotusCommit);
+  recordString(context, "STATUS_RUST_FIL_PROOFS_COMMIT", build?.rustFilProofsCommit);
   recordString(context, "STATUS_IMAGE_PLATFORM", build?.platform);
 }
 
@@ -394,7 +395,8 @@ function recordBuildManifestSnapshot(context: ScenarioContext): void {
   recordString(context, "DEVNET_CURIO_COMMIT", manifest.curioCommit);
   recordString(context, "DEVNET_LOTUS_COMMIT", manifest.lotusCommit);
   recordString(context, "DEVNET_BLST_COMMIT", manifest.blstCommit);
-  recordString(context, "DEVNET_ZIGZAG_FILECOIN_FFI_PATCH_SHA256", manifest.zigzagFilecoinFfiPatchSha256);
+  recordString(context, "DEVNET_RUST_FIL_PROOFS_COMMIT", manifest.rustFilProofsCommit);
+  recordString(context, "DEVNET_ZIGZAG_SOURCE_OVERRIDES_SHA256", manifest.zigzagSourceOverridesSha256);
   recordString(context, "DEVNET_ZIGZAG_RUST_FIL_PROOFS_API_SHA256", manifest.zigzagRustFilProofsApiSha256);
 
   const images = Array.isArray(manifest.images) ? manifest.images.map(asRecord).filter(isDefined) : [];

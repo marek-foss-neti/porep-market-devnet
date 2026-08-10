@@ -52,6 +52,7 @@ const contractNames = [
 
 const sourceNames = [
   "blst",
+  "rust_fil_proofs",
   "curio",
   "lotus",
   "porep_market",

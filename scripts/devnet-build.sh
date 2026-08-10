@@ -108,12 +108,15 @@ done <<<"${runtime_lock_output}"
 curio_commit=""
 lotus_commit=""
 blst_commit=""
+rust_fil_proofs_commit=""
 curio_source_reported=""
 lotus_source_reported=""
 blst_source_reported=""
+rust_fil_proofs_source_reported=""
 curio_state=""
 lotus_state=""
 blst_state=""
+rust_fil_proofs_state=""
 while IFS=$'\t' read -r source_name source_path expected_commit actual_commit detached_state clean_state _; do
   case "${source_name}" in
     blst)
@@ -131,18 +134,26 @@ while IFS=$'\t' read -r source_name source_path expected_commit actual_commit de
       lotus_source_reported="${source_path}"
       lotus_state="${actual_commit}:${detached_state}:${clean_state}"
       ;;
+    rust_fil_proofs)
+      rust_fil_proofs_commit="${expected_commit}"
+      rust_fil_proofs_source_reported="${source_path}"
+      rust_fil_proofs_state="${actual_commit}:${detached_state}:${clean_state}"
+      ;;
   esac
 done <<<"${source_verify_output}"
 
 [[ "${curio_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "typed source verification did not report Curio commit"
 [[ "${lotus_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "typed source verification did not report Lotus commit"
 [[ "${blst_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "typed source verification did not report BLST commit"
+[[ "${rust_fil_proofs_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "typed source verification did not report rust-fil-proofs commit"
 [[ "${curio_state}" == "${curio_commit}:detached:clean" ]] ||
   devnet_die "Curio managed source is not exact, detached, and clean"
 [[ "${lotus_state}" == "${lotus_commit}:detached:clean" ]] ||
   devnet_die "Lotus managed source is not exact, detached, and clean"
 [[ "${blst_state}" == "${blst_commit}:detached:clean" ]] ||
   devnet_die "BLST managed source is not exact, detached, and clean"
+[[ "${rust_fil_proofs_state}" == "${rust_fil_proofs_commit}:detached:clean" ]] ||
+  devnet_die "rust-fil-proofs managed source is not exact, detached, and clean"
 [[ "${blst_tool_managed_source}" == blst ]] ||
   devnet_die "typed runtime lock did not bind BLST to the blst managed source"
 [[ "${blst_tool_commit}" == "${blst_commit}" ]] ||
@@ -151,29 +162,32 @@ done <<<"${source_verify_output}"
 curio_source="$(devnet_curio_source_path "${curio_commit}")"
 lotus_source="$(devnet_lotus_source_path "${lotus_commit}")"
 blst_source="$(devnet_blst_source_path "${blst_commit}")"
+rust_fil_proofs_source="$(devnet_rust_fil_proofs_source_path "${rust_fil_proofs_commit}")"
 curio_source_relative=".cache/sources/curio/${curio_commit}"
 lotus_source_relative=".cache/sources/lotus/${lotus_commit}"
 blst_source_relative=".cache/sources/blst/${blst_commit}"
+rust_fil_proofs_source_relative=".cache/sources/rust_fil_proofs/${rust_fil_proofs_commit}"
 [[ "${curio_source_reported}" == "${curio_source}" ]] ||
   devnet_die "typed Curio source path does not match the managed source path"
 [[ "${lotus_source_reported}" == "${lotus_source}" ]] ||
   devnet_die "typed Lotus source path does not match the managed source path"
 [[ "${blst_source_reported}" == "${blst_source}" ]] ||
   devnet_die "typed BLST source path does not match the managed source path"
+[[ "${rust_fil_proofs_source_reported}" == "${rust_fil_proofs_source}" ]] ||
+  devnet_die "typed rust-fil-proofs source path does not match the managed source path"
 [[ -d "${curio_source}" && ! -L "${curio_source}" ]] ||
   devnet_die "managed Curio source path is missing or symbolic"
 [[ -d "${lotus_source}" && ! -L "${lotus_source}" ]] ||
   devnet_die "managed Lotus source path is missing or symbolic"
 [[ -d "${blst_source}" && ! -L "${blst_source}" ]] ||
   devnet_die "managed BLST source path is missing or symbolic"
+[[ -d "${rust_fil_proofs_source}" && ! -L "${rust_fil_proofs_source}" ]] ||
+  devnet_die "managed rust-fil-proofs source path is missing or symbolic"
 for blst_input in build.sh build src bindings LICENSE; do
   [[ -e "${blst_source}/${blst_input}" && ! -L "${blst_source}/${blst_input}" ]] ||
     devnet_die "managed BLST source is missing required tracked input ${blst_input}"
 done
 
-rust_fil_proofs_source="$(devnet_rust_fil_proofs_source_path)"
-[[ -d "${rust_fil_proofs_source}" && ! -L "${rust_fil_proofs_source}" ]] ||
-  devnet_die "ZigZag rust-fil-proofs source path is missing or symbolic"
 for rust_fil_proofs_input in \
   Cargo.toml Cargo.lock parameters.json srs-inner-product.json fil-proofs-param \
   fil-proofs-tooling filecoin-hashers filecoin-proofs fr32 sha2raw \
@@ -189,7 +203,7 @@ grep -Fq 'pub fn zigzag_pre_commit_phase1_with_replica_id' \
   "${rust_fil_proofs_source}/filecoin-proofs/src/api/zigzag.rs" ||
   devnet_die "ZigZag rust-fil-proofs source does not expose zigzag_pre_commit_phase1_with_replica_id"
 zigzag_source_overrides_sha256="$(devnet_zigzag_source_overrides_sha256)"
-rust_fil_proofs_zigzag_api_sha256="$(devnet_rust_fil_proofs_zigzag_api_sha256)"
+rust_fil_proofs_zigzag_api_sha256="$(devnet_rust_fil_proofs_zigzag_api_sha256 "${rust_fil_proofs_commit}")"
 
 required_images=(
   "lotus_devnet ${lotus_devnet_image_reference}"
@@ -264,7 +278,7 @@ docker buildx build \
   --build-context "blst-source=${blst_source_relative}" \
   --build-context "harness-overlay=." \
   --build-context "lotus-source=${lotus_source_relative}" \
-  --build-context "rust-fil-proofs=${rust_fil_proofs_source}" \
+  --build-context "rust-fil-proofs=${rust_fil_proofs_source_relative}" \
   --build-arg "LOTUS_TEST_IMAGE=${lotus_devnet_image_reference}" \
   --build-arg "GO_BUILDER_IMAGE=${go_builder_image_reference}" \
   --build-arg "RUST_TOOLCHAIN_IMAGE=${rust_toolchain_image_reference}" \
@@ -281,6 +295,7 @@ docker buildx build \
   --build-arg "LOTUS_COMMIT=${lotus_commit}" \
   --build-arg "BLST_COMMIT=${blst_commit}" \
   --build-arg "DOCKERFILE_SHA256=${dockerfile_sha256}" \
+  --build-arg "RUST_FIL_PROOFS_COMMIT=${rust_fil_proofs_commit}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_source_overrides_sha256}" \
   --build-arg "ZIGZAG_RUST_FIL_PROOFS_API_SHA256=${rust_fil_proofs_zigzag_api_sha256}" \
   --tag "${base_image}" \
@@ -335,7 +350,7 @@ manifest_temporary="$(mktemp "${DEVNET_BUILD_DIR}/images.json.XXXXXX")"
 node - "${inspect_evidence}" "${manifest_temporary}" \
   "${build_started_at}" "${build_finished_at}" "${build_duration_seconds}" \
   "${platform}" "${curio_commit}" "${lotus_commit}" "${blst_commit}" "${dockerfile_sha256}" \
-  "${zigzag_source_overrides_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
+  "${rust_fil_proofs_commit}" "${zigzag_source_overrides_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
   "${curio_short_commit}" "${DEVNET_IMAGE_NAMESPACE}" <<'NODE'
 const fs = require("node:fs");
 
@@ -350,6 +365,7 @@ const [
   lotusCommit,
   blstCommit,
   dockerfileSha256,
+  rustFilProofsCommit,
   zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,
   tag,
@@ -360,6 +376,7 @@ const expectedLabels = {
   "io.porep-market.lotus.commit": lotusCommit,
   "io.porep-market.blst.commit": blstCommit,
   "io.porep-market.dockerfile.sha256": dockerfileSha256,
+  "io.porep-market.zigzag.rust-fil-proofs.commit": rustFilProofsCommit,
   "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
   "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagRustFilProofsApiSha256,
 };
@@ -408,6 +425,7 @@ const manifest = {
   curioCommit,
   lotusCommit,
   blstCommit: blstCommit,
+  rustFilProofsCommit,
   dockerfileSha256,
   zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,

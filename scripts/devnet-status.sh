@@ -9,6 +9,7 @@ devnet_require_command node
 devnet_require_runtime_tree
 devnet_require_ownership_marker
 proof_backend="$(devnet_current_proof_backend)"
+firehorse_epoch="$(devnet_firehorse_upgrade_epoch)"
 status_path="${DEVNET_ROOT}/.runtime/devnet/status/latest.json"
 mkdir -p "$(dirname "${status_path}")"
 # Keep ten seconds of margin below the documented 20-minute wall budget.
@@ -19,6 +20,7 @@ running="$(
     bash -c 'source "$1"; devnet_compose ps --quiet' devnet-status "${DEVNET_ROOT}/scripts/devnet-common.sh"
 )"
 [[ -n "${running}" ]] || devnet_die "project is not running; run just up"
+devnet_progress "devnet-status: waiting for ${proof_backend} devnet readiness"
 
 bounded_compose() {
   local remaining_seconds=$((deadline - SECONDS))
@@ -71,6 +73,7 @@ capture_diagnostics() {
 # Reserve the final 65 seconds of the absolute budget for diagnostics.
 deadline=$((command_deadline - 65))
 last_state="startup has not converged"
+status_progress_last=0
 while ((SECONDS < deadline)); do
   compose_json="$(bounded_compose ps --all --format json 2>/dev/null || true)"
   compose_status="$(jq -sc '
@@ -83,6 +86,7 @@ while ((SECONDS < deadline)); do
   ' <<<"${compose_json}" 2>/dev/null || true)"
   if [[ "$(jq 'length' <<<"${compose_status:-[]}" 2>/dev/null || printf 0)" != 7 ]]; then
     last_state="expected seven Compose services"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
     status_pause || break
     continue
   fi
@@ -90,8 +94,9 @@ while ((SECONDS < deadline)); do
   epoch="$(bounded_compose exec -T lotus lotus chain head --height 2>/dev/null || true)"
   network_output="$(bounded_compose exec -T lotus lotus state network-version 2>/dev/null || true)"
   network_version="$(awk '/Network Version:/ {print $3}' <<<"${network_output}")"
-  if [[ ! "${epoch}" =~ ^[0-9]+$ || ! "${network_version}" =~ ^[0-9]+$ || "${epoch}" -lt 200 || "${network_version}" -ne 28 ]]; then
-    last_state="chain epoch=${epoch:-unknown} networkVersion=${network_version:-unknown}; waiting for epoch 200/NV28"
+  if [[ ! "${epoch}" =~ ^[0-9]+$ || ! "${network_version}" =~ ^[0-9]+$ || "${epoch}" -lt "${firehorse_epoch}" || "${network_version}" -ne 28 ]]; then
+    last_state="chain epoch=${epoch:-unknown} networkVersion=${network_version:-unknown}; waiting for epoch ${firehorse_epoch}/NV28"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
     status_pause || break
     continue
   fi
@@ -139,6 +144,7 @@ while ((SECONDS < deadline)); do
 
   build_curio="$(jq -r '.curioCommit' "${DEVNET_BUILD_DIR}/images.json")"
   build_lotus="$(jq -r '.lotusCommit' "${DEVNET_BUILD_DIR}/images.json")"
+  build_rust_fil_proofs="$(jq -r '.rustFilProofsCommit // empty' "${DEVNET_BUILD_DIR}/images.json")"
   build_platform="$(jq -r '.platform' "${DEVNET_BUILD_DIR}/images.json")"
   generation="$(tr -d '\n' < "${DEVNET_RUNTIME_DIR}/generation" 2>/dev/null || true)"
 
@@ -153,6 +159,7 @@ while ((SECONDS < deadline)); do
     || "${sector_size}" != 8388608
     || -z "${chain_id}"
     || "${curio_version}" != *"${build_curio}"*
+    || ! "${build_rust_fil_proofs}" =~ ^[0-9a-f]{40}$
     || "${api_ready}" != true
     || "${market_ready}" != true
     || ! "${task_count}" =~ ^[0-9]+$
@@ -162,6 +169,7 @@ while ((SECONDS < deadline)); do
     || -z "${generation}"
   ]]; then
     last_state="semantic probes incomplete at epoch ${epoch}"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
     status_pause || break
     continue
   fi
@@ -172,6 +180,7 @@ while ((SECONDS < deadline)); do
     --arg generation "${generation}" \
     --arg buildCurio "${build_curio}" \
     --arg buildLotus "${build_lotus}" \
+    --arg buildRustFilProofs "${build_rust_fil_proofs}" \
     --arg platform "${build_platform}" \
     --arg proofBackend "${proof_backend}" \
     --arg lotusZigZag "${lotus_fil_proofs_use_zigzag}" \
@@ -194,7 +203,12 @@ while ((SECONDS < deadline)); do
       schemaVersion: 1,
       generatedAt: $generatedAt,
       generation: $generation,
-      build: {curioCommit: $buildCurio, lotusCommit: $buildLotus, platform: $platform},
+      build: {
+        curioCommit: $buildCurio,
+        lotusCommit: $buildLotus,
+        rustFilProofsCommit: $buildRustFilProofs,
+        platform: $platform
+      },
       proof: {
         backend: $proofBackend,
         lotus: {FIL_PROOFS_USE_ZIGZAG: $lotusZigZag},
@@ -229,6 +243,7 @@ while ((SECONDS < deadline)); do
     }' > "${temporary}"
   npm --prefix "${DEVNET_ROOT}/tools" run cli -- devnet status inspect < "${temporary}"
   mv -- "${temporary}" "${status_path}"
+  devnet_progress "devnet-status: ready backend=${proof_backend} epoch=${epoch} provider=${provider}"
   exit 0
 done
 

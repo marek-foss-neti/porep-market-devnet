@@ -10,11 +10,14 @@ devnet_require_proof_backend "${backend}"
 devnet_write_compose_env
 devnet_check_start_ports
 devnet_inspect_rendered_compose >/dev/null
+devnet_progress "devnet-up: starting ${backend} containers"
 node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" --timeout-ms "${DEVNET_LIFECYCLE_TIMEOUT_MS}" -- \
   bash -c 'source "$1"; devnet_compose up --detach' devnet-up "${DEVNET_ROOT}/scripts/devnet-common.sh"
+devnet_progress "devnet-up: containers are up; waiting for Curio market config"
 
 [[ -n "${DEVNET_TEST_COMMAND_LOG:-}" ]] && exit 0
 
+progress_last=0
 for _ in {1..150}; do
   config_state="$(
     devnet_compose exec -T yugabyte ysqlsh -h yugabyte -U yugabyte -d yugabyte -At -c "
@@ -32,7 +35,9 @@ for _ in {1..150}; do
       END
     " 2>/dev/null || true
   )"
+  devnet_progress_maybe progress_last "devnet-up: Curio market config state=${config_state:-unknown}; elapsed=${SECONDS}s"
   if [[ "${config_state}" == "pending" ]]; then
+    devnet_progress "devnet-up: applying Curio market config overrides"
     devnet_compose exec -T yugabyte ysqlsh -h yugabyte -U yugabyte -d yugabyte -q -c "
       UPDATE curio.harmony_config
       SET config = replace(
@@ -53,10 +58,15 @@ for _ in {1..150}; do
       WHERE title = 'market'
         AND config NOT LIKE '%ParkPieceMinFreeStoragePercent%'
     " >/dev/null 2>&1 || { sleep 2; continue; }
+    devnet_progress "devnet-up: restarting Curio after market config overrides"
     devnet_compose restart curio >/dev/null
+    devnet_progress "devnet-up: Curio restart requested"
     exit 0
   fi
-  [[ "${config_state}" == "configured" ]] && exit 0
+  if [[ "${config_state}" == "configured" ]]; then
+    devnet_progress "devnet-up: Curio market config is configured"
+    exit 0
+  fi
   sleep 2
 done
 

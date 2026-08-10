@@ -112,6 +112,7 @@ const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
 const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
+const rustFilProofsSourceCommit = "7a4dbb741bdf68080326ae27f4e0ddf33033a280";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -244,11 +245,12 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(curioUnsealFuncsOverride, /filecoinffi\.Unseal/);
   assert.match(curioUnsealFuncsOverride, /fr32\.NewPadWriter/);
   assert.match(commonScript, /DEVNET_RUST_FIL_PROOFS_SOURCE/);
+  assert.match(commonScript, /\.cache\/sources\/rust_fil_proofs\/\$\{commit\}/);
   assert.match(buildScript, /zigzag_prove_from_cache/);
   assert.match(buildScript, /zigzag_pre_commit_phase1_with_replica_id/);
   assert.match(buildScript, /parameters\.json srs-inner-product\.json/);
   assert.match(buildScript, /--build-context "lotus-source=\$\{lotus_source_relative\}"/);
-  assert.match(buildScript, /--build-context "rust-fil-proofs=\$\{rust_fil_proofs_source\}"/);
+  assert.match(buildScript, /--build-context "rust-fil-proofs=\$\{rust_fil_proofs_source_relative\}"/);
   assert.match(buildScript, /--build-context "harness-overlay=\."/);
   assert.match(commonScript, /devnet_docker_surface_sha256/);
 
@@ -269,6 +271,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(dockerfile, /make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed/);
   assert.match(dockerfile, /COPY --from=lotus-builder \/opt\/lotus\/lotus /);
   assert.doesNotMatch(dockerfile, /ENV[\s\S]*FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(dockerfile, /io\.porep-market\.zigzag\.rust-fil-proofs\.commit/);
   assert.match(lotusDockerfile, /COPY --from=harness-overlay source-overrides\/lotus\/entrypoint\.sh \/app\/entrypoint\.sh/);
   assert.doesNotMatch(lotusDockerfile, /git apply/);
   assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
@@ -294,6 +297,7 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
     build: {
       curioCommit: curioSourceCommit,
       lotusCommit: "154c0c3a46e92006008818bb06aaf959e2e705a9",
+      rustFilProofsCommit: rustFilProofsSourceCommit,
       platform: "linux/arm64",
     },
     proof: {
@@ -366,10 +370,68 @@ test("public status command is bounded and reports a stopped project precisely",
   assert.match(statusScript, /deadline=\$\(\(command_deadline - 65\)\)/);
   assert.match(statusScript, /diagnostic_timeout_ms/);
   assert.match(statusScript, /status_pause \|\| break/);
+  assert.match(statusScript, /devnet_progress "devnet-status: waiting for \$\{proof_backend\} devnet readiness"/);
+  assert.match(statusScript, /devnet_progress_maybe status_progress_last/);
   assert.match(statusScript, /\.runtime\/devnet\/status\/latest\.json/);
   assert.match(statusScript, /Filecoin\.StateMinerInfo/);
   assert.match(statusScript, /ControlAddresses/);
   assert.match(statusScript, /127\.0\.0\.1:22310\/health/);
+});
+
+test("lifecycle progress output is throttled and fixture-safe", async () => {
+  const commonScript = await readFile(commonScriptPath, "utf8");
+  const upScript = await readFile(upScriptPath, "utf8");
+
+  assert.match(commonScript, /DEVNET_PROGRESS_INTERVAL_SECONDS/);
+  assert.match(commonScript, /DEVNET_PROGRESS:-1/);
+  assert.match(commonScript, /DEVNET_TEST_COMMAND_LOG/);
+  assert.match(commonScript, /devnet_progress_maybe\(\)/);
+  assert.match(upScript, /devnet_progress "devnet-up: starting \$\{backend\} containers"/);
+  assert.match(upScript, /devnet_progress_maybe progress_last/);
+  assert.match(upScript, /devnet-up: restarting Curio after market config overrides/);
+
+  const noisy = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; progress_last=-999999; devnet_progress "one"; devnet_progress_maybe progress_last "two"; devnet_progress_maybe progress_last "three"; printf "last=%s\\n" "$progress_last"',
+      "devnet-progress-fixture",
+      commonScriptPath,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DEVNET_PROGRESS_INTERVAL_SECONDS: "9999",
+      },
+    },
+  );
+  assert.equal(noisy.status, 0, noisy.stderr);
+  assert.match(noisy.stderr, /one/);
+  assert.match(noisy.stderr, /two/);
+  assert.doesNotMatch(noisy.stderr, /three/);
+  assert.match(noisy.stdout, /^last=[0-9]+\n$/);
+
+  const silent = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; progress_last=-999999; devnet_progress "one"; devnet_progress_maybe progress_last "two"; printf "last=%s\\n" "$progress_last"',
+      "devnet-progress-fixture",
+      commonScriptPath,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        DEVNET_PROGRESS_INTERVAL_SECONDS: "1",
+        DEVNET_TEST_COMMAND_LOG: "fixture.log",
+      },
+    },
+  );
+  assert.equal(silent.status, 0, silent.stderr);
+  assert.equal(silent.stderr, "");
+  assert.equal(silent.stdout, "last=-999999\n");
 });
 
 test("proof backend benchmark runner performs fresh isolated comparisons and aggregates evidence", async () => {
@@ -383,9 +445,11 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_zigzag_if_needed/);
   assert.match(script, /just reset zigzag/);
+  assert.match(script, /bench-proof-backends: ZigZag prewarm: reset fresh devnet/);
   assert.match(script, /just test-deliver-seal-unseal-retrieval active/);
   assert.match(script, /just reset "\$\{backend\}"/);
   assert.match(script, /just deploy/);
+  assert.match(script, /run measured deliver\/seal\/unseal\/retrieval benchmark/);
   assert.match(script, /just bench-deliver-seal-unseal-retrieval active/);
   assert.match(script, /proofParameterCacheStatus/);
   assert.match(script, /curioImageId/);
@@ -428,6 +492,7 @@ async function renderTaskThreeCompose(): Promise<{
       `DEVNET_DATA_DIR=${dataDirectory}`,
       "DEVNET_PROOF_BACKEND=stacked",
       `DEVNET_PROOF_PARAMETERS_DIR=${proofParametersDirectory}`,
+      "DEVNET_FIREHORSE_HEIGHT=20",
       `DEVNET_FILECOIN_SERVICES_SOURCE=${filecoinServicesSource}`,
       `DEVNET_MULTICALL3_SOURCE=${multicall3Source}`,
       `DEVNET_YUGABYTE_IMAGE=${yugabyteImage}`,
@@ -472,6 +537,7 @@ async function renderTaskThreeCompose(): Promise<{
     contract: {
       curioShortCommit,
       dataDirectory,
+      firehorseHeight: "20",
       filecoinServicesSource,
       filProofsUseZigZag: "0",
       filProofsZigZagGenerateMissingParams: "0",
@@ -594,6 +660,7 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
         `DEVNET_DATA_DIR=${contract.dataDirectory}`,
         `DEVNET_PROOF_BACKEND=${contract.proofBackend}`,
         `DEVNET_PROOF_PARAMETERS_DIR=${contract.proofParametersDirectory}`,
+        `DEVNET_FIREHORSE_HEIGHT=${contract.firehorseHeight}`,
         `DEVNET_FILECOIN_SERVICES_SOURCE=${contract.filecoinServicesSource}`,
         `DEVNET_MULTICALL3_SOURCE=${contract.multicall3Source}`,
         `DEVNET_YUGABYTE_IMAGE=${contract.yugabyteImage}`,
@@ -650,8 +717,15 @@ async function createLifecycleFixture(): Promise<{
   for (const service of derivedImageServices) {
     await mkdir(join(root, "docker", service), { recursive: true });
   }
+  const rustFilProofsSource = join(
+    root,
+    ".cache",
+    "sources",
+    "rust_fil_proofs",
+    rustFilProofsSourceCommit,
+  );
   await mkdir(
-    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "api"),
+    join(rustFilProofsSource, "filecoin-proofs", "src", "api"),
     { recursive: true },
   );
   await mkdir(stubBin, { recursive: true });
@@ -662,13 +736,14 @@ async function createLifecycleFixture(): Promise<{
   for (const path of dockerSurfaceInputs) {
     await writeFile(join(root, path), "FROM scratch\n", "utf8");
   }
+  await cp(runtimeLockPath, join(root, "versions.lock.yaml"));
   await writeFile(
-    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "api", "zigzag.rs"),
+    join(rustFilProofsSource, "filecoin-proofs", "src", "api", "zigzag.rs"),
     "pub fn zigzag_prove_from_cache() {}\npub fn zigzag_pre_commit_phase1_with_replica_id() {}\n",
     "utf8",
   );
   await writeFile(
-    join(fixtureBase, "rust-fil-proofs", "filecoin-proofs", "src", "caches.rs"),
+    join(rustFilProofsSource, "filecoin-proofs", "src", "caches.rs"),
     "pub fn get_zigzag_params() {}\npub fn get_zigzag_verifying_key() {}\n",
     "utf8",
   );
@@ -697,6 +772,7 @@ if [[ "$1" == image && "$2" == inspect ]]; then
     *"io.porep-market.lotus.commit"*) printf '%s\\n' "\${DEVNET_TEST_LOTUS_COMMIT:-}" ;;
     *"io.porep-market.blst.commit"*) printf '%s\\n' "\${DEVNET_TEST_BLST_COMMIT:-}" ;;
     *"io.porep-market.dockerfile.sha256"*) printf '%s\\n' "\${DEVNET_TEST_DOCKERFILE_HASH:-}" ;;
+    *"io.porep-market.zigzag.rust-fil-proofs.commit"*) printf '%s\\n' "\${DEVNET_TEST_RUST_FIL_PROOFS_COMMIT:-}" ;;
     *"io.porep-market.zigzag.source-overrides.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_SOURCE_OVERRIDES_HASH:-}" ;;
     *"io.porep-market.zigzag.rust-fil-proofs.api.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_API_HASH:-}" ;;
     *"{{.Os}}/{{.Architecture}}"*) printf '%s\\n' "linux/arm64" ;;
@@ -798,6 +874,7 @@ test("runtime preparation rejects symlinks at every writable path before outside
     } else {
       const targetPath = join(fixture.root, target.path);
       await mkdir(dirname(targetPath), { recursive: true });
+      await rm(targetPath, { recursive: true, force: true });
       await symlink(outsideTarget, targetPath, target.kind === "directory" ? "dir" : "file");
     }
 
@@ -937,13 +1014,14 @@ test("up fixture writes only the validated tree and starts only after typed rend
   const curioCommit = curioSourceCommit;
   const lotusCommit = "1".repeat(40);
   const blstCommit = "b".repeat(40);
+  const rustFilProofsCommit = rustFilProofsSourceCommit;
   const imageId = `sha256:${"d".repeat(64)}`;
   try {
     await writeFile(join(fixture.root, "docker", "curio-all-in-one.Dockerfile"), "FROM scratch\n", "utf8");
     const dockerfileHash = await sha256DockerSurface(fixture.root);
     const zigzagSourceOverridesHash = await sha256ZigzagSourceOverrides(fixture.root);
     const zigzagApiHash = await sha256ZigzagApiSurface(
-      join(dirname(fixture.root), "rust-fil-proofs"),
+      join(fixture.root, ".cache", "sources", "rust_fil_proofs", rustFilProofsCommit),
     );
     const buildDirectory = join(fixture.root, ".runtime", "devnet", "build");
     await mkdir(buildDirectory, { recursive: true });
@@ -960,6 +1038,7 @@ test("up fixture writes only the validated tree and starts only after typed rend
         lotusCommit,
         namespace: "porep-market-curio-devnet",
         platform: "linux/arm64",
+        rustFilProofsCommit,
         schemaVersion: 1,
         tag: curioCommit.slice(0, 12),
         zigzagSourceOverridesSha256: zigzagSourceOverridesHash,
@@ -976,6 +1055,7 @@ if [[ " $* " == *" sources verify "* ]]; then
   printf 'curio\\t/fixture\\t${curioCommit}\\t${curioCommit}\\tdetached\\tclean\\t\\n'
   printf 'lotus\\t/fixture\\t${lotusCommit}\\t${lotusCommit}\\tdetached\\tclean\\t\\n'
   printf 'blst\\t/fixture\\t${blstCommit}\\t${blstCommit}\\tdetached\\tclean\\t\\n'
+  printf 'rust_fil_proofs\\t${fixture.root}/.cache/sources/rust_fil_proofs/${rustFilProofsCommit}\\t${rustFilProofsCommit}\\t${rustFilProofsCommit}\\tdetached\\tclean\\t\\n'
   printf 'filecoin_services\\t/fixture\\te485abae3f89775b3c9a0014c74a60ae9e98fe8c\\te485abae3f89775b3c9a0014c74a60ae9e98fe8c\\tdetached\\tclean\\t\\n'
   printf 'multicall3\\t/fixture\\tb667d67ecfa5361a81e8f110234ce242613b0012\\tb667d67ecfa5361a81e8f110234ce242613b0012\\tdetached\\tclean\\t\\n'
   exit 0
@@ -1008,6 +1088,7 @@ exit 65
           DEVNET_TEST_DOCKERFILE_HASH: dockerfileHash,
           DEVNET_TEST_IMAGE_ID: imageId,
           DEVNET_TEST_LOTUS_COMMIT: lotusCommit,
+          DEVNET_TEST_RUST_FIL_PROOFS_COMMIT: rustFilProofsCommit,
           DEVNET_TEST_ZIGZAG_API_HASH: zigzagApiHash,
           DEVNET_TEST_ZIGZAG_SOURCE_OVERRIDES_HASH: zigzagSourceOverridesHash,
           PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
@@ -1022,6 +1103,7 @@ exit 65
     assert.match(composeEnvironment, new RegExp(`DEVNET_DATA_DIR=${fixture.root}/\\.runtime/devnet/data`));
     assert.match(composeEnvironment, /DEVNET_IMAGE_NAMESPACE=porep-market-curio-devnet/);
     assert.match(composeEnvironment, /DEVNET_PROOF_BACKEND=stacked/);
+    assert.match(composeEnvironment, /DEVNET_FIREHORSE_HEIGHT=20/);
     assert.match(composeEnvironment, /FIL_PROOFS_USE_ZIGZAG=0/);
     assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0/);
     assert.doesNotMatch(composeEnvironment, /hostile/);
@@ -1514,6 +1596,7 @@ test("devnet build is bounded and records inspected local image evidence", async
     "io.porep-market.curio.commit",
     "io.porep-market.lotus.commit",
     "io.porep-market.dockerfile.sha256",
+    "io.porep-market.zigzag.rust-fil-proofs.commit",
     "io.porep-market.zigzag.source-overrides.sha256",
     "io.porep-market.zigzag.rust-fil-proofs.api.sha256",
   ]) {
@@ -1654,6 +1737,7 @@ test("project build manifest validation rejects volumes on every inspected image
     const curioCommit = "c".repeat(40);
     const lotusCommit = "1".repeat(40);
     const blstCommit = "b".repeat(40);
+    const rustFilProofsCommit = "a".repeat(40);
     const dockerfileSha256 = "d".repeat(64);
     const zigzagSourceOverridesSha256 = "e".repeat(64);
     const zigzagApiSha256 = "f".repeat(64);
@@ -1665,6 +1749,7 @@ test("project build manifest validation rejects volumes on every inspected image
       "io.porep-market.lotus.commit": lotusCommit,
       "io.porep-market.blst.commit": blstCommit,
       "io.porep-market.dockerfile.sha256": dockerfileSha256,
+      "io.porep-market.zigzag.rust-fil-proofs.commit": rustFilProofsCommit,
       "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
       "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagApiSha256,
     };
@@ -1700,6 +1785,7 @@ test("project build manifest validation rejects volumes on every inspected image
           lotusCommit,
           blstCommit,
           dockerfileSha256,
+          rustFilProofsCommit,
           zigzagSourceOverridesSha256,
           zigzagApiSha256,
           tag,

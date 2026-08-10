@@ -16,6 +16,7 @@ export interface ComposeInspection {
 export interface ComposeRuntimeContract {
   curioShortCommit: string;
   dataDirectory: string;
+  firehorseHeight: string;
   filecoinServicesSource: string;
   filProofsUseZigZag: string;
   filProofsZigZagGenerateMissingParams: string;
@@ -44,6 +45,7 @@ export interface DevnetStatusInspection {
 const composeEnvironmentKeys = [
   "DEVNET_CURIO_SHORT_COMMIT",
   "DEVNET_DATA_DIR",
+  "DEVNET_FIREHORSE_HEIGHT",
   "DEVNET_FILECOIN_SERVICES_SOURCE",
   "DEVNET_IMAGE_NAMESPACE",
   "DEVNET_MULTICALL3_SOURCE",
@@ -140,6 +142,14 @@ export function inspectRenderedCompose(
     ) {
       throw new Error("curio FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS mismatch");
     }
+    if (name === "lotus") {
+      if (environment.LOTUS_GENESIS_NETWORK_VERSION !== String(lock.network.genesis.networkVersion)) {
+        throw new Error("lotus LOTUS_GENESIS_NETWORK_VERSION mismatch");
+      }
+      if (environment.LOTUS_FIREHORSE_HEIGHT !== contract.firehorseHeight) {
+        throw new Error("lotus LOTUS_FIREHORSE_HEIGHT mismatch");
+      }
+    }
     images.push(service.image);
 
     const servicePorts = array(service.ports ?? [], `${name} ports`).map((value, index) => {
@@ -223,6 +233,7 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
   return {
     curioShortCommit: requiredValue(values, "DEVNET_CURIO_SHORT_COMMIT"),
     dataDirectory: requiredValue(values, "DEVNET_DATA_DIR"),
+    firehorseHeight: requiredValue(values, "DEVNET_FIREHORSE_HEIGHT"),
     filecoinServicesSource: requiredValue(values, "DEVNET_FILECOIN_SERVICES_SOURCE"),
     filProofsUseZigZag: requiredValue(values, "FIL_PROOFS_USE_ZIGZAG"),
     filProofsZigZagGenerateMissingParams: requiredValue(values, "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS"),
@@ -268,6 +279,8 @@ export function inspectDevnetStatus(
     || !/^[0-9a-f]{40}$/.test(build.curioCommit)
     || typeof build.lotusCommit !== "string"
     || !/^[0-9a-f]{40}$/.test(build.lotusCommit)
+    || typeof build.rustFilProofsCommit !== "string"
+    || !/^[0-9a-f]{40}$/.test(build.rustFilProofsCommit)
     || (build.platform !== "linux/arm64" && build.platform !== "linux/amd64")
   ) {
     throw new Error("devnet status build evidence is invalid");

@@ -77,13 +77,17 @@ prewarm_zigzag_if_needed() {
     return 0
   fi
 
-  printf 'prewarming ZigZag proof parameters outside measured benchmark windows\n'
+  devnet_progress "bench-proof-backends: prewarming ZigZag proof parameters outside measured benchmark windows"
+  devnet_progress "bench-proof-backends: ZigZag prewarm: reset fresh devnet"
   just reset zigzag
+  devnet_progress "bench-proof-backends: ZigZag prewarm: deploy contracts"
   just deploy
+  devnet_progress "bench-proof-backends: ZigZag prewarm: run correctness scenario"
   just test-deliver-seal-unseal-retrieval active
   local run_dir
   run_dir="$(latest_run_dir deliver-seal-unseal-retrieval)"
   record_run zigzag 0 "${run_dir}" prewarm
+  devnet_progress "bench-proof-backends: ZigZag prewarm complete; report=${run_dir}/summary.md"
 }
 
 IFS=',' read -r -a requested_backends <<< "${backend_order}"
@@ -94,12 +98,15 @@ for raw_backend in "${requested_backends[@]}"; do
   fi
 
   for repetition in $(seq 1 "${repetitions}"); do
-    printf 'running %s benchmark repetition %s/%s\n' "${backend}" "${repetition}" "${repetitions}"
+    devnet_progress "bench-proof-backends: ${backend} repetition ${repetition}/${repetitions}: reset fresh devnet"
     just reset "${backend}"
+    devnet_progress "bench-proof-backends: ${backend} repetition ${repetition}/${repetitions}: deploy contracts"
     just deploy
+    devnet_progress "bench-proof-backends: ${backend} repetition ${repetition}/${repetitions}: run measured deliver/seal/unseal/retrieval benchmark"
     just bench-deliver-seal-unseal-retrieval active
     run_dir="$(latest_run_dir bench-deliver-seal-unseal-retrieval)"
     record_run "${backend}" "${repetition}" "${run_dir}" benchmark
+    devnet_progress "bench-proof-backends: ${backend} repetition ${repetition}/${repetitions} complete; report=${run_dir}/summary.md"
   done
 done
 

@@ -18,14 +18,50 @@ DEVNET_DATA_DIR="${DEVNET_RUNTIME_DIR}/data"
 DEVNET_PROOF_BACKEND_FILE="${DEVNET_RUNTIME_DIR}/proof-backend"
 DEVNET_PROOF_PARAMETERS_DIR="${DEVNET_ROOT}/.cache/proof-parameters"
 DEVNET_LIFECYCLE_TIMEOUT_MS=120000
+DEVNET_PROGRESS_INTERVAL_SECONDS="${DEVNET_PROGRESS_INTERVAL_SECONDS:-15}"
 DEVNET_SERVICES=(lotus contracts-bootstrap lotus-miner curio yugabyte piece-server indexer)
 DEVNET_DATA_DIRECTORIES=(lotus lotus-miner curio piece-server indexer contracts genesis yugabyte yugabyte-disk0 yugabyte-disk1)
 
+devnet_progress_enabled() {
+  [[ -z "${DEVNET_TEST_COMMAND_LOG:-}" ]] || return 1
+  [[ "${DEVNET_PROGRESS:-1}" != 0 ]] || return 1
+  return 0
+}
+
+devnet_progress_interval_seconds() {
+  local interval="${DEVNET_PROGRESS_INTERVAL_SECONDS:-15}"
+  if [[ ! "${interval}" =~ ^[0-9]+$ ]]; then
+    interval=15
+  elif ((interval < 1)); then
+    interval=15
+  fi
+  printf '%s\n' "${interval}"
+}
+
+devnet_progress() {
+  devnet_progress_enabled || return 0
+  printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2
+}
+
+devnet_progress_maybe() {
+  local last_variable="$1"
+  shift
+  devnet_progress_enabled || return 0
+  local interval now last
+  interval="$(devnet_progress_interval_seconds)"
+  now="${SECONDS}"
+  last="${!last_variable-0}"
+  if ((now - last >= interval)); then
+    printf -v "${last_variable}" '%s' "${now}"
+    devnet_progress "$*"
+  fi
+}
+
 devnet_compose() {
   env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_DATA_DIR \
-    -u DEVNET_PROOF_BACKEND -u DEVNET_PROOF_PARAMETERS_DIR \
+    -u DEVNET_PROOF_BACKEND -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_FIREHORSE_HEIGHT \
     -u DEVNET_FILECOIN_SERVICES_SOURCE -u DEVNET_MULTICALL3_SOURCE \
-    -u DEVNET_YUGABYTE_IMAGE -u FIL_PROOFS_USE_ZIGZAG \
+    -u DEVNET_YUGABYTE_IMAGE -u LOTUS_FIREHORSE_HEIGHT -u FIL_PROOFS_USE_ZIGZAG \
     -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS \
     docker compose --env-file "${DEVNET_COMPOSE_ENV}" --project-name "${DEVNET_PROJECT}" --file "${DEVNET_COMPOSE}" "$@"
 }
@@ -53,6 +89,18 @@ devnet_fil_proofs_zigzag_generate_missing_params() {
   local backend
   backend="$(devnet_normalize_proof_backend "$1")"
   [[ "${backend}" == zigzag ]] && printf '1\n' || printf '0\n'
+}
+
+devnet_firehorse_upgrade_epoch() {
+  local value
+  value="$(awk -F ':' '$1 ~ /^[[:space:]]*firehorse_upgrade_epoch[[:space:]]*$/ {
+    gsub(/[[:space:]]/, "", $2)
+    print $2
+    exit
+  }' "${DEVNET_ROOT}/versions.lock.yaml")"
+  [[ "${value}" =~ ^[0-9]+$ && "${value}" -ge 1 ]] ||
+    devnet_die "FireHorse upgrade epoch is missing or invalid in versions.lock.yaml"
+  printf '%s\n' "${value}"
 }
 
 devnet_write_proof_backend() {
@@ -90,29 +138,31 @@ devnet_require_proof_backend() {
 }
 
 devnet_write_compose_env() {
-  local source_output curio_commit lotus_commit blst_commit services_commit multicall_commit
+  local source_output curio_commit lotus_commit blst_commit rust_fil_proofs_commit services_commit multicall_commit
   local manifest_zigzag_overrides manifest_zigzag_api
   source_output="$(npm --prefix "${DEVNET_ROOT}/tools" run cli -- sources verify)"
   curio_commit="$(awk -F '\t' '$1 == "curio" {print $3}' <<<"${source_output}")"
   lotus_commit="$(awk -F '\t' '$1 == "lotus" {print $3}' <<<"${source_output}")"
   blst_commit="$(awk -F '\t' '$1 == "blst" {print $3}' <<<"${source_output}")"
+  rust_fil_proofs_commit="$(awk -F '\t' '$1 == "rust_fil_proofs" {print $3}' <<<"${source_output}")"
   services_commit="$(awk -F '\t' '$1 == "filecoin_services" {print $3}' <<<"${source_output}")"
   multicall_commit="$(awk -F '\t' '$1 == "multicall3" {print $3}' <<<"${source_output}")"
-  [[ "${curio_commit}" =~ ^[0-9a-f]{40}$ && "${lotus_commit}" =~ ^[0-9a-f]{40}$ && "${blst_commit}" =~ ^[0-9a-f]{40}$ && "${services_commit}" =~ ^[0-9a-f]{40}$ && "${multicall_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "verified managed source contract is incomplete"
+  [[ "${curio_commit}" =~ ^[0-9a-f]{40}$ && "${lotus_commit}" =~ ^[0-9a-f]{40}$ && "${blst_commit}" =~ ^[0-9a-f]{40}$ && "${rust_fil_proofs_commit}" =~ ^[0-9a-f]{40}$ && "${services_commit}" =~ ^[0-9a-f]{40}$ && "${multicall_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "verified managed source contract is incomplete"
   local image_manifest="${DEVNET_BUILD_DIR}/images.json"
   [[ -f "${image_manifest}" && ! -L "${image_manifest}" ]] || devnet_die "verified image manifest is missing"
   [[ "$(jq -r '.schemaVersion' "${image_manifest}")" == 1 && "$(jq -r '.namespace' "${image_manifest}")" == "${DEVNET_IMAGE_NAMESPACE}" && "$(jq -r '.tag' "${image_manifest}")" == "${curio_commit:0:12}" ]] || devnet_die "image manifest identity is invalid"
   manifest_lotus="$(jq -r '.lotusCommit' "${image_manifest}")"
   manifest_blst="$(jq -r '.blstCommit' "${image_manifest}")"
+  manifest_rust_fil_proofs="$(jq -r '.rustFilProofsCommit // empty' "${image_manifest}")"
   manifest_hash="$(jq -r '.dockerfileSha256' "${image_manifest}")"
   manifest_zigzag_overrides="$(jq -r '.zigzagSourceOverridesSha256 // empty' "${image_manifest}")"
   manifest_zigzag_api="$(jq -r '.zigzagRustFilProofsApiSha256 // empty' "${image_manifest}")"
   manifest_platform="$(jq -r '.platform' "${image_manifest}")"
-  [[ "${manifest_lotus}" =~ ^[0-9a-f]{40}$ && "${manifest_blst}" =~ ^[0-9a-f]{40}$ && "${manifest_hash}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_overrides}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_api}" =~ ^[0-9a-f]{64}$ && "${manifest_platform}" =~ ^linux/(amd64|arm64)$ ]] || devnet_die "image manifest fields are invalid"
-  [[ "${manifest_lotus}" == "${lotus_commit}" && "${manifest_blst}" == "${blst_commit}" ]] || devnet_die "image manifest source commits do not match verified sources"
+  [[ "${manifest_lotus}" =~ ^[0-9a-f]{40}$ && "${manifest_blst}" =~ ^[0-9a-f]{40}$ && "${manifest_rust_fil_proofs}" =~ ^[0-9a-f]{40}$ && "${manifest_hash}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_overrides}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_api}" =~ ^[0-9a-f]{64}$ && "${manifest_platform}" =~ ^linux/(amd64|arm64)$ ]] || devnet_die "image manifest fields are invalid"
+  [[ "${manifest_lotus}" == "${lotus_commit}" && "${manifest_blst}" == "${blst_commit}" && "${manifest_rust_fil_proofs}" == "${rust_fil_proofs_commit}" ]] || devnet_die "image manifest source commits do not match verified sources"
   [[ "$(devnet_docker_surface_sha256)" == "${manifest_hash}" ]] || devnet_die "image manifest Dockerfile hash mismatch"
   [[ "$(devnet_zigzag_source_overrides_sha256)" == "${manifest_zigzag_overrides}" ]] || devnet_die "image manifest ZigZag source override hash mismatch"
-  [[ "$(devnet_rust_fil_proofs_zigzag_api_sha256)" == "${manifest_zigzag_api}" ]] || devnet_die "image manifest ZigZag rust-fil-proofs API hash mismatch"
+  [[ "$(devnet_rust_fil_proofs_zigzag_api_sha256 "${rust_fil_proofs_commit}")" == "${manifest_zigzag_api}" ]] || devnet_die "image manifest ZigZag rust-fil-proofs API hash mismatch"
   grep -Fq "\"curioCommit\": \"${curio_commit}\"" "${image_manifest}" || devnet_die "image manifest Curio commit mismatch"
   for image in curio-all-in-one lotus contracts-bootstrap lotus-miner curio piece-server indexer; do
     grep -Fq "\"reference\": \"${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}\"" "${image_manifest}" || devnet_die "image manifest is missing ${image}"
@@ -125,9 +175,10 @@ devnet_write_compose_env() {
     actual_lotus="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.lotus.commit"}}')"
     actual_blst="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.blst.commit"}}')"
     actual_dockerfile="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.dockerfile.sha256"}}')"
+    actual_rust_fil_proofs="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.commit"}}')"
     actual_zigzag_overrides="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.source-overrides.sha256"}}')"
     actual_zigzag_api="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.api.sha256"}}')"
-    [[ "${actual_lotus}" == "${manifest_lotus}" && "${actual_blst}" == "${manifest_blst}" && "${actual_dockerfile}" == "${manifest_hash}" && "${actual_zigzag_overrides}" == "${manifest_zigzag_overrides}" && "${actual_zigzag_api}" == "${manifest_zigzag_api}" ]] || devnet_die "image identity labels mismatch: ${image}"
+    [[ "${actual_lotus}" == "${manifest_lotus}" && "${actual_blst}" == "${manifest_blst}" && "${actual_dockerfile}" == "${manifest_hash}" && "${actual_rust_fil_proofs}" == "${manifest_rust_fil_proofs}" && "${actual_zigzag_overrides}" == "${manifest_zigzag_overrides}" && "${actual_zigzag_api}" == "${manifest_zigzag_api}" ]] || devnet_die "image identity labels mismatch: ${image}"
     [[ "$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{.Os}}/{{.Architecture}}')" == "${manifest_platform}" ]] || devnet_die "image platform mismatch: ${image}"
     [[ "$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{json .Config.Volumes}}')" == null ]] || devnet_die "image declares unexpected volumes: ${image}"
   done
@@ -139,12 +190,13 @@ devnet_write_compose_env() {
   devnet_require_safe_write_path "${DEVNET_COMPOSE_ENV}" file
   local compose_environment_temporary="${DEVNET_COMPOSE_ENV}.temporary.$$"
   devnet_require_safe_write_path "${compose_environment_temporary}" file
-  local proof_backend fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
+  local proof_backend firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
     proof_backend="$(devnet_current_proof_backend)"
   else
     proof_backend="$(devnet_requested_proof_backend)"
   fi
+  firehorse_height="$(devnet_firehorse_upgrade_epoch)"
   fil_proofs_use_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   fil_proofs_zigzag_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
 
@@ -154,6 +206,7 @@ DEVNET_CURIO_SHORT_COMMIT=${curio_commit:0:12}
 DEVNET_DATA_DIR=${DEVNET_DATA_DIR}
 DEVNET_PROOF_BACKEND=${proof_backend}
 DEVNET_PROOF_PARAMETERS_DIR=${DEVNET_PROOF_PARAMETERS_DIR}
+DEVNET_FIREHORSE_HEIGHT=${firehorse_height}
 DEVNET_FILECOIN_SERVICES_SOURCE=${DEVNET_ROOT}/.cache/sources/filecoin_services/${services_commit}
 DEVNET_MULTICALL3_SOURCE=${DEVNET_ROOT}/.cache/sources/multicall3/${multicall_commit}
 DEVNET_YUGABYTE_IMAGE=yugabytedb/yugabyte:2024.1.0.0-b129@sha256:5074792658b19c1379d79fdfe418d33a6587c2637422f56d0d224d8bbbe277a8
@@ -475,8 +528,18 @@ devnet_blst_source_path() {
 }
 
 devnet_rust_fil_proofs_source_path() {
-  local configured="${DEVNET_RUST_FIL_PROOFS_SOURCE:-${DEVNET_ROOT}/../rust-fil-proofs}"
+  local commit="${1:-}"
+  local configured="${DEVNET_RUST_FIL_PROOFS_SOURCE:-}"
   local resolved
+  if [[ -z "${configured}" ]]; then
+    if [[ -z "${commit}" ]]; then
+      commit="$(npm --prefix "${DEVNET_ROOT}/tools" run cli -- lock verify |
+        awk -F '\t' '$1 == "rust_fil_proofs" {print $3}')"
+    fi
+    [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] ||
+      devnet_die "ZigZag rust-fil-proofs lock entry is missing"
+    configured="${DEVNET_ROOT}/.cache/sources/rust_fil_proofs/${commit}"
+  fi
   if ! resolved="$(cd "${configured}" 2>/dev/null && pwd -P)"; then
     devnet_die "ZigZag rust-fil-proofs source is missing: ${configured}"
   fi
@@ -550,7 +613,7 @@ devnet_docker_surface_sha256() {
 
 devnet_rust_fil_proofs_zigzag_api_sha256() {
   local source zigzag_api zigzag_caches
-  source="$(devnet_rust_fil_proofs_source_path)"
+  source="$(devnet_rust_fil_proofs_source_path "${1:-}")"
   zigzag_api="${source}/filecoin-proofs/src/api/zigzag.rs"
   zigzag_caches="${source}/filecoin-proofs/src/caches.rs"
   [[ -f "${zigzag_api}" && ! -L "${zigzag_api}" ]] ||
