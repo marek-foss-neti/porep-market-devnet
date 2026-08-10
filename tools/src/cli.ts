@@ -157,6 +157,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       || contract.curioShortCommit !== curio.commit.slice(0, 12)
       || !contract.filecoinServicesSource.endsWith(`/${filecoinServices.name}/${filecoinServices.commit}`)
       || !contract.multicall3Source.endsWith(`/${multicall3.name}/${multicall3.commit}`)
+      || contract.firehorseHeight !== String(runtimeLock.network.firehorse.epoch)
       || contract.yugabyteImage !== runtimeLock.images.yugabyte.resolvedReference.replace(/^docker\.io\//, "")
     ) {
       throw new Error("compose environment does not match the immutable lock");

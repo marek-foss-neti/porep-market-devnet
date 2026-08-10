@@ -192,7 +192,8 @@ project.
 ## Measured arm64 run
 
 Measurements were taken on an Apple arm64 host with 10 CPUs, 24 GiB host RAM,
-7.65 GiB Docker memory, and Docker 29.2.1:
+7.65 GiB Docker memory, Docker 29.2.1, and the original epoch-200 FireHorse
+schedule:
 
 - corrected cold image build: 467 seconds;
 - first chain startup through NV28 and validated status: about 12 minutes;
@@ -210,8 +211,10 @@ reset changed the genesis from
 `bafy2bzacec7prtzexq5yud2azjz3qbpvhftly6vofg3wgd7r25qtm5u7hyepe` to
 `bafy2bzaceco3z6z6nfdpnam52jhagkckzsg5d4ds4dr46537qsfeubzngxpiw`,
 changed the runtime generation, created provider `t01004`, and passed
-NV28/actors-v18 status at epoch 201. The unrelated Boost Compose container IDs
-were unchanged.
+NV28/actors-v18 status at epoch 201. The current benchmark harness uses
+FireHorse epoch 20, so fresh reset readiness is expected earlier; rerun the
+measurement before citing exact current timings. The unrelated Boost Compose
+container IDs were unchanged.
 
 ## Whole-system proof
 

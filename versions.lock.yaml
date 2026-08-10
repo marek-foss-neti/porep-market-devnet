@@ -5,7 +5,7 @@ network:
   chain_id: 31415926
   genesis_network_version: 27
   genesis_actors_version: 17
-  firehorse_upgrade_epoch: 200
+  firehorse_upgrade_epoch: 20
   required_network_version: 28
   required_actors_version: 18
   actors_v17:
@@ -45,7 +45,7 @@ sources:
     repository: https://github.com/filecoin-project/lotus.git
     tag: v1.36.0
     commit: 154c0c3a46e92006008818bb06aaf959e2e705a9
-    compatibility: debug DevNet starts at NV27 and upgrades to NV28 at epoch 200
+    compatibility: debug DevNet starts at NV27 and upgrades to NV28 at epoch 20
     submodules:
       extern/filecoin-ffi: fbe802089480458d730cbce8a3ca83dcd84a4cd1
       extern/serialization-vectors: 5bfb928910b01ac8b940a693af2884f7f8276211

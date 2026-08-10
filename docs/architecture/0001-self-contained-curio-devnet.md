@@ -19,7 +19,7 @@ commit is identical to upstream Curio `main`. It is compiled against Lotus
 also locked and verified.
 
 The chain starts at network version 27 with actors v17 and upgrades at epoch
-200 to network version 28 with actors v18. FIP-0109 notifications are available
+20 to network version 28 with actors v18. FIP-0109 notifications are available
 at NV27. FIP-0112 sector methods are not available until NV28, so live
 preflight must reject FIP-0112 scenarios before the upgrade and must verify the
 actors-v18 manifest after it.
@@ -46,8 +46,10 @@ the corrected Docker default and later MK20 duration and FFI fixes.
 
 Selected. The fork and upstream currently resolve to the same exact commit.
 The commit uses Lotus `v1.36.0`, contains the required MK20 notification fields
-and ingestion path, and supports a clean NV27-to-NV28 DevNet upgrade at epoch
-200. Pinning the commit prevents later branch drift.
+and ingestion path, and supports a clean NV27-to-NV28 DevNet upgrade. The
+harness runs that upgrade at epoch 20 to keep local benchmark resets fast while
+still exercising the upgrade path. Pinning the commit prevents later branch
+drift.
 
 ## Repository boundaries
 
@@ -149,7 +151,7 @@ VM may require serial image builds and one-sector sealing. This cost is accepted
 because a clean checkout must reproduce the environment. Resource sufficiency
 remains unproven until measured by the live Phase 2 gates.
 
-FIP-0109 and FIP-0112 are separate gates. A notification pass before epoch 200
+FIP-0109 and FIP-0112 are separate gates. A notification pass before epoch 20
 does not prove sector status. Completion requires the real callback, the
 post-NV28 built-in actor calls, every migrated scenario, and two independent
 clean full-matrix runs.

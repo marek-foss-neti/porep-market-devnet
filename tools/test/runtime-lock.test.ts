@@ -52,7 +52,7 @@ test("runtime lock loads the exact devnet network schedule and actor CIDs", asyn
       actorsVersion: 17,
     },
     firehorse: {
-      epoch: 200,
+      epoch: 20,
       networkVersion: 28,
       actorsVersion: 18,
     },
@@ -412,7 +412,7 @@ test("runtime lock verify CLI is credential-free and reports typed public inputs
     { cwd: toolsRoot, timeoutMs: 10_000 },
   );
 
-  assert.match(result.stdout, /^network\t31415926\tNV27\/actors-v17\tepoch-200=NV28\/actors-v18$/m);
+  assert.match(result.stdout, /^network\t31415926\tNV27\/actors-v17\tepoch-20=NV28\/actors-v18$/m);
   assert.match(result.stdout, /^image\tlotus_devnet\t.*@sha256:[0-9a-f]{64}\tlinux\/amd64=sha256:/m);
   assert.match(result.stdout, /^tool\tnode\t24\.14\.0$/m);
   assert.match(result.stdout, /^tool\tfoundry\tv1\.7\.1\t4072e48705af9d93e3c0f6e29e93b5e9a40caed8$/m);
