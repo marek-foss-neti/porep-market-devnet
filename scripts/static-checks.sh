@@ -21,14 +21,23 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/devnet-test-upgrade.sh
     scripts/bench-proof-backends.sh
     docker/compose.curio-devnet.yaml
-    patches/curio/0003-zigzag-devnet-unseal.patch
-    patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch
-    patches/fvm/0001-zigzag-devnet-verifier.patch
+    source-overrides/curio/cmd/sptool/toolbox_deal_client.go
+    source-overrides/curio/lib/ffi/unseal_funcs.go
+    source-overrides/curio/market/mk20/ddo_v1.go
+    source-overrides/curio/tasks/piece/task_park_piece.go
+    source-overrides/curio/tasks/unseal/task_unseal_decode.go
+    source-overrides/curio/tasks/unseal/task_unseal_sdr.go
+    source-overrides/filecoin-ffi/rust/Cargo.lock
+    source-overrides/filecoin-ffi/rust/Cargo.toml
+    source-overrides/filecoin-ffi/rust/src/proofs/api.rs
+    source-overrides/fvm-4.8.2-zigzag/Cargo.toml
+    source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs
+    source-overrides/lotus/entrypoint.sh
     tools/test/devnet.test.ts
   )
   for build_file in "${build_files[@]}"; do
-    [[ -f "$build_file" ]] || {
-      echo "missing build file: $build_file" >&2
+    [[ -f "$build_file" && ! -L "$build_file" ]] || {
+      echo "missing or symbolic build file: $build_file" >&2
       exit 1
     }
   done
@@ -71,6 +80,7 @@ git check-ignore --no-index -q .netrc
 scan_paths=()
 netrc_paths=()
 while IFS= read -r path; do
+  [[ -f "$path" ]] || continue
   [[ "$path" == scripts/static-checks.sh ]] && continue
   scan_paths+=("$path")
   if [[ "$path" == .netrc || "$path" == */.netrc ]]; then
@@ -95,7 +105,7 @@ if ((${#scan_paths[@]})); then
   curio_dir_name="CURIO_""DIR"
   if rg -l --fixed-strings "$user_path_root" "${scan_paths[@]}" ||
     rg -l --fixed-strings "$curio_dir_name" "${scan_paths[@]}" ||
-    rg -l -i '\b(private[_-]?key)\s*=' "${scan_paths[@]}" ||
+    rg -l -i '(^|[[:space:]])([[:alnum:]_]*private[_-]?key)[[:space:]]*=' "${scan_paths[@]}" ||
     rg -l -i '(^|[[:space:]/:])_?auth(token)?[[:space:]]*=' "${scan_paths[@]}" ||
     rg -l 'while[[:space:]]+true([[:space:]]|;|$)' "${scan_paths[@]}"; then
     echo 'unsafe implementation text found' >&2

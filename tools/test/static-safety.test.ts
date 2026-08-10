@@ -47,6 +47,29 @@ test("static safety rejects a reachable npm auth assignment without echoing its 
   }
 });
 
+test("static safety rejects private key assignments but permits Go field writes", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "porep-static-safety-"));
+  const fixtureKey = "fixture-private-key-not-a-real-secret";
+  try {
+    await cp(join(repositoryRoot, ".gitignore"), join(fixtureRoot, ".gitignore"));
+    await cp(join(repositoryRoot, "scripts"), join(fixtureRoot, "scripts"), { recursive: true });
+    await writeFile(join(fixtureRoot, "justfile"), "bootstrap:\n    @true\nbuild:\n    @true\nup:\n    @true\nstatus:\n    @true\ndeploy:\n    @true\naddresses:\n    @true\ntest-unit:\n    @true\ntest-scenario:\n    @true\ntest-e2e:\n    @true\ntest-all:\n    @true\nlogs:\n    @true\ndown:\n    @true\nreset:\n    @true\n");
+    await writeFile(join(fixtureRoot, "field.go"), "package fixture\n\nfunc copyKey() { target.PrivateKey = source.PrivateKey }\n");
+    await writeFile(join(fixtureRoot, "env.sh"), `DEVNET_PRIVATE_KEY=${fixtureKey}\n`);
+    await run("git", ["init", "--quiet"], fixtureRoot);
+
+    const result = await run("bash", ["scripts/static-checks.sh"], fixtureRoot);
+
+    assert.notEqual(result.exitCode, 0);
+    assert.match(result.stderr, /unsafe implementation text found/);
+    assert.match(result.stdout, /^env\.sh$/m);
+    assert.doesNotMatch(result.stdout, /^field\.go$/m);
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(fixtureKey));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("static safety scans docs architecture but excludes generated review artifacts", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "porep-static-safety-"));
   const localPath = `/${"Users"}/fixture`;

@@ -32,41 +32,75 @@ import {
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dockerfilePath = join(repositoryRoot, "docker", "curio-all-in-one.Dockerfile");
 const buildScriptPath = join(repositoryRoot, "scripts", "devnet-build.sh");
-const sptoolPatchPath = join(
+const sptoolOverridePath = join(
   repositoryRoot,
-  "patches",
+  "source-overrides",
   "curio",
-  "0001-sptool-mk20-notification-flags.patch",
+  "cmd",
+  "sptool",
+  "toolbox_deal_client.go",
 );
-const filecoinFfiPatchPath = join(
+const curioMk20OverridePath = join(
   repositoryRoot,
-  "patches",
+  "source-overrides",
+  "curio",
+  "market",
+  "mk20",
+  "ddo_v1.go",
+);
+const curioPieceParkOverridePath = join(
+  repositoryRoot,
+  "source-overrides",
+  "curio",
+  "tasks",
+  "piece",
+  "task_park_piece.go",
+);
+const filecoinFfiApiOverridePath = join(
+  repositoryRoot,
+  "source-overrides",
   "filecoin-ffi",
-  "0001-zigzag-devnet-ffi.patch",
+  "rust",
+  "src",
+  "proofs",
+  "api.rs",
 );
-const filecoinFfiFvm4PathPatchPath = join(
+const filecoinFfiCargoTomlOverridePath = join(
   repositoryRoot,
-  "patches",
+  "source-overrides",
   "filecoin-ffi",
-  "0002-zigzag-devnet-fvm4-path.patch",
+  "rust",
+  "Cargo.toml",
 );
-const fvmZigzagPatchPath = join(
+const fvmZigzagKernelOverridePath = join(
   repositoryRoot,
-  "patches",
-  "fvm",
-  "0001-zigzag-devnet-verifier.patch",
+  "source-overrides",
+  "fvm-4.8.2-zigzag",
+  "src",
+  "kernel",
+  "filecoin.rs",
 );
-const lotusEntrypointPatchPath = join(
+const lotusEntrypointOverridePath = join(
   repositoryRoot,
-  "patches",
+  "source-overrides",
+  "lotus",
+  "entrypoint.sh",
+);
+const curioUnsealFuncsOverridePath = join(
+  repositoryRoot,
+  "source-overrides",
   "curio",
-  "0002-lotus-entrypoint-zigzag-runtime-only.patch",
+  "lib",
+  "ffi",
+  "unseal_funcs.go",
 );
-const curioZigzagUnsealPatchPath = join(
+const curioUnsealSdrOverridePath = join(
   repositoryRoot,
-  "patches",
+  "source-overrides",
   "curio",
-  "0003-zigzag-devnet-unseal.patch",
+  "tasks",
+  "unseal",
+  "task_unseal_sdr.go",
 );
 const commonScriptPath = join(repositoryRoot, "scripts", "devnet-common.sh");
 const runtimeLockPath = join(repositoryRoot, "versions.lock.yaml");
@@ -94,10 +128,20 @@ const dockerSurfaceInputs = [
   "docker/curio/Dockerfile",
   "docker/piece-server/Dockerfile",
   "docker/indexer/Dockerfile",
-  "patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch",
-  "patches/curio/0003-zigzag-devnet-unseal.patch",
-  "patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch",
-  "patches/fvm/0001-zigzag-devnet-verifier.patch",
+] as const;
+const sourceOverrideInputs = [
+  "source-overrides/curio/cmd/sptool/toolbox_deal_client.go",
+  "source-overrides/curio/lib/ffi/unseal_funcs.go",
+  "source-overrides/curio/market/mk20/ddo_v1.go",
+  "source-overrides/curio/tasks/piece/task_park_piece.go",
+  "source-overrides/curio/tasks/unseal/task_unseal_decode.go",
+  "source-overrides/curio/tasks/unseal/task_unseal_sdr.go",
+  "source-overrides/filecoin-ffi/rust/Cargo.lock",
+  "source-overrides/filecoin-ffi/rust/Cargo.toml",
+  "source-overrides/filecoin-ffi/rust/src/proofs/api.rs",
+  "source-overrides/fvm-4.8.2-zigzag/Cargo.toml",
+  "source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs",
+  "source-overrides/lotus/entrypoint.sh",
 ] as const;
 
 async function sha256File(path: string): Promise<string> {
@@ -123,27 +167,39 @@ async function sha256DockerSurface(root: string): Promise<string> {
   for (const path of dockerSurfaceInputs) {
     chunks.push(path, await sha256File(join(root, path)));
   }
+  chunks.push("source-overrides", await sha256ZigzagSourceOverrides(root));
+  chunks.push("");
+  return createHash("sha256").update(chunks.join("\n")).digest("hex");
+}
+
+async function sha256ZigzagSourceOverrides(root: string): Promise<string> {
+  const chunks: string[] = [];
+  for (const path of [...sourceOverrideInputs].sort()) {
+    chunks.push(path, await sha256File(join(root, path)));
+  }
   chunks.push("");
   return createHash("sha256").update(chunks.join("\n")).digest("hex");
 }
 
 test("Curio build exposes the existing MK20 notification fields through sptool", async () => {
-  const [dockerfile, buildScript, patch] = await Promise.all([
+  const [dockerfile, buildScript, sptoolOverride, ddoOverride, pieceParkOverride] = await Promise.all([
     readFile(dockerfilePath, "utf8"),
     readFile(buildScriptPath, "utf8"),
-    readFile(sptoolPatchPath, "utf8"),
+    readFile(sptoolOverridePath, "utf8"),
+    readFile(curioMk20OverridePath, "utf8"),
+    readFile(curioPieceParkOverridePath, "utf8"),
   ]);
 
-  assert.match(patch, /Name:\s+"notification-address"/);
-  assert.match(patch, /Name:\s+"notification-payload"/);
-  assert.match(patch, /address\.NewFromString\(cctx\.String\("notification-address"\)\)/);
-  assert.match(patch, /hex\.DecodeString\(strings\.TrimPrefix/);
-  assert.match(patch, /p\.DDOV1\.NotificationAddress = notificationAddress/);
-  assert.match(patch, /p\.DDOV1\.NotificationPayload = notificationPayload/);
-  assert.match(patch, /const maxSizePiece = 8 << 20/);
-  assert.ok(patch.includes("+\tif d.MarketDealID == nil {\n+\t\treturn Ok, nil"));
-  assert.match(dockerfile, /COPY --from=harness-overlay .*0001-sptool-mk20-notification-flags\.patch/);
-  assert.match(dockerfile, /git apply --check .*sptool-mk20-notification-flags\.patch/);
+  assert.match(sptoolOverride, /Name:\s+"notification-address"/);
+  assert.match(sptoolOverride, /Name:\s+"notification-payload"/);
+  assert.match(sptoolOverride, /address\.NewFromString\(cctx\.String\("notification-address"\)\)/);
+  assert.match(sptoolOverride, /hex\.DecodeString\(strings\.TrimPrefix/);
+  assert.match(sptoolOverride, /p\.DDOV1\.NotificationAddress = notificationAddress/);
+  assert.match(sptoolOverride, /p\.DDOV1\.NotificationPayload = notificationPayload/);
+  assert.match(pieceParkOverride, /const maxSizePiece = 8 << 20/);
+  assert.ok(ddoOverride.includes("\tif d.MarketDealID == nil {\n\t\treturn Ok, nil"));
+  assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/curio\/ \/opt\/curio\//);
+  assert.doesNotMatch(dockerfile, /sptool-mk20-notification-flags\.patch/);
   assert.match(buildScript, /--build-context "harness-overlay=\."/);
   assert.match(buildScript, /sources verify/);
 });
@@ -155,36 +211,38 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
     buildScript,
     commonScript,
     compose,
-    patch,
-    filecoinFfiFvm4PathPatch,
-    fvmZigzagPatch,
-    lotusEntrypointPatch,
-    curioZigzagUnsealPatch,
+    filecoinFfiApiOverride,
+    filecoinFfiCargoTomlOverride,
+    fvmZigzagKernelOverride,
+    lotusEntrypointOverride,
+    curioUnsealFuncsOverride,
+    curioUnsealSdrOverride,
   ] = await Promise.all([
     readFile(dockerfilePath, "utf8"),
     readFile(join(repositoryRoot, "docker", "lotus", "Dockerfile"), "utf8"),
     readFile(buildScriptPath, "utf8"),
     readFile(commonScriptPath, "utf8"),
     readFile(composePath, "utf8"),
-    readFile(filecoinFfiPatchPath, "utf8"),
-    readFile(filecoinFfiFvm4PathPatchPath, "utf8"),
-    readFile(fvmZigzagPatchPath, "utf8"),
-    readFile(lotusEntrypointPatchPath, "utf8"),
-    readFile(curioZigzagUnsealPatchPath, "utf8"),
+    readFile(filecoinFfiApiOverridePath, "utf8"),
+    readFile(filecoinFfiCargoTomlOverridePath, "utf8"),
+    readFile(fvmZigzagKernelOverridePath, "utf8"),
+    readFile(lotusEntrypointOverridePath, "utf8"),
+    readFile(curioUnsealFuncsOverridePath, "utf8"),
+    readFile(curioUnsealSdrOverridePath, "utf8"),
   ]);
 
-  assert.match(patch, /FIL_PROOFS_USE_ZIGZAG/);
-  assert.match(patch, /zigzag_prove_from_cache/);
-  assert.match(patch, /zigzag_pre_commit_phase1_with_replica_id/);
-  assert.match(patch, /zigzag_verify_seal/);
-  assert.match(filecoinFfiFvm4PathPatch, /fvm-4\.8\.2-zigzag/);
-  assert.match(fvmZigzagPatch, /FIL_PROOFS_USE_ZIGZAG/);
-  assert.match(fvmZigzagPatch, /read_zigzag_proof_sidecar/);
-  assert.match(fvmZigzagPatch, /zigzag_verify_seal/);
-  assert.match(curioZigzagUnsealPatch, /FIL_PROOFS_USE_ZIGZAG/);
-  assert.match(curioZigzagUnsealPatch, /unseal skip sdr key for zigzag/);
-  assert.match(curioZigzagUnsealPatch, /filecoinffi\.Unseal/);
-  assert.match(curioZigzagUnsealPatch, /fr32\.NewPadWriter/);
+  assert.match(filecoinFfiApiOverride, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(filecoinFfiApiOverride, /zigzag_prove_from_cache/);
+  assert.match(filecoinFfiApiOverride, /zigzag_pre_commit_phase1_with_replica_id/);
+  assert.match(filecoinFfiApiOverride, /zigzag_verify_seal/);
+  assert.match(filecoinFfiCargoTomlOverride, /fvm-4\.8\.2-zigzag/);
+  assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(fvmZigzagKernelOverride, /read_zigzag_proof_sidecar/);
+  assert.match(fvmZigzagKernelOverride, /zigzag_verify_seal/);
+  assert.match(curioUnsealFuncsOverride, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(curioUnsealSdrOverride, /unseal skip sdr key for zigzag/);
+  assert.match(curioUnsealFuncsOverride, /filecoinffi\.Unseal/);
+  assert.match(curioUnsealFuncsOverride, /fr32\.NewPadWriter/);
   assert.match(commonScript, /DEVNET_RUST_FIL_PROOFS_SOURCE/);
   assert.match(buildScript, /zigzag_prove_from_cache/);
   assert.match(buildScript, /zigzag_pre_commit_phase1_with_replica_id/);
@@ -200,22 +258,21 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(dockerfile, /COPY --from=rust-fil-proofs \/filecoin-proofs \/filecoin-proofs/);
   assert.match(dockerfile, /COPY --from=rust-fil-proofs-local \/ \/opt\/curio\/extern\/rust-fil-proofs/);
   assert.match(dockerfile, /COPY --from=rust-fil-proofs-local \/ \/opt\/lotus\/extern\/rust-fil-proofs/);
-  assert.match(dockerfile, /0003-zigzag-devnet-unseal\.patch/);
-  assert.match(dockerfile, /git apply --check .*curio-zigzag-devnet-unseal\.patch/);
-  assert.match(dockerfile, /git apply --check --directory=extern\/filecoin-ffi .*filecoin-ffi-zigzag-devnet\.patch/);
+  assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/curio\/ \/opt\/curio\//);
+  assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/filecoin-ffi\/ \/opt\/curio\/extern\/filecoin-ffi\//);
+  assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/fvm-4\.8\.2-zigzag\/ \/opt\/curio\/extern\/fvm-4\.8\.2-zigzag\//);
+  assert.doesNotMatch(dockerfile, /git apply/);
   assert.match(dockerfile, /cargo fetch --manifest-path extern\/filecoin-ffi\/rust\/Cargo\.toml/);
   assert.match(dockerfile, /fvm-4\.8\.2-zigzag/);
-  assert.match(dockerfile, /fvm-zigzag-devnet-verifier\.patch/);
-  assert.match(dockerfile, /filecoin-ffi-zigzag-devnet-fvm4-path\.patch/);
   assert.match(dockerfile, /FROM \$\{GO_BUILDER_IMAGE\} AS lotus-builder/);
   assert.match(dockerfile, /COPY --from=lotus-source \/ \./);
   assert.match(dockerfile, /make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed/);
   assert.match(dockerfile, /COPY --from=lotus-builder \/opt\/lotus\/lotus /);
   assert.doesNotMatch(dockerfile, /ENV[\s\S]*FIL_PROOFS_USE_ZIGZAG/);
-  assert.match(lotusDockerfile, /0002-lotus-entrypoint-zigzag-runtime-only\.patch/);
-  assert.match(lotusDockerfile, /git apply \/tmp\/lotus-entrypoint-zigzag-runtime-only\.patch/);
-  assert.match(lotusEntrypointPatch, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
-  assert.match(lotusEntrypointPatch, /without_zigzag_proofs lotus-seed .*pre-seal/);
+  assert.match(lotusDockerfile, /COPY --from=harness-overlay source-overrides\/lotus\/entrypoint\.sh \/app\/entrypoint\.sh/);
+  assert.doesNotMatch(lotusDockerfile, /git apply/);
+  assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
+  assert.match(lotusEntrypointOverride, /without_zigzag_proofs lotus-seed .*pre-seal/);
 
   const lotusService = compose.match(/  lotus:\n[\s\S]*?\n  contracts-bootstrap:/)?.[0] ?? "";
   const lotusMinerService = compose.match(/  lotus-miner:\n[\s\S]*?\n  curio:/)?.[0] ?? "";
@@ -590,9 +647,6 @@ async function createLifecycleFixture(): Promise<{
   const commandLog = join(fixtureBase, "commands.log");
   await mkdir(join(root, "scripts"), { recursive: true });
   await mkdir(join(root, "docker"), { recursive: true });
-  await mkdir(join(root, "patches", "filecoin-ffi"), { recursive: true });
-  await mkdir(join(root, "patches", "curio"), { recursive: true });
-  await mkdir(join(root, "patches", "fvm"), { recursive: true });
   for (const service of derivedImageServices) {
     await mkdir(join(root, "docker", service), { recursive: true });
   }
@@ -601,32 +655,11 @@ async function createLifecycleFixture(): Promise<{
     { recursive: true },
   );
   await mkdir(stubBin, { recursive: true });
-  await writeFile(
-    join(root, "patches", "filecoin-ffi", "0001-zigzag-devnet-ffi.patch"),
-    "fixture ZigZag filecoin-ffi patch\n",
-    "utf8",
-  );
-  await writeFile(
-    join(root, "patches", "filecoin-ffi", "0002-zigzag-devnet-fvm4-path.patch"),
-    "fixture ZigZag filecoin-ffi FVM4 path patch\n",
-    "utf8",
-  );
-  await writeFile(
-    join(root, "patches", "curio", "0002-lotus-entrypoint-zigzag-runtime-only.patch"),
-    "fixture Lotus ZigZag runtime-only patch\n",
-    "utf8",
-  );
-  await writeFile(
-    join(root, "patches", "curio", "0003-zigzag-devnet-unseal.patch"),
-    "fixture Curio ZigZag unseal patch\n",
-    "utf8",
-  );
-  await writeFile(
-    join(root, "patches", "fvm", "0001-zigzag-devnet-verifier.patch"),
-    "fixture ZigZag FVM verifier patch\n",
-    "utf8",
-  );
-  for (const path of dockerSurfaceInputs.filter((path) => path.startsWith("docker/"))) {
+  for (const path of sourceOverrideInputs) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), `fixture source override ${path}\n`, "utf8");
+  }
+  for (const path of dockerSurfaceInputs) {
     await writeFile(join(root, path), "FROM scratch\n", "utf8");
   }
   await writeFile(
@@ -664,7 +697,7 @@ if [[ "$1" == image && "$2" == inspect ]]; then
     *"io.porep-market.lotus.commit"*) printf '%s\\n' "\${DEVNET_TEST_LOTUS_COMMIT:-}" ;;
     *"io.porep-market.blst.commit"*) printf '%s\\n' "\${DEVNET_TEST_BLST_COMMIT:-}" ;;
     *"io.porep-market.dockerfile.sha256"*) printf '%s\\n' "\${DEVNET_TEST_DOCKERFILE_HASH:-}" ;;
-    *"io.porep-market.zigzag.filecoin-ffi.patch.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_PATCH_HASH:-}" ;;
+    *"io.porep-market.zigzag.source-overrides.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_SOURCE_OVERRIDES_HASH:-}" ;;
     *"io.porep-market.zigzag.rust-fil-proofs.api.sha256"*) printf '%s\\n' "\${DEVNET_TEST_ZIGZAG_API_HASH:-}" ;;
     *"{{.Os}}/{{.Architecture}}"*) printf '%s\\n' "linux/arm64" ;;
     *"{{json .Config.Volumes}}"*)
@@ -908,9 +941,7 @@ test("up fixture writes only the validated tree and starts only after typed rend
   try {
     await writeFile(join(fixture.root, "docker", "curio-all-in-one.Dockerfile"), "FROM scratch\n", "utf8");
     const dockerfileHash = await sha256DockerSurface(fixture.root);
-    const zigzagPatchHash = await sha256File(
-      join(fixture.root, "patches", "filecoin-ffi", "0001-zigzag-devnet-ffi.patch"),
-    );
+    const zigzagSourceOverridesHash = await sha256ZigzagSourceOverrides(fixture.root);
     const zigzagApiHash = await sha256ZigzagApiSurface(
       join(dirname(fixture.root), "rust-fil-proofs"),
     );
@@ -931,7 +962,7 @@ test("up fixture writes only the validated tree and starts only after typed rend
         platform: "linux/arm64",
         schemaVersion: 1,
         tag: curioCommit.slice(0, 12),
-        zigzagFilecoinFfiPatchSha256: zigzagPatchHash,
+        zigzagSourceOverridesSha256: zigzagSourceOverridesHash,
         zigzagRustFilProofsApiSha256: zigzagApiHash,
       }, null, 2)}\n`,
       "utf8",
@@ -978,7 +1009,7 @@ exit 65
           DEVNET_TEST_IMAGE_ID: imageId,
           DEVNET_TEST_LOTUS_COMMIT: lotusCommit,
           DEVNET_TEST_ZIGZAG_API_HASH: zigzagApiHash,
-          DEVNET_TEST_ZIGZAG_PATCH_HASH: zigzagPatchHash,
+          DEVNET_TEST_ZIGZAG_SOURCE_OVERRIDES_HASH: zigzagSourceOverridesHash,
           PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
         },
       },
@@ -1483,7 +1514,7 @@ test("devnet build is bounded and records inspected local image evidence", async
     "io.porep-market.curio.commit",
     "io.porep-market.lotus.commit",
     "io.porep-market.dockerfile.sha256",
-    "io.porep-market.zigzag.filecoin-ffi.patch.sha256",
+    "io.porep-market.zigzag.source-overrides.sha256",
     "io.porep-market.zigzag.rust-fil-proofs.api.sha256",
   ]) {
     assert.match(dockerfile, new RegExp(label.replaceAll(".", "\\.")));
@@ -1624,7 +1655,7 @@ test("project build manifest validation rejects volumes on every inspected image
     const lotusCommit = "1".repeat(40);
     const blstCommit = "b".repeat(40);
     const dockerfileSha256 = "d".repeat(64);
-    const zigzagPatchSha256 = "e".repeat(64);
+    const zigzagSourceOverridesSha256 = "e".repeat(64);
     const zigzagApiSha256 = "f".repeat(64);
     const tag = curioCommit.slice(0, 12);
     const namespace = "porep-market-curio-devnet";
@@ -1634,7 +1665,7 @@ test("project build manifest validation rejects volumes on every inspected image
       "io.porep-market.lotus.commit": lotusCommit,
       "io.porep-market.blst.commit": blstCommit,
       "io.porep-market.dockerfile.sha256": dockerfileSha256,
-      "io.porep-market.zigzag.filecoin-ffi.patch.sha256": zigzagPatchSha256,
+      "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
       "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagApiSha256,
     };
 
@@ -1669,7 +1700,7 @@ test("project build manifest validation rejects volumes on every inspected image
           lotusCommit,
           blstCommit,
           dockerfileSha256,
-          zigzagPatchSha256,
+          zigzagSourceOverridesSha256,
           zigzagApiSha256,
           tag,
           namespace,
@@ -1753,9 +1784,7 @@ test("all project Dockerfiles omit VOLUME and derived definitions transparently 
         "COPY entrypoint.sh /app\n\nUSER root",
         [
           "COPY entrypoint.sh /app",
-          "COPY --from=harness-overlay patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch /tmp/lotus-entrypoint-zigzag-runtime-only.patch",
-          "RUN git apply /tmp/lotus-entrypoint-zigzag-runtime-only.patch \\",
-          "    && rm -f /tmp/lotus-entrypoint-zigzag-runtime-only.patch",
+          "COPY --from=harness-overlay source-overrides/lotus/entrypoint.sh /app/entrypoint.sh",
           "",
           "USER root",
         ].join("\n"),

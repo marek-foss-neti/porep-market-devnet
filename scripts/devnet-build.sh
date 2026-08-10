@@ -188,7 +188,7 @@ grep -Fq 'pub fn zigzag_prove_from_cache' \
 grep -Fq 'pub fn zigzag_pre_commit_phase1_with_replica_id' \
   "${rust_fil_proofs_source}/filecoin-proofs/src/api/zigzag.rs" ||
   devnet_die "ZigZag rust-fil-proofs source does not expose zigzag_pre_commit_phase1_with_replica_id"
-filecoin_ffi_zigzag_patch_sha256="$(devnet_filecoin_ffi_zigzag_patch_sha256)"
+zigzag_source_overrides_sha256="$(devnet_zigzag_source_overrides_sha256)"
 rust_fil_proofs_zigzag_api_sha256="$(devnet_rust_fil_proofs_zigzag_api_sha256)"
 
 required_images=(
@@ -281,7 +281,7 @@ docker buildx build \
   --build-arg "LOTUS_COMMIT=${lotus_commit}" \
   --build-arg "BLST_COMMIT=${blst_commit}" \
   --build-arg "DOCKERFILE_SHA256=${dockerfile_sha256}" \
-  --build-arg "ZIGZAG_FILECOIN_FFI_PATCH_SHA256=${filecoin_ffi_zigzag_patch_sha256}" \
+  --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_source_overrides_sha256}" \
   --build-arg "ZIGZAG_RUST_FIL_PROOFS_API_SHA256=${rust_fil_proofs_zigzag_api_sha256}" \
   --tag "${base_image}" \
   "${curio_source_relative}"
@@ -335,7 +335,7 @@ manifest_temporary="$(mktemp "${DEVNET_BUILD_DIR}/images.json.XXXXXX")"
 node - "${inspect_evidence}" "${manifest_temporary}" \
   "${build_started_at}" "${build_finished_at}" "${build_duration_seconds}" \
   "${platform}" "${curio_commit}" "${lotus_commit}" "${blst_commit}" "${dockerfile_sha256}" \
-  "${filecoin_ffi_zigzag_patch_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
+  "${zigzag_source_overrides_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
   "${curio_short_commit}" "${DEVNET_IMAGE_NAMESPACE}" <<'NODE'
 const fs = require("node:fs");
 
@@ -350,7 +350,7 @@ const [
   lotusCommit,
   blstCommit,
   dockerfileSha256,
-  zigzagFilecoinFfiPatchSha256,
+  zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,
   tag,
   namespace,
@@ -360,7 +360,7 @@ const expectedLabels = {
   "io.porep-market.lotus.commit": lotusCommit,
   "io.porep-market.blst.commit": blstCommit,
   "io.porep-market.dockerfile.sha256": dockerfileSha256,
-  "io.porep-market.zigzag.filecoin-ffi.patch.sha256": zigzagFilecoinFfiPatchSha256,
+  "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
   "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagRustFilProofsApiSha256,
 };
 const inspections = fs.readFileSync(inspectPath, "utf8")
@@ -409,7 +409,7 @@ const manifest = {
   lotusCommit,
   blstCommit: blstCommit,
   dockerfileSha256,
-  zigzagFilecoinFfiPatchSha256,
+  zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,
   startedAt,
   finishedAt,

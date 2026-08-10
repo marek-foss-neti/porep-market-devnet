@@ -70,30 +70,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY . .
-COPY --from=harness-overlay patches/curio/0001-sptool-mk20-notification-flags.patch /tmp/sptool-mk20-notification-flags.patch
-RUN git apply --check /tmp/sptool-mk20-notification-flags.patch \
-    && git apply /tmp/sptool-mk20-notification-flags.patch
-COPY --from=harness-overlay patches/curio/0003-zigzag-devnet-unseal.patch /tmp/curio-zigzag-devnet-unseal.patch
-RUN git apply --check /tmp/curio-zigzag-devnet-unseal.patch \
-    && git apply /tmp/curio-zigzag-devnet-unseal.patch
+COPY --from=harness-overlay source-overrides/curio/ /opt/curio/
 RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
 COPY --from=rust-fil-proofs-local / /opt/curio/extern/rust-fil-proofs
-COPY --from=harness-overlay patches/filecoin-ffi/0001-zigzag-devnet-ffi.patch /tmp/filecoin-ffi-zigzag-devnet.patch
-RUN git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch \
-    && git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch
-COPY --from=harness-overlay patches/fvm/0001-zigzag-devnet-verifier.patch /tmp/fvm-zigzag-devnet-verifier.patch
-COPY --from=harness-overlay patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+COPY --from=harness-overlay source-overrides/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
 RUN set -eu; \
     fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
     test -n "${fvm_source}"; \
     rm -rf extern/fvm-4.8.2-zigzag; \
     cp -a "${fvm_source}" extern/fvm-4.8.2-zigzag; \
-    chmod -R u+w extern/fvm-4.8.2-zigzag; \
-    git apply --check --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
-    git apply --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
-    git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
-    git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
-    rm -f /tmp/fvm-zigzag-devnet-verifier.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+    chmod -R u+w extern/fvm-4.8.2-zigzag
+COPY --from=harness-overlay source-overrides/fvm-4.8.2-zigzag/ /opt/curio/extern/fvm-4.8.2-zigzag/
 COPY --from=blst-builder /opt/blst /opt/curio/extern/supraseal/deps/blst
 
 ARG CURIO_COMMIT
@@ -147,22 +134,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY --from=lotus-source / .
 RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
 COPY --from=rust-fil-proofs-local / /opt/lotus/extern/rust-fil-proofs
-COPY --from=harness-overlay patches/filecoin-ffi/0001-zigzag-devnet-ffi.patch /tmp/filecoin-ffi-zigzag-devnet.patch
-RUN git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch \
-    && git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet.patch
-COPY --from=harness-overlay patches/fvm/0001-zigzag-devnet-verifier.patch /tmp/fvm-zigzag-devnet-verifier.patch
-COPY --from=harness-overlay patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+COPY --from=harness-overlay source-overrides/filecoin-ffi/ /opt/lotus/extern/filecoin-ffi/
 RUN set -eu; \
     fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
     test -n "${fvm_source}"; \
     rm -rf extern/fvm-4.8.2-zigzag; \
     cp -a "${fvm_source}" extern/fvm-4.8.2-zigzag; \
-    chmod -R u+w extern/fvm-4.8.2-zigzag; \
-    git apply --check --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
-    git apply --directory=extern/fvm-4.8.2-zigzag /tmp/fvm-zigzag-devnet-verifier.patch; \
-    git apply --check --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
-    git apply --directory=extern/filecoin-ffi /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch; \
-    rm -f /tmp/fvm-zigzag-devnet-verifier.patch /tmp/filecoin-ffi-zigzag-devnet-fvm4-path.patch
+    chmod -R u+w extern/fvm-4.8.2-zigzag
+COPY --from=harness-overlay source-overrides/fvm-4.8.2-zigzag/ /opt/lotus/extern/fvm-4.8.2-zigzag/
 
 RUN mkdir -p build \
     && touch build/.update-modules \
@@ -259,7 +238,7 @@ ARG CURIO_COMMIT
 ARG LOTUS_COMMIT
 ARG BLST_COMMIT
 ARG DOCKERFILE_SHA256
-ARG ZIGZAG_FILECOIN_FFI_PATCH_SHA256
+ARG ZIGZAG_SOURCE_OVERRIDES_SHA256
 ARG ZIGZAG_RUST_FIL_PROOFS_API_SHA256
 
 LABEL org.opencontainers.image.revision="${CURIO_COMMIT}" \
@@ -267,7 +246,7 @@ LABEL org.opencontainers.image.revision="${CURIO_COMMIT}" \
       io.porep-market.lotus.commit="${LOTUS_COMMIT}" \
       io.porep-market.blst.commit="${BLST_COMMIT}" \
       io.porep-market.dockerfile.sha256="${DOCKERFILE_SHA256}" \
-      io.porep-market.zigzag.filecoin-ffi.patch.sha256="${ZIGZAG_FILECOIN_FFI_PATCH_SHA256}" \
+      io.porep-market.zigzag.source-overrides.sha256="${ZIGZAG_SOURCE_OVERRIDES_SHA256}" \
       io.porep-market.zigzag.rust-fil-proofs.api.sha256="${ZIGZAG_RUST_FIL_PROOFS_API_SHA256}"
 
 ENV CURIO_MK12_CLIENT_REPO=/var/lib/curio-client \

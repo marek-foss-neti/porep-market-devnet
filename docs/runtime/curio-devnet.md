@@ -253,3 +253,10 @@ Compose YAML edits are not part of the supported workflow.
 Proof parameters under `.cache/proof-parameters/` survive resets. Benchmark
 recipes warm missing ZigZag parameters outside measured windows and report the
 selected backend in scenario summaries.
+
+The Docker build does not apply `.patch` files to managed checkouts. Devnet-only
+changes live as full source-file overrides under `source-overrides/` and are
+copied into the pinned Curio, Lotus, `filecoin-ffi`, and FVM source trees during
+image construction. Images record the aggregate override hash in
+`io.porep-market.zigzag.source-overrides.sha256`; startup validation rejects
+images when that hash no longer matches the local override set.

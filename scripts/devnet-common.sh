@@ -91,7 +91,7 @@ devnet_require_proof_backend() {
 
 devnet_write_compose_env() {
   local source_output curio_commit lotus_commit blst_commit services_commit multicall_commit
-  local manifest_zigzag_patch manifest_zigzag_api
+  local manifest_zigzag_overrides manifest_zigzag_api
   source_output="$(npm --prefix "${DEVNET_ROOT}/tools" run cli -- sources verify)"
   curio_commit="$(awk -F '\t' '$1 == "curio" {print $3}' <<<"${source_output}")"
   lotus_commit="$(awk -F '\t' '$1 == "lotus" {print $3}' <<<"${source_output}")"
@@ -105,13 +105,13 @@ devnet_write_compose_env() {
   manifest_lotus="$(jq -r '.lotusCommit' "${image_manifest}")"
   manifest_blst="$(jq -r '.blstCommit' "${image_manifest}")"
   manifest_hash="$(jq -r '.dockerfileSha256' "${image_manifest}")"
-  manifest_zigzag_patch="$(jq -r '.zigzagFilecoinFfiPatchSha256 // empty' "${image_manifest}")"
+  manifest_zigzag_overrides="$(jq -r '.zigzagSourceOverridesSha256 // empty' "${image_manifest}")"
   manifest_zigzag_api="$(jq -r '.zigzagRustFilProofsApiSha256 // empty' "${image_manifest}")"
   manifest_platform="$(jq -r '.platform' "${image_manifest}")"
-  [[ "${manifest_lotus}" =~ ^[0-9a-f]{40}$ && "${manifest_blst}" =~ ^[0-9a-f]{40}$ && "${manifest_hash}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_patch}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_api}" =~ ^[0-9a-f]{64}$ && "${manifest_platform}" =~ ^linux/(amd64|arm64)$ ]] || devnet_die "image manifest fields are invalid"
+  [[ "${manifest_lotus}" =~ ^[0-9a-f]{40}$ && "${manifest_blst}" =~ ^[0-9a-f]{40}$ && "${manifest_hash}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_overrides}" =~ ^[0-9a-f]{64}$ && "${manifest_zigzag_api}" =~ ^[0-9a-f]{64}$ && "${manifest_platform}" =~ ^linux/(amd64|arm64)$ ]] || devnet_die "image manifest fields are invalid"
   [[ "${manifest_lotus}" == "${lotus_commit}" && "${manifest_blst}" == "${blst_commit}" ]] || devnet_die "image manifest source commits do not match verified sources"
   [[ "$(devnet_docker_surface_sha256)" == "${manifest_hash}" ]] || devnet_die "image manifest Dockerfile hash mismatch"
-  [[ "$(devnet_filecoin_ffi_zigzag_patch_sha256)" == "${manifest_zigzag_patch}" ]] || devnet_die "image manifest ZigZag filecoin-ffi patch hash mismatch"
+  [[ "$(devnet_zigzag_source_overrides_sha256)" == "${manifest_zigzag_overrides}" ]] || devnet_die "image manifest ZigZag source override hash mismatch"
   [[ "$(devnet_rust_fil_proofs_zigzag_api_sha256)" == "${manifest_zigzag_api}" ]] || devnet_die "image manifest ZigZag rust-fil-proofs API hash mismatch"
   grep -Fq "\"curioCommit\": \"${curio_commit}\"" "${image_manifest}" || devnet_die "image manifest Curio commit mismatch"
   for image in curio-all-in-one lotus contracts-bootstrap lotus-miner curio piece-server indexer; do
@@ -125,9 +125,9 @@ devnet_write_compose_env() {
     actual_lotus="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.lotus.commit"}}')"
     actual_blst="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.blst.commit"}}')"
     actual_dockerfile="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.dockerfile.sha256"}}')"
-    actual_zigzag_patch="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.filecoin-ffi.patch.sha256"}}')"
+    actual_zigzag_overrides="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.source-overrides.sha256"}}')"
     actual_zigzag_api="$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.api.sha256"}}')"
-    [[ "${actual_lotus}" == "${manifest_lotus}" && "${actual_blst}" == "${manifest_blst}" && "${actual_dockerfile}" == "${manifest_hash}" && "${actual_zigzag_patch}" == "${manifest_zigzag_patch}" && "${actual_zigzag_api}" == "${manifest_zigzag_api}" ]] || devnet_die "image identity labels mismatch: ${image}"
+    [[ "${actual_lotus}" == "${manifest_lotus}" && "${actual_blst}" == "${manifest_blst}" && "${actual_dockerfile}" == "${manifest_hash}" && "${actual_zigzag_overrides}" == "${manifest_zigzag_overrides}" && "${actual_zigzag_api}" == "${manifest_zigzag_api}" ]] || devnet_die "image identity labels mismatch: ${image}"
     [[ "$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{.Os}}/{{.Architecture}}')" == "${manifest_platform}" ]] || devnet_die "image platform mismatch: ${image}"
     [[ "$(docker image inspect "${DEVNET_IMAGE_NAMESPACE}/${image}:${curio_commit:0:12}" --format '{{json .Config.Volumes}}')" == null ]] || devnet_die "image declares unexpected volumes: ${image}"
   done
@@ -485,11 +485,46 @@ devnet_rust_fil_proofs_source_path() {
   printf '%s\n' "${resolved}"
 }
 
-devnet_filecoin_ffi_zigzag_patch_sha256() {
-  local patch="${DEVNET_ROOT}/patches/filecoin-ffi/0001-zigzag-devnet-ffi.patch"
-  [[ -f "${patch}" && ! -L "${patch}" ]] ||
-    devnet_die "ZigZag filecoin-ffi patch is missing"
-  shasum -a 256 "${patch}" | awk '{print $1}'
+devnet_zigzag_source_override_required_paths() {
+  cat <<'EOF'
+source-overrides/curio/cmd/sptool/toolbox_deal_client.go
+source-overrides/curio/lib/ffi/unseal_funcs.go
+source-overrides/curio/market/mk20/ddo_v1.go
+source-overrides/curio/tasks/piece/task_park_piece.go
+source-overrides/curio/tasks/unseal/task_unseal_decode.go
+source-overrides/curio/tasks/unseal/task_unseal_sdr.go
+source-overrides/filecoin-ffi/rust/Cargo.lock
+source-overrides/filecoin-ffi/rust/Cargo.toml
+source-overrides/filecoin-ffi/rust/src/proofs/api.rs
+source-overrides/fvm-4.8.2-zigzag/Cargo.toml
+source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs
+source-overrides/lotus/entrypoint.sh
+EOF
+}
+
+devnet_zigzag_source_overrides_sha256() {
+  local overrides="${DEVNET_ROOT}/source-overrides"
+  local path
+  [[ -d "${overrides}" && ! -L "${overrides}" ]] ||
+    devnet_die "ZigZag source overrides directory is missing"
+  while IFS= read -r path; do
+    [[ -f "${DEVNET_ROOT}/${path}" && ! -L "${DEVNET_ROOT}/${path}" ]] ||
+      devnet_die "required ZigZag source override is missing or symbolic: ${path}"
+  done < <(devnet_zigzag_source_override_required_paths)
+  (
+    cd "${DEVNET_ROOT}"
+    find \
+      source-overrides/curio \
+      source-overrides/filecoin-ffi \
+      source-overrides/fvm-4.8.2-zigzag \
+      source-overrides/lotus \
+      \( -type f -o -type l \) -print | LC_ALL=C sort | while read -r path; do
+      [[ -f "${path}" && ! -L "${path}" ]] ||
+        devnet_die "ZigZag source override is missing or symbolic: ${path}"
+      printf '%s\n' "${path}"
+      shasum -a 256 "${path}" | awk '{print $1}'
+    done
+  ) | shasum -a 256 | awk '{print $1}'
 }
 
 devnet_docker_surface_sha256() {
@@ -502,16 +537,14 @@ devnet_docker_surface_sha256() {
       docker/lotus-miner/Dockerfile \
       docker/curio/Dockerfile \
       docker/piece-server/Dockerfile \
-      docker/indexer/Dockerfile \
-      patches/curio/0002-lotus-entrypoint-zigzag-runtime-only.patch \
-      patches/curio/0003-zigzag-devnet-unseal.patch \
-      patches/filecoin-ffi/0002-zigzag-devnet-fvm4-path.patch \
-      patches/fvm/0001-zigzag-devnet-verifier.patch; do
+      docker/indexer/Dockerfile; do
       [[ -f "${DEVNET_ROOT}/${path}" && ! -L "${DEVNET_ROOT}/${path}" ]] ||
         devnet_die "Docker build surface input is missing or symbolic: ${path}"
       printf '%s\n' "${path}"
       shasum -a 256 "${DEVNET_ROOT}/${path}" | awk '{print $1}'
     done
+    printf 'source-overrides\n'
+    devnet_zigzag_source_overrides_sha256
   } | shasum -a 256 | awk '{print $1}'
 }
 
