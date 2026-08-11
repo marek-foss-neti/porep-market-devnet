@@ -425,6 +425,14 @@ test("deployment scripts create append-only revisions and expose public integrat
   assert.match(innerDeployScript, /implementationCodeHash/);
   assert.match(innerDeployScript, /DEPLOYMENT_OUTPUT/);
   assert.match(innerDeployScript, /BUILD_INFO_SHA256/);
+  assert.match(innerDeployScript, /Filecoin\.EthAddressToFilecoinAddress/);
+  assert.match(innerDeployScript, /filecoin_deployer/);
+  assert.match(innerDeployScript, /Filecoin\.MpoolPending/);
+  assert.match(innerDeployScript, /\.Message\.From/);
+  assert.match(innerDeployScript, /wait_for_deployer_settlement/);
+  assert.match(innerDeployScript, /stable_required=5/);
+  assert.match(innerDeployScript, /sleep 3/);
+  assert.match(innerDeployScript, /contracts-bootstrap/);
   assert.match(innerDeployScript, /forge build --build-info --extra-output storageLayout/);
   assert.match(innerDeployScript, /\.result/);
   assert.match(innerDeployScript, /\.contracts\.PoRepMarket\.proxy/);

@@ -34,6 +34,15 @@ deployer_key="$(tr -d '\r\n[:space:]' < /run/secrets/deployer-key)"
   exit 1
 }
 deployer="$(cast wallet address --private-key "${deployer_key}")"
+filecoin_deployer="$(
+  cast rpc --rpc-url "${lotus_rpc_url}" Filecoin.EthAddressToFilecoinAddress \
+    "\"${deployer}\"" |
+    jq -r '.'
+)"
+[[ "${filecoin_deployer}" == t410f* || "${filecoin_deployer}" == f410f* ]] || {
+  printf 'could not resolve DevNet deployer Filecoin address\n' >&2
+  exit 1
+}
 runtime_root=/workspace/.runtime/contracts
 deployment_root="${DEPLOYMENT_ROOT}"
 log_file="${deployment_root}/deploy.log"
@@ -41,14 +50,48 @@ mkdir -p "${runtime_root}/work" "${deployment_root}/native" "${deployment_root}/
 : > "${log_file}"
 
 wait_for_deployer_mempool() {
-  local latest pending
+  local latest pending filecoin_pending pending_json
   for _ in {1..120}; do
     latest="$(cast nonce --rpc-url "${RPC_URL}" "${deployer}")"
     pending="$(cast nonce --rpc-url "${RPC_URL}" --block pending "${deployer}")"
-    [[ "${latest}" == "${pending}" ]] && return 0
+    pending_json="$(cast rpc --rpc-url "${lotus_rpc_url}" Filecoin.MpoolPending '[null]' 2>/dev/null || printf '[]\n')"
+    filecoin_pending="$(
+      jq -r --arg from "${filecoin_deployer}" '
+        [ .[] | select((.Message.From // "") == $from) ] | length
+      ' <<<"${pending_json}" 2>/dev/null || printf '1\n'
+    )"
+    [[ "${latest}" == "${pending}" && "${filecoin_pending}" == 0 ]] && return 0
     sleep 1
   done
   printf 'deployer mempool did not clear within 120 seconds\n' >&2
+  return 1
+}
+
+wait_for_deployer_settlement() {
+  local stable_required=5 stable_seen=0 previous_nonce="" latest pending filecoin_pending pending_json
+  printf 'waiting for DevNet deployer mpool to settle after contracts-bootstrap\n' >>"${log_file}"
+  for _ in {1..180}; do
+    latest="$(cast nonce --rpc-url "${RPC_URL}" "${deployer}")"
+    pending="$(cast nonce --rpc-url "${RPC_URL}" --block pending "${deployer}")"
+    pending_json="$(cast rpc --rpc-url "${lotus_rpc_url}" Filecoin.MpoolPending '[null]' 2>/dev/null || printf '[]\n')"
+    filecoin_pending="$(
+      jq -r --arg from "${filecoin_deployer}" '
+        [ .[] | select((.Message.From // "") == $from) ] | length
+      ' <<<"${pending_json}" 2>/dev/null || printf '1\n'
+    )"
+    if [[ "${latest}" == "${pending}" && "${filecoin_pending}" == 0 && "${latest}" == "${previous_nonce}" ]]; then
+      stable_seen=$((stable_seen + 1))
+      if ((stable_seen >= stable_required)); then
+        printf 'DevNet deployer mpool settled at nonce %s\n' "${latest}" >>"${log_file}"
+        return 0
+      fi
+    else
+      stable_seen=0
+      previous_nonce="${latest}"
+    fi
+    sleep 3
+  done
+  printf 'deployer mpool did not remain stable after contracts-bootstrap\n' >&2
   return 1
 }
 
@@ -79,6 +122,7 @@ role_key() {
 }
 
 declare -A identity_keys identity_addresses
+wait_for_deployer_settlement
 for role in client providerPayee porepService operator allocator oracle unauthorized; do
   identity_keys["${role}"]="$(role_key "${role}")"
   identity_addresses["${role}"]="$(cast wallet address --private-key "${identity_keys[${role}]}")"

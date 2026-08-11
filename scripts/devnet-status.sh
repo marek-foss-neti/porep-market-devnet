@@ -46,6 +46,39 @@ status_pause() {
   sleep "${remaining_seconds}"
 }
 
+collect_compose_status() {
+  compose_json="$(bounded_compose ps --all --format json 2>/dev/null || true)"
+  compose_status="$(jq -sc '
+    map({
+      service: .Service,
+      state: .State,
+      health: (.Health // ""),
+      exitCode: (.ExitCode // 0)
+    }) | sort_by(.service)
+  ' <<<"${compose_json}" 2>/dev/null || true)"
+}
+
+compose_status_ready() {
+  [[ "$(jq -r '
+    all(.[]; if .service == "contracts-bootstrap" then
+      (.state == "exited" and .exitCode == 0)
+    else
+      (.state == "running" and .health == "healthy")
+    end)
+  ' <<<"${compose_status:-[]}" 2>/dev/null || true)" == true ]]
+}
+
+compose_status_summary() {
+  jq -r '
+    map(if .service == "contracts-bootstrap" then
+      "\(.service)=\(.state)/exit\(.exitCode)"
+    else
+      "\(.service)=\(.state)/\(.health)"
+    end) | join(", ")
+  ' <<<"${compose_status:-[]}" 2>/dev/null ||
+    printf 'compose services are not yet healthy\n'
+}
+
 diagnostic_timeout_ms() {
   local remaining_seconds=$((command_deadline - SECONDS))
   ((remaining_seconds > 0)) || return 124
@@ -75,17 +108,15 @@ deadline=$((command_deadline - 65))
 last_state="startup has not converged"
 status_progress_last=0
 while ((SECONDS < deadline)); do
-  compose_json="$(bounded_compose ps --all --format json 2>/dev/null || true)"
-  compose_status="$(jq -sc '
-    map({
-      service: .Service,
-      state: .State,
-      health: (.Health // ""),
-      exitCode: (.ExitCode // 0)
-    }) | sort_by(.service)
-  ' <<<"${compose_json}" 2>/dev/null || true)"
+  collect_compose_status
   if [[ "$(jq 'length' <<<"${compose_status:-[]}" 2>/dev/null || printf 0)" != 7 ]]; then
     last_state="expected seven Compose services"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
+    status_pause || break
+    continue
+  fi
+  if ! compose_status_ready; then
+    last_state="$(compose_status_summary)"
     devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
     status_pause || break
     continue
@@ -169,6 +200,20 @@ while ((SECONDS < deadline)); do
     || -z "${generation}"
   ]]; then
     last_state="semantic probes incomplete at epoch ${epoch}"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
+    status_pause || break
+    continue
+  fi
+
+  collect_compose_status
+  if [[ "$(jq 'length' <<<"${compose_status:-[]}" 2>/dev/null || printf 0)" != 7 ]]; then
+    last_state="expected seven Compose services before status write"
+    devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
+    status_pause || break
+    continue
+  fi
+  if ! compose_status_ready; then
+    last_state="$(compose_status_summary)"
     devnet_progress_maybe status_progress_last "devnet-status: ${last_state}; elapsed=${SECONDS}s"
     status_pause || break
     continue
