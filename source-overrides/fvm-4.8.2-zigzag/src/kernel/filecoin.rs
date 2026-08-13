@@ -39,11 +39,14 @@ lazy_static! {
 
 const ZIGZAG_DEVNET_ENV: &str = "FIL_PROOFS_USE_ZIGZAG";
 const ZIGZAG_PARAMETER_CACHE_ENV: &str = "FIL_PROOFS_PARAMETER_CACHE";
+const ZIGZAG_SIDECAR_DIR_ENV: &str = "FIL_PROOFS_ZIGZAG_SIDECAR_DIR";
 const ZIGZAG_ENVELOPE_KIND: &str = "filecoin-ffi-zigzag-devnet";
 const ZIGZAG_ENVELOPE_VERSION: u8 = 1;
 const ZIGZAG_SNARK_PROOF_BYTES: usize = 192;
 const ZIGZAG_2_KIB: u64 = 2 * 1024;
 const ZIGZAG_8_MIB: u64 = 8 * 1024 * 1024;
+const ZIGZAG_512_MIB: u64 = 512 * 1024 * 1024;
+const ZIGZAG_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const ZIGZAG_PROOF_SIDECAR_DIR: &str = "zigzag-proof-sidecars";
 
 #[derive(Debug, serde::Deserialize)]
@@ -75,7 +78,10 @@ fn zigzag_devnet_enabled() -> bool {
 }
 
 fn zigzag_supported_sector_size(sector_size: u64) -> bool {
-    matches!(sector_size, ZIGZAG_2_KIB | ZIGZAG_8_MIB)
+    matches!(
+        sector_size,
+        ZIGZAG_2_KIB | ZIGZAG_8_MIB | ZIGZAG_512_MIB | ZIGZAG_32_GIB
+    )
 }
 
 macro_rules! zigzag_ensure {
@@ -486,7 +492,7 @@ fn zigzag_porep_config(
     if !zigzag_supported_sector_size(sector_size) {
         return Err(syscall_error!(
             IllegalArgument;
-            "ZigZag devnet FVM verifier only supports 2KiB and 8MiB sectors, got {} bytes",
+            "ZigZag devnet FVM verifier only supports 2KiB, 8MiB, 512MiB, and 32GiB sectors, got {} bytes",
             sector_size
         )
         .into());
@@ -503,6 +509,12 @@ fn zigzag_parameter_cache_dir() -> std::path::PathBuf {
     std::env::var(ZIGZAG_PARAMETER_CACHE_ENV)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/var/tmp/filecoin-proof-parameters"))
+}
+
+fn zigzag_proof_sidecar_dir() -> std::path::PathBuf {
+    std::env::var(ZIGZAG_SIDECAR_DIR_ENV)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| zigzag_parameter_cache_dir().join(ZIGZAG_PROOF_SIDECAR_DIR))
 }
 
 fn zigzag_hex(bytes: &[u8]) -> String {
@@ -527,8 +539,7 @@ fn zigzag_proof_sidecar_path(
     comm_d: &[u8; 32],
     proof: &[u8],
 ) -> std::path::PathBuf {
-    zigzag_parameter_cache_dir()
-        .join(ZIGZAG_PROOF_SIDECAR_DIR)
+    zigzag_proof_sidecar_dir()
         .join(format!(
             "v{}-rp{}-s{}-cr{}-cd{}-p{}.json",
             ZIGZAG_ENVELOPE_VERSION,

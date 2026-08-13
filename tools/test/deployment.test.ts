@@ -113,7 +113,7 @@ function validRevision(): Record<string, unknown> {
       provider: "t01004",
       epoch: 410,
     },
-    proof: { backend: "stacked" },
+    proof: { backend: "stacked", sectorSize: { selector: "8mib", bytes: 8_388_608 } },
     target: {
       mode: "local",
       sourcePath: "/tmp/porep",
@@ -157,6 +157,7 @@ test("deployment revision accepts extra contracts and binds only to chain identi
     genesisCid: "bafy2bzaceco3z6z6nfdpnam52jhagkckzsg5d4ds4dr46537qsfeubzngxpiw",
     provider: "t01004",
     proofBackend: "stacked",
+    sectorSizeSelector: "8mib",
   }));
   assert.doesNotThrow(() => requireDeploymentContracts(revision, ["PoRepMarket"]));
   assert.throws(
@@ -171,6 +172,7 @@ test("deployment revision validates proxy metadata, lineage, and active selectio
     (value: Record<string, any>) => { delete value.contracts.PoRepMarket.implementation; },
     (value: Record<string, any>) => { value.contracts.FutureAuditFixture.runtimeCodeHash = "0x"; },
     (value: Record<string, any>) => { value.target.commit = "bad"; },
+    (value: Record<string, any>) => { value.proof.sectorSize.bytes = 512; },
   ]) {
     const value = validRevision();
     mutate(value);
@@ -193,6 +195,7 @@ test("deployment revision address output identifies the selected revision", () =
   assert.match(output, /^deploymentId\tdeployment-20260726T120000Z-aaaaaaaaaaaa$/m);
   assert.match(output, /^revision\t0$/m);
   assert.match(output, /^proofBackend\tstacked$/m);
+  assert.match(output, /^sectorSize\t8mib$/m);
   assert.match(output, new RegExp(`^PoRepMarket\\t${address}$`, "m"));
   assert.doesNotMatch(output, /implementation|codeHash|sourcePath/i);
 });
@@ -414,6 +417,9 @@ test("deployment scripts create append-only revisions and expose public integrat
   assert.match(deployScript, /lotus-shed verifreg add-verifier\s+\\?\s*t0100/);
   assert.match(deployScript, /lotus msig approve --from t0101/);
   assert.match(deployScript, /lotus filplus check-notary-datacap/);
+  assert.match(deployScript, /ensure_mk12_client_datacap/);
+  assert.match(deployScript, /lotus wallet new secp256k1/);
+  assert.match(deployScript, /lotus filplus grant-datacap/);
   assert.match(deployScript, /normalize-runtime-bytecode\.mjs/);
   assert.match(deployScript, /runtime bytecode mismatch for/);
   assert.match(deployScript, /artifact=Validator/);

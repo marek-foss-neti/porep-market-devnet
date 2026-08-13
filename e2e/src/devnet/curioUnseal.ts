@@ -17,7 +17,7 @@ const ZIGZAG_DEVNET_ENV = "FIL_PROOFS_USE_ZIGZAG";
 const KIB = 1024;
 const MIB = KIB * KIB;
 const GIB = KIB * MIB;
-const ZIGZAG_SUPPORTED_SECTOR_SIZES = new Set([2 * KIB, 8 * MIB]);
+const ZIGZAG_SUPPORTED_SECTOR_SIZES = new Set([2 * KIB, 8 * MIB, 512 * MIB, 32 * GIB]);
 
 const REGISTERED_SEAL_PROOFS = new Map<number, { name: string; sectorSizeBytes: number }>([
   [0, { name: "StackedDrg2KiBV1", sectorSizeBytes: 2 * KIB }],
@@ -177,6 +177,16 @@ export function readCurioSectorPiece(
   dealId: string,
   pieceCid: string,
 ): CurioSectorPiece {
+  const piece = tryReadCurioSectorPiece(context, dealId, pieceCid);
+  if (!piece) throw new Error(`durable sector mapping not found for Curio deal ${dealId}`);
+  return piece;
+}
+
+export function tryReadCurioSectorPiece(
+  context: ScenarioContext,
+  dealId: string,
+  pieceCid: string,
+): CurioSectorPiece | undefined {
   const row = queryScalar(
     context,
     `select json_build_object(` +
@@ -187,8 +197,24 @@ export function readCurioSectorPiece(
       `join curio.sectors_meta sm on sm.sp_id=mpd.sp_id and sm.sector_num=mpd.sector_num ` +
       `where mpd.id='${sqlToken(dealId)}' and mpd.piece_cid='${sqlToken(pieceCid)}' limit 1`,
   );
-  if (!row) throw new Error(`durable sector mapping not found for Curio deal ${dealId}`);
-  return parseSectorPieceRow(row);
+  return row ? parseSectorPieceRow(row) : undefined;
+}
+
+export async function waitForCurioSectorPiece(
+  context: ScenarioContext,
+  dealId: string,
+  pieceCid: string,
+): Promise<CurioSectorPiece> {
+  const timeoutSeconds = envNumber(context, "CURIO_DURABLE_MAPPING_TIMEOUT_SECONDS", 300);
+  for (let elapsed = 0; elapsed < timeoutSeconds; elapsed += 2) {
+    const piece = tryReadCurioSectorPiece(context, dealId, pieceCid);
+    if (piece) return piece;
+    if (elapsed === 0 || elapsed % 30 === 0) {
+      console.log(`  waiting for durable Curio sector mapping for deal ${dealId}`);
+    }
+    await sleep(2000);
+  }
+  throw new Error(`durable sector mapping not found for Curio deal ${dealId}`);
 }
 
 export function parseSectorPieceRow(row: string): CurioSectorPiece {

@@ -1,0 +1,606 @@
+// Package tasks contains tasks that can be run by the curio command.
+package tasks
+
+import (
+	"context"
+	"os"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	logging "github.com/ipfs/go-log/v2"
+	"github.com/samber/lo"
+	"github.com/snadrus/must"
+	"golang.org/x/exp/maps"
+	"golang.org/x/xerrors"
+
+	"github.com/filecoin-project/go-address"
+
+	"github.com/filecoin-project/curio/alertmanager"
+	"github.com/filecoin-project/curio/api"
+	curiobuild "github.com/filecoin-project/curio/build"
+	"github.com/filecoin-project/curio/cuhttp"
+	"github.com/filecoin-project/curio/cuhttp/servicedeps"
+	"github.com/filecoin-project/curio/deps"
+	"github.com/filecoin-project/curio/deps/config"
+	"github.com/filecoin-project/curio/harmony/harmonydb"
+	"github.com/filecoin-project/curio/harmony/harmonytask"
+	"github.com/filecoin-project/curio/harmony/resources/ffigpu"
+	"github.com/filecoin-project/curio/harmony/taskhelp"
+	"github.com/filecoin-project/curio/lib/chainsched"
+	"github.com/filecoin-project/curio/lib/curiochain"
+	"github.com/filecoin-project/curio/lib/cuzk"
+	"github.com/filecoin-project/curio/lib/fastparamfetch"
+	"github.com/filecoin-project/curio/lib/ffi"
+	"github.com/filecoin-project/curio/lib/lazy"
+	"github.com/filecoin-project/curio/lib/multictladdr"
+	"github.com/filecoin-project/curio/lib/paths"
+	"github.com/filecoin-project/curio/lib/proofsvc/common"
+	"github.com/filecoin-project/curio/lib/slotmgr"
+	"github.com/filecoin-project/curio/lib/storiface"
+	"github.com/filecoin-project/curio/market/libp2p"
+	"github.com/filecoin-project/curio/pdpnode"
+	"github.com/filecoin-project/curio/tasks/balancemgr"
+	"github.com/filecoin-project/curio/tasks/expmgr"
+	"github.com/filecoin-project/curio/tasks/f3"
+	"github.com/filecoin-project/curio/tasks/gc"
+	"github.com/filecoin-project/curio/tasks/indexing"
+	"github.com/filecoin-project/curio/tasks/message"
+	"github.com/filecoin-project/curio/tasks/metadata"
+	piece2 "github.com/filecoin-project/curio/tasks/piece"
+	"github.com/filecoin-project/curio/tasks/proofshare"
+	"github.com/filecoin-project/curio/tasks/scrub"
+	"github.com/filecoin-project/curio/tasks/seal"
+	"github.com/filecoin-project/curio/tasks/sealsupra"
+	"github.com/filecoin-project/curio/tasks/snap"
+	storage_market "github.com/filecoin-project/curio/tasks/storage-market"
+	"github.com/filecoin-project/curio/tasks/unseal"
+	window2 "github.com/filecoin-project/curio/tasks/window"
+	"github.com/filecoin-project/curio/tasks/winning"
+
+	proofparams "github.com/filecoin-project/lotus/build/proof-params"
+	"github.com/filecoin-project/lotus/lib/result"
+	"github.com/filecoin-project/lotus/node/modules/dtypes"
+)
+
+var log = logging.Logger("curio/deps")
+
+func WindowPostScheduler(ctx context.Context, fc config.CurioFees, pc config.CurioProvingConfig,
+	api api.Chain, verif storiface.Verifier, paramck func() (bool, error), sender *message.Sender, chainSched *chainsched.CurioChainSched,
+	as *multictladdr.MultiAddressSelector, addresses *config.Dynamic[map[dtypes.MinerAddress]bool], db *harmonydb.DB,
+	stor paths.Store, idx paths.SectorIndex, max int, cuzkClient *cuzk.Client) (*window2.WdPostTask, *window2.WdPostSubmitTask, *window2.WdPostRecoverDeclareTask, error) {
+
+	// todo config
+	ft := window2.NewSimpleFaultTracker(stor, idx, pc.ParallelCheckLimit, pc.SingleCheckTimeout, pc.PartitionCheckTimeout)
+
+	computeTask, err := window2.NewWdPostTask(db, api, ft, stor, verif, paramck, chainSched, addresses, max, pc.ParallelCheckLimit, pc.SingleCheckTimeout, cuzkClient)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	submitTask, err := window2.NewWdPostSubmitTask(chainSched, sender, db, api, fc.MaxWindowPoStGasFee, as)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	recoverTask, err := window2.NewWdPostRecoverDeclareTask(sender, db, api, ft, as, chainSched, fc.MaxWindowPoStGasFee, addresses)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return computeTask, submitTask, recoverTask, nil
+}
+
+func StartTasks(ctx context.Context, dependencies *deps.Deps, shutdownChan chan struct{}) (*harmonytask.TaskEngine, error) {
+	cfg := dependencies.Cfg
+	db := dependencies.DB
+	full := dependencies.Chain
+	verif := dependencies.Verif
+	as := dependencies.As
+	maddrs := dependencies.Maddrs
+	stor := dependencies.Stor
+	lstor := dependencies.LocalStore
+	si := dependencies.Si
+	bstore := dependencies.Bstore
+	machine := dependencies.ListenAddr
+	prover := dependencies.Prover
+	iStore := dependencies.IndexStore
+
+	chainSched := chainsched.New(full)
+
+	var activeTasks []harmonytask.TaskInterface
+
+	sender, sendTask := message.NewSender(full, full, db, cfg.Fees.MaximizeFeeCap)
+	balanceMgrTask := balancemgr.NewBalanceMgrTask(db, full, chainSched, sender)
+	expmgrTask := expmgr.NewExpMgrTask(db, full, chainSched, sender)
+	activeTasks = append(activeTasks, sendTask, balanceMgrTask, expmgrTask)
+	dependencies.Sender = sender
+
+	// paramfetch
+	var fetchOnce sync.Once
+	var fetchResult atomic.Pointer[result.Result[bool]]
+
+	var asyncParams = func() func() (bool, error) {
+		fetchOnce.Do(func() {
+			go func() {
+				seenSizes := make(map[uint64]bool)
+
+				for spt := range dependencies.ProofTypes {
+					provingSize := uint64(must.One(spt.SectorSize()))
+					if seenSizes[provingSize] {
+						continue
+					}
+					seenSizes[provingSize] = true
+
+					err := fastparamfetch.GetParams(context.TODO(), proofparams.ParametersJSON(), proofparams.SrsJSON(), provingSize)
+
+					if err != nil {
+						log.Errorw("failed to fetch params", "error", err)
+						fetchResult.Store(&result.Result[bool]{Value: false, Error: err})
+						return
+					}
+				}
+
+				fetchResult.Store(&result.Result[bool]{Value: true})
+			}()
+		})
+
+		return func() (bool, error) {
+			res := fetchResult.Load()
+			if res == nil {
+				return false, nil
+			}
+			return res.Value, res.Error
+		}
+	}
+
+	// eth message sender as needed
+	var senderEth *message.SenderETH
+
+	// Initialize cuzk client if configured (shared across PoSt and sealing tasks)
+	var cuzkClient *cuzk.Client
+	if cfg.Cuzk.Address != "" {
+		cuzkClient = cuzk.NewClient(cfg.Cuzk.Address, cfg.Cuzk.MaxPending, cfg.Cuzk.ProveTimeout)
+		log.Infow("cuzk proving daemon enabled", "addr", cfg.Cuzk.Address, "maxPending", cfg.Cuzk.MaxPending, "proveTimeout", cfg.Cuzk.ProveTimeout)
+	}
+
+	///////////////////////////////////////////////////////////////////////
+	///// Task Selection
+	///////////////////////////////////////////////////////////////////////
+	{
+		// PoSt
+
+		if cfg.Subsystems.EnableWindowPost {
+			wdPostTask, wdPoStSubmitTask, derlareRecoverTask, err := WindowPostScheduler(
+				ctx, cfg.Fees, cfg.Proving, full, verif, asyncParams(), sender, chainSched,
+				as, maddrs, db, stor, si, cfg.Subsystems.WindowPostMaxTasks, cuzkClient)
+
+			if err != nil {
+				return nil, err
+			}
+			activeTasks = append(activeTasks, wdPostTask, wdPoStSubmitTask, derlareRecoverTask)
+		}
+
+		if cfg.Subsystems.EnableWinningPost {
+			store := dependencies.Stor
+			winPoStTask := winning.NewWinPostTask(cfg.Subsystems.WinningPostMaxTasks, db, store, verif, asyncParams(), full, maddrs, cuzkClient)
+			inclCkTask := winning.NewInclusionCheckTask(db, full)
+			activeTasks = append(activeTasks, winPoStTask, inclCkTask)
+
+			if os.Getenv("CURIO_DISABLE_F3") != "1" {
+				f3Task := f3.NewF3Task(db, full, maddrs)
+				activeTasks = append(activeTasks, f3Task)
+			}
+
+			// Warn if also running a sealing task
+			if cfg.Subsystems.EnableSealSDR || cfg.Subsystems.EnableSealSDRTrees || cfg.Subsystems.EnableSendPrecommitMsg || cfg.Subsystems.EnablePoRepProof || cfg.Subsystems.EnableMoveStorage || cfg.Subsystems.EnableSendCommitMsg || cfg.Subsystems.EnableUpdateEncode || cfg.Subsystems.EnableUpdateProve || cfg.Subsystems.EnableUpdateSubmit {
+				log.Error("It's unsafe to run PoSt and sealing tasks concurrently.")
+				dependencies.Alert.AddAlert("It's unsafe to run PoSt and sealing tasks concurrently.")
+			}
+		}
+	}
+
+	slrLazy := lazy.MakeLazy(func() (*ffi.SealCalls, error) {
+		return ffi.NewSealCalls(stor, lstor, si), nil
+	})
+
+	hasAnySealingTask := cfg.Subsystems.EnableSealSDR ||
+		cfg.Subsystems.EnableSealSDRTrees ||
+		cfg.Subsystems.EnableSendPrecommitMsg ||
+		cfg.Subsystems.EnablePoRepProof ||
+		cfg.Subsystems.EnableMoveStorage ||
+		cfg.Subsystems.EnableSendCommitMsg ||
+		cfg.Subsystems.EnableBatchSeal ||
+		cfg.Subsystems.EnableUpdateEncode ||
+		cfg.Subsystems.EnableUpdateProve ||
+		cfg.Subsystems.EnableUpdateSubmit ||
+		cfg.Subsystems.EnableCommP ||
+		cfg.Subsystems.EnableProofShare ||
+		cfg.Subsystems.EnableRemoteProofs
+
+	var p2Active sealsupra.P2Active
+	if hasAnySealingTask {
+		sealingTasks, p2a, err := addSealingTasks(ctx, hasAnySealingTask, db, full, sender, as, cfg, slrLazy, asyncParams, si, stor, bstore, machine, prover, cuzkClient)
+		if err != nil {
+			return nil, err
+		}
+		activeTasks = append(activeTasks, sealingTasks...)
+		p2Active = p2a
+	}
+
+	{
+		// Piece handling
+		if cfg.Subsystems.EnableParkPiece {
+			parkPieceTask, err := piece2.NewParkPieceTask(db, must.One(slrLazy.Val()), stor, cfg.Subsystems.ParkPieceMaxTasks, cfg.Subsystems.ParkPieceMaxInPark, p2Active, cfg.Subsystems.ParkPieceMinFreeStoragePercent)
+			if err != nil {
+				return nil, err
+			}
+			cleanupPieceTask := piece2.NewCleanupPieceTask(db, must.One(slrLazy.Val()), 0)
+			aggregateChunksTask := piece2.NewAggregateChunksTask(db, stor, must.One(slrLazy.Val()))
+			pfix := piece2.NewFixParkPieceTask(db, must.One(slrLazy.Val()))
+			activeTasks = append(activeTasks, parkPieceTask, cleanupPieceTask, aggregateChunksTask, pfix)
+		}
+	}
+
+	miners := config.Becomes(maddrs, func() []address.Address {
+		return lo.Map(maps.Keys(maddrs.Get()), func(k dtypes.MinerAddress, _ int) address.Address {
+			return address.Address(k)
+		})
+	})
+
+	amTask := alertmanager.NewAlertTask(full, db, cfg.Alerting)
+
+	{
+		var httpSD = servicedeps.Deps{
+			AlertTask: amTask,
+		}
+		var sdeps = cuhttp.ServiceDeps{
+			Deps: httpSD,
+		}
+		// Market tasks
+		var dm *storage_market.CurioStorageDealMarket
+		if cfg.Subsystems.EnableDealMarket {
+			// Main market poller should run on all nodes
+			dm = storage_market.NewCurioStorageDealMarket(miners, db, cfg, must.One(dependencies.EthClient.Val()), si, full, as, must.One(slrLazy.Val()))
+			err := dm.StartMarket(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			sdeps.DealMarket = dm
+
+			if cfg.Subsystems.EnableCommP {
+				commpTask := storage_market.NewCommpTask(dm, db, must.One(slrLazy.Val()), full, cfg.Subsystems.CommPMaxTasks, cfg.Subsystems.BindCommPToData)
+				activeTasks = append(activeTasks, commpTask)
+			}
+
+			aggTask := storage_market.NewAggregateTask(dm, db, must.One(slrLazy.Val()), lstor, full)
+			activeTasks = append(activeTasks, aggTask)
+
+			// PSD and Deal find task do not require many resources. They can run on all machines
+			psdTask := storage_market.NewPSDTask(dm, db, sender, as, &cfg.Market.StorageMarketConfig.MK12, full)
+			dealFindTask := storage_market.NewFindDealTask(dm, db, full, &cfg.Market.StorageMarketConfig.MK12)
+
+			checkIndexesTask := indexing.NewCheckIndexesTask(db, iStore)
+
+			activeTasks = append(activeTasks, psdTask, dealFindTask, checkIndexesTask)
+
+			// Start libp2p hosts and handle streams. This is a special function which calls the shutdown channel
+			// instead of returning the error. This design is to allow libp2p take over if required
+			go libp2p.NewDealProvider(ctx, db, cfg, dm.MK12Handler, full, sender, miners, machine, shutdownChan)
+		}
+		sc, err := slrLazy.Val()
+		if err != nil {
+			return nil, err
+		}
+
+		if cfg.Subsystems.EnablePDP {
+			if err := pdpnode.Attach(ctx, dependencies, &activeTasks, &httpSD, chainSched); err != nil {
+				return nil, err
+			}
+			senderEth = httpSD.EthSender
+		}
+
+		idxMax := taskhelp.Max(cfg.Subsystems.IndexingMaxTasks)
+
+		indexingTask := indexing.NewIndexingTask(db, sc, iStore, dependencies.SectorReader, dependencies.CachedPieceReader, cfg, idxMax)
+		ipniTask := indexing.NewIPNITask(db, cfg, idxMax, iStore)
+		fixRawSizeTask := storage_market.NewFixRawSize(db, sc, dependencies.SectorReader)
+		activeTasks = append(activeTasks, ipniTask, indexingTask, fixRawSizeTask)
+
+		sdeps.Deps = httpSD
+		if cfg.HTTP.Enable {
+			// TODO: Put this back once PDPv1 is also being used
+			//if !cfg.Subsystems.EnableDealMarket {
+			//	return nil, xerrors.New("deal market must be enabled on HTTP server")
+			//}
+			err = cuhttp.StartHTTPServer(ctx, dependencies, &sdeps)
+			if err != nil {
+				return nil, xerrors.Errorf("failed to start the HTTP server: %w", err)
+			}
+		}
+	}
+
+	activeTasks = append(activeTasks, amTask)
+
+	pcl := gc.NewPieceCleanupTask(db, iStore)
+	activeTasks = append(activeTasks, pcl)
+
+	log.Infow("This Curio instance handles",
+		"miner_addresses", miners,
+		"tasks", lo.Map(activeTasks, func(t harmonytask.TaskInterface, _ int) string { return t.TypeDetails().Name }))
+
+	ht, err := harmonytask.New(db, activeTasks, dependencies.ListenAddr, ffigpu.Inspector{})
+	if err != nil {
+		return nil, err
+	}
+	go machineDetails(dependencies, activeTasks, ht.ResourcesAvailable().MachineID, dependencies.Name)
+
+	*dependencies.MachineID = int64(ht.ResourcesAvailable().MachineID)
+
+	if hasAnySealingTask {
+		watcher, err := message.NewMessageWatcher(db, ht, chainSched, full)
+		if err != nil {
+			return nil, err
+		}
+		_ = watcher
+	}
+
+	if senderEth != nil {
+		watcherEth, err := message.NewMessageWatcherEth(db, ht, chainSched, must.One(dependencies.EthClient.Val()))
+		if err != nil {
+			return nil, err
+		}
+		_ = watcherEth
+
+	}
+
+	if chainSched.HasSubscribers() {
+		go chainSched.Run(ctx)
+	}
+
+	return ht, nil
+}
+
+func addSealingTasks(
+	ctx context.Context, hasAnySealingTask bool, db *harmonydb.DB, full api.Chain, sender *message.Sender,
+	as *multictladdr.MultiAddressSelector, cfg *config.CurioConfig, slrLazy *lazy.Lazy[*ffi.SealCalls],
+	asyncParams func() func() (bool, error), si paths.SectorIndex, stor *paths.Remote,
+	bstore curiochain.CurioBlockstore, machineHostPort string, prover storiface.Prover,
+	cuzkClient *cuzk.Client) ([]harmonytask.TaskInterface, sealsupra.P2Active, error) {
+	var activeTasks []harmonytask.TaskInterface
+
+	// Sealing / Snap
+
+	var sp *seal.SealPoller
+	var slr *ffi.SealCalls
+	if hasAnySealingTask {
+		sp = seal.NewPoller(db, full, cfg)
+		go sp.RunPoller(ctx)
+
+		slr = must.One(slrLazy.Val())
+	}
+
+	var slotMgr *slotmgr.SlotMgr
+	var addFinalize bool
+
+	// Auto-enable CPU:0 pipeline steps alongside their upstream work.
+	// Manual flags remain for cleanup-only nodes and for CPU-heavy companions (CommP, StorePiece, etc.).
+	enableSendPrecommitMsg := cfg.Subsystems.EnableSendPrecommitMsg || cfg.Subsystems.EnableSealSDRTrees
+	enableSendCommitMsg := cfg.Subsystems.EnableSendCommitMsg || cfg.Subsystems.EnablePoRepProof
+	enableMoveStorage := cfg.Subsystems.EnableMoveStorage || cfg.Subsystems.EnablePoRepProof || cfg.Subsystems.EnableSendCommitMsg
+	enableUpdateSubmit := cfg.Subsystems.EnableUpdateSubmit || cfg.Subsystems.EnableUpdateProve
+	enableSnapMoveStorage := cfg.Subsystems.EnableMoveStorage || cfg.Subsystems.EnableUpdateEncode || cfg.Subsystems.EnableUpdateProve
+
+	// NOTE: Tasks with the LEAST priority are at the top
+	if cfg.Subsystems.EnableCommP {
+		scrubUnsealedTask := scrub.NewCommDCheckTask(db, slr)
+		activeTasks = append(activeTasks, scrubUnsealedTask)
+	}
+
+	var p2Active sealsupra.P2Active
+	if cfg.Subsystems.EnableBatchSeal {
+		batchSealTask, sm, p2a, err := sealsupra.NewSupraSeal(
+			cfg.Seal.BatchSealSectorSize,
+			cfg.Seal.BatchSealBatchSize,
+			cfg.Seal.BatchSealPipelines,
+			!cfg.Seal.SingleHasherPerThread,
+			cfg.Seal.LayerNVMEDevices,
+			machineHostPort, db, full, stor, si, slr)
+		if err != nil {
+			return nil, nil, xerrors.Errorf("setting up batch sealer: %w", err)
+		}
+		slotMgr = sm
+		p2Active = p2a
+		activeTasks = append(activeTasks, batchSealTask)
+		addFinalize = true
+	}
+
+	if cfg.Subsystems.EnableSealSDR {
+		sdrMax := taskhelp.Max(cfg.Subsystems.SealSDRMaxTasks)
+
+		sdrTask := seal.NewSDRTask(full, db, sp, slr, sdrMax, cfg.Subsystems.SealSDRMinTasks)
+		keyTask := unseal.NewTaskUnsealSDR(slr, db, sdrMax, full)
+
+		activeTasks = append(activeTasks, sdrTask, keyTask)
+	}
+	if cfg.Subsystems.EnableSealSDRTrees {
+		treeDTask := seal.NewTreeDTask(sp, db, slr, cfg.Subsystems.SealSDRTreesMaxTasks, cfg.Subsystems.BindSDRTreeToNode)
+		treeRCTask := seal.NewTreeRCTask(sp, db, slr, cfg.Subsystems.SealSDRTreesMaxTasks)
+		synthTask := seal.NewSyntheticProofTask(sp, db, slr, cfg.Subsystems.SyntheticPoRepMaxTasks)
+		activeTasks = append(activeTasks, treeDTask, synthTask, treeRCTask)
+		addFinalize = true
+	}
+	if addFinalize {
+		finalizeTask := seal.NewFinalizeTask(cfg.Subsystems.FinalizeMaxTasks, sp, slr, db, slotMgr)
+		activeTasks = append(activeTasks, finalizeTask)
+	}
+
+	if enableSendPrecommitMsg {
+		precommitTask := seal.NewSubmitPrecommitTask(sp, db, full, sender, as, cfg)
+		activeTasks = append(activeTasks, precommitTask)
+	}
+	if cfg.Subsystems.EnablePoRepProof || cfg.Subsystems.EnableRemoteProofs {
+		porepTask := seal.NewPoRepTask(db, full, sp, slr, asyncParams(), cfg.Subsystems.EnablePoRepProof, cfg.Subsystems.PoRepProofMaxTasks, cuzkClient)
+		activeTasks = append(activeTasks, porepTask)
+	}
+	if enableMoveStorage {
+		moveStorageTask := seal.NewMoveStorageTask(sp, slr, db, cfg.Subsystems.MoveStorageMaxTasks)
+		activeTasks = append(activeTasks, moveStorageTask)
+	}
+	if cfg.Subsystems.EnableMoveStorage {
+		storePieceTask, err := piece2.NewStorePieceTask(db, must.One(slrLazy.Val()), stor, cfg.Subsystems.MoveStorageMaxTasks, cfg.Subsystems.ParkPieceMinFreeStoragePercent)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		activeTasks = append(activeTasks, storePieceTask)
+		if !cfg.Subsystems.EnableParkPiece {
+			// add cleanup if it's not added above with park piece
+			cleanupPieceTask := piece2.NewCleanupPieceTask(db, must.One(slrLazy.Val()), 0)
+			activeTasks = append(activeTasks, cleanupPieceTask)
+		}
+
+		if !cfg.Subsystems.NoUnsealedDecode {
+			unsealTask := unseal.NewTaskUnsealDecode(slr, db, cfg.Subsystems.MoveStorageMaxTasks, full)
+			activeTasks = append(activeTasks, unsealTask)
+		}
+	}
+	if enableSnapMoveStorage {
+		moveStorageSnapTask := snap.NewMoveStorageTask(slr, db, cfg.Subsystems.MoveStorageMaxTasks)
+		activeTasks = append(activeTasks, moveStorageSnapTask)
+	}
+	if enableSendCommitMsg {
+		commitTask := seal.NewSubmitCommitTask(sp, db, full, sender, as, cfg, prover)
+		activeTasks = append(activeTasks, commitTask)
+	}
+
+	if cfg.Subsystems.EnableUpdateEncode {
+		encodeTask := snap.NewEncodeTask(slr, db, cfg.Subsystems.UpdateEncodeMaxTasks, cfg.Subsystems.BindEncodeToData, cfg.Subsystems.AllowEncodeGPUOverprovision)
+		activeTasks = append(activeTasks, encodeTask)
+	}
+
+	// ScrubCommRCheck runs on nodes that can run supraseal TreeR (GPU nodes with PC2 or SnapEncode)
+	// Only register once even if both are enabled
+	if (cfg.Subsystems.EnablePoRepProof || cfg.Subsystems.EnableUpdateEncode) && scrub.CanRunSupraTreeR() {
+		scrubCommRTask := scrub.NewCommRCheckTask(db, slr)
+		activeTasks = append(activeTasks, scrubCommRTask)
+	}
+	if cfg.Subsystems.EnableUpdateProve || cfg.Subsystems.EnableRemoteProofs {
+		proveTask := snap.NewProveTask(slr, db, asyncParams(), cfg.Subsystems.EnableRemoteProofs, cfg.Subsystems.UpdateProveMaxTasks, cuzkClient)
+		activeTasks = append(activeTasks, proveTask)
+	}
+	if enableUpdateSubmit {
+		submitTask := snap.NewSubmitTask(db, full, bstore, sender, as, cfg)
+		activeTasks = append(activeTasks, submitTask)
+	}
+
+	if cfg.Subsystems.EnableProofShare {
+		requestProofsTask := proofshare.NewTaskRequestProofs(db, full, asyncParams())
+		provideSnarkTask := proofshare.NewTaskProvideSnark(db, asyncParams(), cfg.Subsystems.ProofShareMaxTasks, cuzkClient)
+		submitTask := proofshare.NewTaskSubmit(db, full)
+		autosettleTask := proofshare.NewTaskAutosettle(db, full, sender)
+		activeTasks = append(activeTasks, requestProofsTask, provideSnarkTask, submitTask, autosettleTask)
+	}
+
+	if cfg.Subsystems.EnableRemoteProofs {
+		router := common.NewServiceCustomSend(full, nil)
+		remoteUploadTask := proofshare.NewTaskClientUpload(db, full, stor, router, cfg.Subsystems.RemoteProofMaxUploads)
+		remotePollTask := proofshare.NewTaskClientPoll(db, full)
+		remoteSendTask := proofshare.NewTaskClientSend(db, full, router)
+		activeTasks = append(activeTasks, remoteUploadTask, remotePollTask, remoteSendTask)
+	}
+
+	// harmony treats the first task as highest priority, so reverse the order
+	// (we could have just appended to this list in the reverse order, but defining
+	//  tasks in pipeline order is more intuitive)
+	slices.Reverse(activeTasks)
+
+	if hasAnySealingTask {
+		// Sealing nodes maintain storage index when bored
+		storageEndpointGcTask := gc.NewStorageEndpointGC(si, stor, db)
+		pipelineGcTask := gc.NewPipelineGC(db)
+		storageGcSweepTask := gc.NewStorageGCSweep(db, stor, si)
+
+		activeTasks = append(activeTasks, storageEndpointGcTask, pipelineGcTask, storageGcSweepTask)
+
+		if !disableActorMetadataTasks() {
+			storageGcMarkTask := gc.NewStorageGCMark(si, stor, db, bstore, full)
+			sectorMetadataTask := metadata.NewSectorMetadataTask(db, bstore, full)
+			activeTasks = append(activeTasks, storageGcMarkTask, sectorMetadataTask)
+		} else {
+			log.Warn("CURIO_DISABLE_ACTOR_METADATA_TASKS is set; StorageGCMark and SectorMetadata tasks are disabled")
+		}
+	}
+
+	return activeTasks, p2Active, nil
+}
+
+func disableActorMetadataTasks() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CURIO_DISABLE_ACTOR_METADATA_TASKS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func machineDetails(deps *deps.Deps, activeTasks []harmonytask.TaskInterface, machineID int, machineName string) {
+	taskNames := lo.Map(activeTasks, func(item harmonytask.TaskInterface, _ int) string {
+		return item.TypeDetails().Name
+	})
+
+	doMachineDetails := func() {
+		miners := lo.Map(maps.Keys(deps.Maddrs.Get()), func(item dtypes.MinerAddress, _ int) string {
+			return address.Address(item).String()
+		})
+		sort.Strings(miners)
+
+		_, err := deps.DB.Exec(context.Background(), `INSERT INTO harmony_machine_details 
+		(tasks, layers, startup_time, miners, machine_id, machine_name, version) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (machine_id) DO UPDATE SET tasks=$1, layers=$2, startup_time=$3, miners=$4, machine_id=$5, machine_name=$6, version=$7`,
+			strings.Join(taskNames, ","), strings.Join(deps.Layers, ","),
+			time.Now(), strings.Join(miners, ","), machineID, machineName, curiobuild.ClusterMachineVersionLabel())
+
+		if err != nil {
+			log.Errorf("failed to update machine details: %s", err)
+			return
+		}
+
+		// maybePostWarning
+		if !lo.Contains(taskNames, "WdPost") && !lo.Contains(taskNames, "WinPost") {
+			// Maybe we aren't running a PoSt for these miners?
+			var allMachines []struct {
+				MachineID int    `db:"machine_id"`
+				Miners    string `db:"miners"`
+				Tasks     string `db:"tasks"`
+			}
+			err := deps.DB.Select(context.Background(), &allMachines, `SELECT machine_id, miners, tasks FROM harmony_machine_details`)
+			if err != nil {
+				log.Errorf("failed to get machine details: %s", err)
+				return
+			}
+
+			for _, miner := range miners {
+				var myPostIsHandled bool
+				for _, m := range allMachines {
+					if !lo.Contains(strings.Split(m.Miners, ","), miner) {
+						continue
+					}
+					if lo.Contains(strings.Split(m.Tasks, ","), "WdPost") && lo.Contains(strings.Split(m.Tasks, ","), "WinPost") {
+						myPostIsHandled = true
+						break
+					}
+				}
+				if !myPostIsHandled {
+					log.Errorf("No PoSt tasks are running for miner %s. Start handling PoSts immediately with:\n\tcurio run --layers=\"post\" ", miner)
+				}
+			}
+		}
+	}
+	doMachineDetails()
+	deps.Maddrs.OnChange(doMachineDetails)
+}

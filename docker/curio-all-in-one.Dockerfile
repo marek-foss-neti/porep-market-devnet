@@ -99,6 +99,14 @@ RUN mkdir -p build \
          CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
          CURIO_TAGS="${CURIO_TAGS}"
 
+RUN cd extern/filecoin-ffi/rust \
+    && CARGO_BUILD_JOBS=2 \
+       cargo build --release \
+         --bin porep-proof-microbench \
+         --locked \
+         --no-default-features \
+         --features multicore-sdr
+
 FROM ${GO_BUILDER_IMAGE} AS lotus-builder
 
 RUN apt-get update \
@@ -132,6 +140,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY --from=lotus-source / .
+COPY --from=harness-overlay source-overrides/lotus/build/ /opt/lotus/build/
 RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
 COPY --from=rust-fil-proofs-local / /opt/lotus/extern/rust-fil-proofs
 COPY --from=harness-overlay source-overrides/filecoin-ffi/ /opt/lotus/extern/filecoin-ffi/
@@ -211,6 +220,7 @@ COPY --from=lotus-builder /opt/lotus/lotus-shed /usr/local/bin/lotus-shed
 COPY --from=lotus-builder /opt/lotus/lotus-miner /usr/local/bin/lotus-miner
 COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio
 COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool
+COPY --from=curio-builder /opt/curio/extern/filecoin-ffi/rust/target/release/porep-proof-microbench /usr/local/bin/porep-proof-microbench
 COPY --from=service-tool-builder /go/bin/car /usr/local/bin/car
 COPY --from=service-tool-builder /go/bin/piece-server /usr/local/bin/piece-server
 COPY --from=service-tool-builder /go/bin/storetheindex /usr/local/bin/storetheindex
@@ -225,6 +235,7 @@ RUN useradd -r -u 532 -U fc \
       /var/lib/lotus \
       /var/lib/lotus-miner \
       /var/tmp/filecoin-proof-parameters \
+      /var/tmp/filecoin-zigzag-proof-sidecars \
     && printf '%s\n' 'libnvidia-opencl.so.1' > /etc/OpenCL/vendors/nvidia.icd \
     && chown fc: \
       /var/lib/curio \
@@ -232,7 +243,8 @@ RUN useradd -r -u 532 -U fc \
       /var/lib/indexer \
       /var/lib/lotus \
       /var/lib/lotus-miner \
-      /var/tmp/filecoin-proof-parameters
+      /var/tmp/filecoin-proof-parameters \
+      /var/tmp/filecoin-zigzag-proof-sidecars
 
 ARG CURIO_COMMIT
 ARG LOTUS_COMMIT

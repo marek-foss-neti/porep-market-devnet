@@ -91,7 +91,10 @@ func zigzagDevnetProof(proof abi.RegisteredSealProof) bool {
 		return false
 	}
 
-	return sectorSize == abi.SectorSize(2<<10) || sectorSize == abi.SectorSize(8<<20)
+	return sectorSize == abi.SectorSize(2<<10) ||
+		sectorSize == abi.SectorSize(8<<20) ||
+		sectorSize == abi.SectorSize(512<<20) ||
+		sectorSize == abi.SectorSize(32<<30)
 }
 
 func padZigZagUnsealed(unpaddedPath, paddedPath string) error {

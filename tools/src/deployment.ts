@@ -8,6 +8,7 @@ const CID_PATTERN = /^baf[a-z2-7]{20,}$/;
 const PROVIDER_PATTERN = /^t0[0-9]+$/;
 const DEPLOYMENT_ID_PATTERN = /^deployment-[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const PROOF_BACKEND_PATTERN = /^(stacked|zigzag)$/;
+const SECTOR_SIZE_SELECTOR_PATTERN = /^(2kib|8mib|512mib|32gib)$/;
 
 export const deploymentContractNames = [
   "MockUSDC",
@@ -72,6 +73,7 @@ export interface DeploymentRuntimeIdentity {
   chainId: number;
   provider: string;
   proofBackend?: "stacked" | "zigzag";
+  sectorSizeSelector?: "2kib" | "8mib" | "512mib" | "32gib";
 }
 
 export type RevisionContract = {
@@ -89,7 +91,13 @@ export type DeploymentRevision = {
   parentRevision: number | null;
   generatedAt: string;
   chain: DeploymentRuntimeIdentity & { epoch: number };
-  proof: { backend: "stacked" | "zigzag" };
+  proof: {
+    backend: "stacked" | "zigzag";
+    sectorSize: {
+      selector: "2kib" | "8mib" | "512mib" | "32gib";
+      bytes: number;
+    };
+  };
   target: ContractTarget;
   identities: Record<string, string>;
   contracts: Record<string, RevisionContract>;
@@ -128,8 +136,22 @@ export function parseDeploymentRevision(source: string): DeploymentRevision {
     epoch: integer(chainValue.epoch, "chain.epoch"),
   };
   const proofValue = record(root.proof, "proof");
+  const sectorSizeValue = record(proofValue.sectorSize, "proof.sectorSize");
+  const sectorSizeSelector = matchingString(
+    sectorSizeValue.selector,
+    SECTOR_SIZE_SELECTOR_PATTERN,
+    "proof.sectorSize.selector",
+  ) as "2kib" | "8mib" | "512mib" | "32gib";
+  const sectorSizeBytes = integer(sectorSizeValue.bytes, "proof.sectorSize.bytes");
+  if (sectorSizeBytes !== sectorSizeBytesForSelector(sectorSizeSelector)) {
+    throw new Error("deployment revision proof.sectorSize.bytes mismatch");
+  }
   const proof = {
     backend: matchingString(proofValue.backend, PROOF_BACKEND_PATTERN, "proof.backend") as "stacked" | "zigzag",
+    sectorSize: {
+      selector: sectorSizeSelector,
+      bytes: sectorSizeBytes,
+    },
   };
   const targetValue = record(root.target, "target");
   const mode = targetValue.mode;
@@ -239,6 +261,12 @@ export function assertDeploymentRevisionMatchesRuntime(
   if (runtime.proofBackend !== undefined && revision.proof.backend !== runtime.proofBackend) {
     throw new Error("deployment proof backend is stale");
   }
+  if (
+    runtime.sectorSizeSelector !== undefined
+    && revision.proof.sectorSize.selector !== runtime.sectorSizeSelector
+  ) {
+    throw new Error("deployment sector size is stale");
+  }
 }
 
 export function requireDeploymentContracts(
@@ -260,6 +288,7 @@ export function formatDeploymentRevisionAddresses(revision: DeploymentRevision):
     ["generation", revision.chain.generation],
     ["provider", revision.chain.provider],
     ["proofBackend", revision.proof.backend],
+    ["sectorSize", revision.proof.sectorSize.selector],
   ];
   for (const [name, address] of Object.entries(revision.identities).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push([`identity.${name}`, address]);
@@ -420,6 +449,15 @@ function integer(value: unknown, field: string): number {
     throw new Error(`deployment manifest ${field} must be a non-negative integer`);
   }
   return value;
+}
+
+function sectorSizeBytesForSelector(value: "2kib" | "8mib" | "512mib" | "32gib"): number {
+  switch (value) {
+    case "2kib": return 2 * 1024;
+    case "8mib": return 8 * 1024 * 1024;
+    case "512mib": return 512 * 1024 * 1024;
+    case "32gib": return 32 * 1024 * 1024 * 1024;
+  }
 }
 
 function boolean(value: unknown, field: string): boolean {

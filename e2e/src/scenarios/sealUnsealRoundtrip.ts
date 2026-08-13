@@ -16,6 +16,7 @@ import {
   setCurioUnsealTarget,
   unsealWaitStepName,
   waitForCurioUnseal,
+  waitForCurioSectorPiece,
   waitForSealedOnly,
 } from "../devnet/curioUnseal.js";
 import { submitCurioNotification, waitForCurioSector } from "../devnet/curio.js";
@@ -32,6 +33,9 @@ export async function runSealUnsealRoundtrip(
   context: ScenarioContext,
   options: SealUnsealRoundtripOptions = {},
 ): Promise<void> {
+  context.state.set("DEVNET_PROOF_BACKEND", context.config.proofBackend);
+  context.state.set("DEVNET_SECTOR_SIZE", context.config.sectorSizeSelector);
+  context.state.set("DEVNET_SECTOR_SIZE_BYTES", context.config.sectorSizeBytes);
   const resumeRunDir = envValue(context, "SEAL_UNSEAL_RESUME_RUN_DIR").trim();
   if (resumeRunDir) {
     if (options.benchmark) {
@@ -77,8 +81,8 @@ async function completeFreshSealUnsealRoundtrip(
     submitCurioNotification(context, piece, context.config.addresses.notificationReceiver));
   const pipeline = await runStep(context, "wait for seal and prove-commit", () =>
     waitForCurioSector(context, deal.dealId));
-  const sectorPiece = await runStep(context, "resolve durable sector piece range", () => {
-    const value = readCurioSectorPiece(context, deal.dealId, piece.pieceCid);
+  const sectorPiece = await runStep(context, "resolve durable sector piece range", async () => {
+    const value = await waitForCurioSectorPiece(context, deal.dealId, piece.pieceCid);
     assert.equal(value.sector, pipeline.sector);
     assert.equal(value.pieceCid, piece.pieceCid);
     assert.equal(value.pieceSize, Number(piece.pieceSize));

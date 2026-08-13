@@ -20,7 +20,9 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/devnet-upgrade.sh
     scripts/devnet-test-upgrade.sh
     scripts/bench-proof-backends.sh
+    scripts/bench-proof-micro.sh
     docker/compose.curio-devnet.yaml
+    source-overrides/curio/scripts/makefiles/10-deps.mk
     source-overrides/curio/cmd/sptool/toolbox_deal_client.go
     source-overrides/curio/lib/ffi/unseal_funcs.go
     source-overrides/curio/market/mk20/ddo_v1.go
@@ -29,9 +31,12 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/curio/tasks/unseal/task_unseal_sdr.go
     source-overrides/filecoin-ffi/rust/Cargo.lock
     source-overrides/filecoin-ffi/rust/Cargo.toml
+    source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
     source-overrides/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/fvm-4.8.2-zigzag/Cargo.toml
+    source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs
     source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs
+    source-overrides/lotus/build/buildconstants/devnet_network_bundle.go
     source-overrides/lotus/entrypoint.sh
     tools/test/devnet.test.ts
   )
@@ -42,7 +47,7 @@ if [[ -f versions.lock.yaml ]]; then
     }
   done
 
-  bash -n scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh
+  bash -n scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh
   rg -q '^build:' justfile
   if rg -n -i \
     '(latest|@master|@main|foundryup|nodesource|git[[:space:]]+clone|git[[:space:]]+submodule[[:space:]]+update)' \

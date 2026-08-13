@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  firehorseEpochForSectorSize,
   inspectDevnetStatus,
   inspectRenderedCompose,
   parseComposeRuntimeContract,
@@ -57,7 +58,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   }
 
   if (
-    (args.length === 7 || args.length === 8)
+    (args.length === 7 || args.length === 8 || args.length === 9)
     && args[0] === "deployment"
     && args[1] === "revision"
     && args[2] === "inspect"
@@ -73,6 +74,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       chainId,
       provider: args[6] ?? "",
       ...(args[7] === undefined ? {} : { proofBackend: normalizeProofBackend(args[7]) }),
+      ...(args[8] === undefined ? {} : { sectorSizeSelector: normalizeSectorSizeSelector(args[8]) }),
     });
     console.log("deployment revision is current");
     return;
@@ -157,7 +159,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       || contract.curioShortCommit !== curio.commit.slice(0, 12)
       || !contract.filecoinServicesSource.endsWith(`/${filecoinServices.name}/${filecoinServices.commit}`)
       || !contract.multicall3Source.endsWith(`/${multicall3.name}/${multicall3.commit}`)
-      || contract.firehorseHeight !== String(runtimeLock.network.firehorse.epoch)
+      || contract.firehorseHeight !== String(firehorseEpochForSectorSize(contract.sectorSizeSelector, runtimeLock))
       || contract.yugabyteImage !== runtimeLock.images.yugabyte.resolvedReference.replace(/^docker\.io\//, "")
     ) {
       throw new Error("compose environment does not match the immutable lock");
@@ -249,7 +251,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   throw new Error(
     "usage: cli.ts deployment inspect <generation> <genesis-cid> <chain-id> <provider> | "
     + "deployment addresses | deployment revision inspect <generation> <genesis-cid> "
-    + "<chain-id> <provider> [proof-backend] | deployment revision addresses | "
+    + "<chain-id> <provider> [proof-backend] [sector-size] | deployment revision addresses | "
     + "devnet status inspect | devnet compose inspect <compose.env> | "
     + "contract-target prepare <deployment-seed> [--source <absolute-path>] | "
     + "runtime lock verify | lock verify | sources fetch | sources verify",
@@ -288,6 +290,11 @@ function matchesThree(args: string[], first: string, second: string, third: stri
 function normalizeProofBackend(value: string): "stacked" | "zigzag" {
   if (value === "stacked" || value === "zigzag") return value;
   throw new Error("proof backend must be stacked or zigzag");
+}
+
+function normalizeSectorSizeSelector(value: string): "2kib" | "8mib" | "512mib" | "32gib" {
+  if (value === "2kib" || value === "8mib" || value === "512mib" || value === "32gib") return value;
+  throw new Error("sector size must be 2kib, 8mib, 512mib, or 32gib");
 }
 
 function printState(state: SourceState): void {

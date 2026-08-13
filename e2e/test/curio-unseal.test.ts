@@ -106,5 +106,6 @@ test("resolves the proof backend used by the seal-unseal scenario", () => {
     },
   );
   assert.equal(resolveProofBackendFromEnv({}, 6).backend, "sdr");
-  assert.equal(resolveProofBackendFromEnv({ FIL_PROOFS_USE_ZIGZAG: "true" }, 8).backend, "sdr");
+  assert.equal(resolveProofBackendFromEnv({ FIL_PROOFS_USE_ZIGZAG: "true" }, 8).backend, "zigzag");
+  assert.equal(resolveProofBackendFromEnv({ FIL_PROOFS_USE_ZIGZAG: "true" }, 9).backend, "sdr");
 });

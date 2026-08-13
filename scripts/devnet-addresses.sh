@@ -26,12 +26,13 @@ chain_id="$(jq -r '.chain.chainId' "${DEVNET_RUNTIME_DIR}/status/latest.json")"
 chain_id="$((chain_id))"
 provider="$(jq -r '.miner.provider' "${DEVNET_RUNTIME_DIR}/status/latest.json")"
 proof_backend="$(jq -r '.proof.backend' "${DEVNET_RUNTIME_DIR}/status/latest.json")"
+sector_size_selector="$(jq -r '.sector.selector' "${DEVNET_RUNTIME_DIR}/status/latest.json")"
 genesis_cid="$(
   devnet_compose exec -T lotus lotus chain list --epoch 0 --count 1 --format '<tipset>' |
     tr -d '\r\n'
 )"
 
 npm --prefix "${DEVNET_ROOT}/tools" run --silent cli -- deployment revision inspect \
-  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" <"${manifest}" >/dev/null
+  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" "${sector_size_selector}" <"${manifest}" >/dev/null
 devnet_verify_deployment_code "${manifest}"
 npm --prefix "${DEVNET_ROOT}/tools" run --silent cli -- deployment revision "${output}" <"${manifest}"

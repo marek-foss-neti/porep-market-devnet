@@ -8,6 +8,7 @@ import {
   resolveProofBackend,
   setCurioUnsealTarget,
   waitForCurioUnseal,
+  waitForCurioSectorPiece,
   waitForSealedOnly,
   type CurioSectorPiece,
   type CurioStorageState,
@@ -58,8 +59,8 @@ export async function runBenchRetrieval(context: ScenarioContext): Promise<void>
     submitCurioNotification(context, piece, context.config.addresses.notificationReceiver));
   const pipeline = await runStep(context, "wait for seal and prove-commit", () =>
     waitForCurioSector(context, deal.dealId));
-  const sectorPiece = await runStep(context, "resolve durable sector piece range", () => {
-    const value = readCurioSectorPiece(context, deal.dealId, piece.pieceCid);
+  const sectorPiece = await runStep(context, "resolve durable sector piece range", async () => {
+    const value = await waitForCurioSectorPiece(context, deal.dealId, piece.pieceCid);
     assert.equal(value.sector, pipeline.sector);
     assert.equal(value.pieceCid, piece.pieceCid);
     assert.equal(value.pieceSize, Number(piece.pieceSize));

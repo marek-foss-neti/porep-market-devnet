@@ -23,10 +23,19 @@ just bench-proof-backends
 ```
 
 `just bench-proof-backends` runs isolated fresh-devnet benchmarks for both
-backends. By default it runs ZigZag first, prewarms missing ZigZag proof
-parameters outside measured windows, resets and deploys a fresh ZigZag devnet,
-runs the deliver/seal/unseal/retrieval benchmark, then repeats the same flow for
-Stacked.
+backends. It first prewarms the exact PoRep Groth parameters for each selected
+backend and sector size outside measured windows. By default it then runs ZigZag
+first, performs a ZigZag correctness prewarm on a fresh devnet, resets and
+deploys a measured fresh ZigZag devnet, runs the deliver/seal/unseal/retrieval
+benchmark, then repeats the measured flow for Stacked.
+
+The default sector size is `8mib`. To run the same canonical comparison on a
+larger registered sector size, pass the selector explicitly:
+
+```sh
+just bench-proof-backends 512mib
+just bench-proof-backends 32gib
+```
 
 The comparison report is written to:
 
@@ -41,22 +50,81 @@ Use manual runs when you want to inspect one backend before running the full
 comparison.
 
 ```sh
-just reset zigzag
+just reset zigzag 8mib
 just deploy
 just test-deliver-seal-unseal-retrieval active
 just bench-deliver-seal-unseal-retrieval active
 ```
 
 ```sh
-just reset stacked
+just reset stacked 8mib
 just deploy
 just test-deliver-seal-unseal-retrieval active
 just bench-deliver-seal-unseal-retrieval active
 ```
 
-`just reset <backend>` is the backend switch. It creates a fresh local chain,
-Curio database, sectors, and piece park for that backend while preserving the
-proof parameter cache under `.cache/proof-parameters/`.
+`just reset <backend> <sector-size>` is the backend and sector-size switch. It
+creates a fresh local chain, Curio database, sectors, and piece park for that
+identity while preserving the proof parameter cache under
+`.cache/proof-parameters/`.
+
+## Proof Microbenchmarks
+
+Use the microbench when the end-to-end benchmark says which backend is slower
+and you want to see the lower-level proof phase responsible for it.
+
+```sh
+just bench-proof-micro zigzag 8mib
+just bench-proof-micro stacked 8mib
+just bench-proof-micro-backends 8mib
+```
+
+These runs do not start Curio or Lotus. They execute pre-commit, prove,
+verify, and raw unseal inside the built `curio-all-in-one` image and write
+reports under:
+
+```text
+.runtime/runs/<timestamp>-bench-proof-micro-<backend>-<sector>/summary.md
+```
+
+The default microbench is safe for `2kib` and `8mib`. Larger Stacked/SDR sector
+experiments require an explicit opt-in:
+
+```sh
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro zigzag 512mib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 512mib
+```
+
+ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
+`32gib` is the larger production-size target; use it only with enough Docker
+memory, disk, proof parameters, and time budget.
+
+The first full devnet run for `512mib` or `32gib` can also make Lotus fetch
+large production proof parameters before Curio creates its market config. The
+lifecycle wait is longer for these selectors and prints proof-cache heartbeats;
+override it with `DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS` only when you know
+the local cache is already warm or the network is unusually slow.
+
+Before each measured microbench run, the script prewarms the exact PoRep Groth
+parameters for the selected backend and sector size in a separate container.
+The first large-sector run may therefore spend significant time creating
+missing `.params` and `.vk` files under `.cache/proof-parameters/`, recorded in
+`param-prewarm.json`; that prewarm time is kept out of the measured proof
+phases. Stacked microbench parameter generation is isolated under the run
+directory so it cannot overwrite production Filecoin proof parameters used by
+Lotus. ZigZag prewarm still uses `.cache/proof-parameters/` because those
+parameters are devnet-specific and must be visible to the ZigZag verifier.
+
+The prewarm records the exact parameter cache id and verifies that the cached
+`.vk` matches the Groth params for that id, rewriting only a stale `.vk` when
+necessary before measurements begin. While prewarm is running, the terminal
+prints a heartbeat with elapsed time, proof-parameter cache size, the newest
+cache file, and the latest prewarm log line. Tune it with
+`DEVNET_PROGRESS_INTERVAL_SECONDS`, for example:
+
+```sh
+DEVNET_PROGRESS_INTERVAL_SECONDS=5 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 512mib
+```
 
 ## Reading Results
 
@@ -90,10 +158,23 @@ Useful knobs:
 BENCH_BACKEND_ORDER=zigzag,stacked just bench-proof-backends
 BENCH_BACKEND_ORDER=stacked,zigzag just bench-proof-backends
 BENCH_REPETITIONS=3 just bench-proof-backends
+BENCH_REPETITIONS=3 just bench-proof-backends 512mib
 BENCH_RESOURCE_SAMPLE_INTERVAL_MS=250 just bench-proof-backends
 DEVNET_PROGRESS_INTERVAL_SECONDS=10 just bench-proof-backends
 DEVNET_PROGRESS=0 just bench-proof-backends
 ```
+
+The comparison runner treats proof parameters and ZigZag proof sidecars
+separately. Static ZigZag Groth16 `*.params` and `*.vk` files are prewarmed
+outside measured windows and recorded in
+`.cache/proof-parameters/.zigzag-devnet-prewarm.json`. Per-sector ZigZag proof
+sidecars are runtime artifacts under `.runtime/devnet/zigzag-proof-sidecars` and
+are cleared by every fresh reset.
+
+The runnable devnet sector selector is `2kib|8mib|512mib|32gib`, defaulting to
+`8mib`. It must be chosen before genesis/pre-seal, so changing it requires a
+fresh reset. `1gib`, `2gib`, `4gib`, and `8gib` are not registered Filecoin
+seal proof sizes in this dependency set.
 
 Lifecycle progress messages are printed outside measured benchmark windows, so
 they make reset/deploy/readiness waits visible without changing the recorded

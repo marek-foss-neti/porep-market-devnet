@@ -50,6 +50,7 @@ safer-ffi = { version = "0.1.13", features = ["proc_macros"] }
 filecoin-proofs-api = { version = "19.1", default-features = false }
 filecoin-proofs-zigzag = { package = "filecoin-proofs", version = "19.1", default-features = false }
 storage-proofs-core-zigzag = { package = "storage-proofs-core", version = "19.1", default-features = false }
+storage-proofs-porep-zigzag = { package = "storage-proofs-porep", version = "19.1", default-features = false }
 yastl = "0.1.2"
 
 [patch.crates-io]

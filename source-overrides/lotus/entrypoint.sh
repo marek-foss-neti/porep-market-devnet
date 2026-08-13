@@ -2,7 +2,7 @@
 set -e
 
 without_zigzag_proofs() {
-	env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS "$@"
+	env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR "$@"
 }
 
 if [ ! -f $LOTUS_PATH/.init.params ]; then

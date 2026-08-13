@@ -527,8 +527,10 @@ function renderBenchmarkResources(summary: RunSummary): string[] {
 function renderBenchmarkEnvironment(summary: RunSummary): string[] {
   const rows = [
     environmentRow("Proof backend selector", summary.state.DEVNET_PROOF_BACKEND),
+    environmentRow("Sector size selector", sectorSelectorLabel(summary)),
     environmentRow("Runtime proof path", summary.state.PROOF_BACKEND),
     environmentRow("Proof parameter cache", proofParameterCacheLabel(summary)),
+    environmentRow("ZigZag sidecars", zigzagSidecarLabel(summary)),
     environmentRow("Curio source commit", shortCommit(summary.state.DEVNET_CURIO_COMMIT ?? summary.state.STATUS_CURIO_COMMIT)),
     environmentRow("Lotus source commit", shortCommit(summary.state.DEVNET_LOTUS_COMMIT ?? summary.state.STATUS_LOTUS_COMMIT)),
     environmentRow("Build platform", summary.state.DEVNET_IMAGE_PLATFORM ?? summary.state.STATUS_IMAGE_PLATFORM),
@@ -548,6 +550,15 @@ function renderBenchmarkEnvironment(summary: RunSummary): string[] {
   ];
 }
 
+function sectorSelectorLabel(summary: RunSummary): string | undefined {
+  const selector = summary.state.DEVNET_SECTOR_SIZE ?? summary.state.STATUS_SECTOR_SIZE;
+  const bytes = formatRecordedBytes(
+    summary.state.DEVNET_SECTOR_SIZE_BYTES ?? summary.state.STATUS_SECTOR_SIZE_BYTES,
+  );
+  if (selector === undefined && bytes === undefined) return undefined;
+  return [selector, bytes].filter((value) => value !== undefined).join(" / ");
+}
+
 function environmentRow(label: string, value: string | undefined): string | undefined {
   if (value === undefined || value.length === 0) return undefined;
   return `| ${escapeMarkdown(label)} | ${escapeMarkdown(value)} |`;
@@ -560,6 +571,18 @@ function proofParameterCacheLabel(summary: RunSummary): string | undefined {
   const bytes = numberFromState(summary, "PROOF_PARAMETER_CACHE_BYTES");
   return [
     status,
+    files === undefined ? undefined : `${files} files`,
+    bytes === undefined ? undefined : formatBytesHuman(bytes),
+  ].filter((value): value is string => value !== undefined).join(", ");
+}
+
+function zigzagSidecarLabel(summary: RunSummary): string | undefined {
+  const directory = summary.state.ZIGZAG_SIDECAR_DIR;
+  const files = numberFromState(summary, "ZIGZAG_SIDECAR_FILE_COUNT");
+  const bytes = numberFromState(summary, "ZIGZAG_SIDECAR_BYTES");
+  if (directory === undefined && files === undefined && bytes === undefined) return undefined;
+  return [
+    directory,
     files === undefined ? undefined : `${files} files`,
     bytes === undefined ? undefined : formatBytesHuman(bytes),
   ].filter((value): value is string => value !== undefined).join(", ");

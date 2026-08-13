@@ -24,6 +24,7 @@ WORKDIR /app
 RUN mkdir -p /app
 
 COPY entrypoint.sh /app
+RUN perl -0pi -e 's/lotus wait-api/lotus wait-api --timeout "\${LOTUS_WAIT_API_TIMEOUT:-10m}"/g' /app/entrypoint.sh
 
 USER root
 

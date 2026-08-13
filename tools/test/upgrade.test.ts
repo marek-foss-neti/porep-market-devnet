@@ -140,7 +140,7 @@ function deployment(): DeploymentRevision {
       epoch: 10,
       provider: "t01004",
     },
-    proof: { backend: "stacked" },
+    proof: { backend: "stacked", sectorSize: { selector: "8mib", bytes: 8_388_608 } },
     target: {
       mode: "locked", sourcePath: "/tmp/source", snapshotPath: "/tmp/old",
       commit: "a".repeat(40), dirty: false, submodules: {},

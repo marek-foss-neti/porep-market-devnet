@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   assertCurioStatus,
   buildMk20DealArgs,
+  curioMarketCompletionRequired,
+  curioSectorReady,
   filecoinAddressFromEvmStat,
   notificationPayloadHex,
   parseAllocationId,
@@ -81,4 +83,20 @@ test("parseAllocationId selects the newest matching allocation", () => {
       "9": { Data: { "/": "baga-piece" } },
     },
   }), "baga-piece"), 9n);
+});
+
+test("Curio sector readiness keeps market completion by default but permits large-sector testing actor bookkeeping gaps", () => {
+  const sealedButIncomplete = {
+    id: "deal-a",
+    sector: 7,
+    sealed: true,
+    complete: false,
+    allocationId: 2,
+    pieceCid: "baga-piece",
+  };
+  assert.equal(curioSectorReady(sealedButIncomplete), false);
+  assert.equal(curioSectorReady(sealedButIncomplete, { requireMarketComplete: false }), true);
+  assert.equal(curioMarketCompletionRequired("8mib"), true);
+  assert.equal(curioMarketCompletionRequired("512mib"), false);
+  assert.equal(curioMarketCompletionRequired("32gib"), false);
 });

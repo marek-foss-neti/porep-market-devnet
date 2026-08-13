@@ -4,6 +4,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/devnet-common.sh"
 
 devnet_require_command docker
 backend="$(devnet_requested_proof_backend "${1:-}")"
+sector_size="$(devnet_requested_sector_size "${2:-}")"
 devnet_require_runtime_tree
 devnet_require_owned_path "${DEVNET_DATA_DIR}" "${DEVNET_RUNTIME_DIR}/data"
 devnet_require_ownership_marker
@@ -35,6 +36,7 @@ node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" \
 for directory in \
   "${DEVNET_DATA_DIR}" \
   "${DEVNET_LOG_DIR}" \
+  "${DEVNET_ZIGZAG_SIDECAR_DIR}" \
   "${DEVNET_RUNTIME_DIR}/status" \
   "${DEVNET_ROOT}/.runtime/fixtures"; do
   if [[ -e "${directory}" ]]; then
@@ -45,6 +47,7 @@ done
 rm -f -- \
   "${DEVNET_COMPOSE_ENV}" \
   "${DEVNET_PROOF_BACKEND_FILE}" \
+  "${DEVNET_SECTOR_SIZE_FILE}" \
   "${DEVNET_RUNTIME_DIR}/generation" \
   "${DEVNET_ROOT}/.runtime/deployments/active.json"
 
@@ -57,3 +60,4 @@ fi
 mkdir -p "${DEVNET_DATA_DIR}"
 devnet_prepare_runtime
 devnet_write_proof_backend "${backend}"
+devnet_write_sector_size "${sector_size}"

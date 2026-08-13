@@ -37,12 +37,13 @@ generation="$(jq -r '.generation' "${status}")"
 chain_id="$(($(jq -r '.chain.chainId' "${status}")))"
 provider="$(jq -r '.miner.provider' "${status}")"
 proof_backend="$(jq -r '.proof.backend' "${status}")"
+sector_size_selector="$(jq -r '.sector.selector' "${status}")"
 genesis_cid="$(
   devnet_compose exec -T lotus lotus chain list --epoch 0 --count 1 --format '<tipset>' |
     tr -d '\r\n'
 )"
 npm --prefix "${DEVNET_ROOT}/tools" run cli -- deployment revision inspect \
-  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" <"${manifest}"
+  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" "${sector_size_selector}" <"${manifest}"
 devnet_verify_deployment_code "${manifest}"
 
 revision="$(jq -r '.revision' "${manifest}")"

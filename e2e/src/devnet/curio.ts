@@ -109,6 +109,10 @@ export type CurioPipelineState = {
   pieceCid: string;
 };
 
+export type WaitForCurioSectorOptions = {
+  requireMarketComplete?: boolean;
+};
+
 export type CurioCommitFailure = {
   sector: number;
   taskId: number;
@@ -175,17 +179,44 @@ export function readCurioPipeline(context: ScenarioContext, dealId: string): Cur
 export async function waitForCurioSector(
   context: ScenarioContext,
   dealId: string,
+  options: WaitForCurioSectorOptions = {},
 ): Promise<CurioPipelineState> {
   const maxSeconds = envNumber(context, "CURIO_ACTIVATION_TIMEOUT_SECONDS", 7200);
+  const requireMarketComplete = options.requireMarketComplete ?? curioMarketCompletionRequired(
+    context.config.sectorSizeSelector,
+  );
+  context.state.set("CURIO_MARKET_PIPELINE_COMPLETE_REQUIRED", requireMarketComplete ? "true" : "false");
   for (let elapsed = 0; elapsed < maxSeconds; elapsed += 2) {
     const state = readCurioPipeline(context, dealId);
-    if (state?.sector !== null && state?.sealed && state.complete) return state;
+    if (curioSectorReady(state, { requireMarketComplete })) {
+      context.state.set("CURIO_MARKET_PIPELINE_COMPLETE", state!.complete ? "true" : "false");
+      if (!state!.complete) {
+        context.state.set(
+          "CURIO_MARKET_PIPELINE_COMPLETE_REASON",
+          "not-required-for-large-sector-testing-actor-bundle; on-chain sector commitment is verified separately",
+        );
+        console.log("  accepted sealed sector before Curio market complete; verifying on-chain commitment next");
+      }
+      return state!;
+    }
     if (elapsed === 0 || elapsed % 60 === 0) {
       console.log(`  waiting for Curio deal ${dealId}: ${state ? JSON.stringify(state) : "no pipeline row"}`);
     }
     await sleep(2000);
   }
   throw new Error(`Curio deal ${dealId} did not activate within ${maxSeconds} seconds`);
+}
+
+export function curioMarketCompletionRequired(sectorSizeSelector: string): boolean {
+  return !["512mib", "32gib"].includes(sectorSizeSelector.trim().toLowerCase());
+}
+
+export function curioSectorReady(
+  state: CurioPipelineState | undefined,
+  options: WaitForCurioSectorOptions = {},
+): boolean {
+  const requireMarketComplete = options.requireMarketComplete ?? true;
+  return Boolean(state?.sector !== null && state?.sealed && (!requireMarketComplete || state.complete));
 }
 
 export async function waitForCurioCommitFailure(
@@ -256,13 +287,16 @@ export function assertCurioStatus(
   status: CurioStatus,
   generation: string,
   provider: string,
+  expectedSectorSize = 8_388_608,
 ): void {
   if (status.generation !== generation) throw new Error("DevNet generation is stale");
   if (status.miner?.provider !== provider) throw new Error("Curio provider is stale");
   if (status.chain?.networkVersion !== 28 || status.chain.actorsVersion !== 18) {
     throw new Error("DevNet is not running NV28 actors v18");
   }
-  if (status.miner.sectorSize !== 8_388_608) throw new Error("DevNet sector size is not 8 MiB");
+  if (status.miner.sectorSize !== expectedSectorSize) {
+    throw new Error(`DevNet sector size is not ${expectedSectorSize} bytes`);
+  }
   if (status.curio?.apiReady !== true) throw new Error("Curio API is not ready");
   if (status.curio.marketReady !== true) throw new Error("Curio Market is not ready");
   if (status.curio.databaseReady !== true || typeof status.curio.taskCount !== "number" ||
@@ -280,7 +314,7 @@ export function ensureCurioReady(context: ScenarioContext): void {
   } catch {
     throw new Error(`current DevNet status is missing or invalid: ${path}`);
   }
-  assertCurioStatus(status, context.config.generation, context.config.provider);
+  assertCurioStatus(status, context.config.generation, context.config.provider, context.config.sectorSizeBytes);
 }
 
 export async function verifyCurioDevnet(context: ScenarioContext): Promise<void> {

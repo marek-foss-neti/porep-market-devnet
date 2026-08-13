@@ -1310,6 +1310,7 @@ dependencies = [
  "serde",
  "serde_json",
  "storage-proofs-core",
+ "storage-proofs-porep",
  "tempfile",
  "yastl",
 ]

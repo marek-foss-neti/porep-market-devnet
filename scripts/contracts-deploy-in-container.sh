@@ -8,6 +8,8 @@ set -euo pipefail
 : "${EPOCH:?}"
 : "${PROVIDER:?}"
 : "${PROOF_BACKEND:?}"
+: "${SECTOR_SIZE_SELECTOR:?}"
+: "${SECTOR_SIZE_BYTES:?}"
 : "${OUTPUT_MANIFEST:?}"
 : "${DEPLOYMENT_ID:?}"
 : "${DEPLOYMENT_ROOT:?}"
@@ -307,6 +309,8 @@ jq -n \
   --argjson epoch "${EPOCH}" \
   --arg provider "${PROVIDER}" \
   --arg proofBackend "${PROOF_BACKEND}" \
+  --arg sectorSizeSelector "${SECTOR_SIZE_SELECTOR}" \
+  --argjson sectorSizeBytes "${SECTOR_SIZE_BYTES}" \
   --slurpfile target "${TARGET_JSON}" \
   --arg deployer "${deployer}" \
   --arg client "${identity_addresses[client]}" \
@@ -330,7 +334,13 @@ jq -n \
       epoch:$epoch,
       provider:$provider
     },
-    proof:{backend:$proofBackend},
+    proof:{
+      backend:$proofBackend,
+      sectorSize:{
+        selector:$sectorSizeSelector,
+        bytes:$sectorSizeBytes
+      }
+    },
     target:$target[0],
     identities:{
       deployer:$deployer,

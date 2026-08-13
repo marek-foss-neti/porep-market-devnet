@@ -39,6 +39,8 @@ export type E2EConfig = {
   deploymentId: string;
   deploymentRevision: number;
   proofBackend: "stacked" | "zigzag";
+  sectorSizeBytes: number;
+  sectorSizeSelector: "2kib" | "8mib" | "512mib" | "32gib";
   deploymentRecordPath: string;
   privateKeyTest: string;
   privateKeySp: string;
@@ -69,7 +71,10 @@ type Deployment = {
     chainId?: unknown;
     provider?: unknown;
   };
-  proof?: { backend?: unknown };
+  proof?: {
+    backend?: unknown;
+    sectorSize?: { selector?: unknown; bytes?: unknown };
+  };
   target?: {
     mode?: unknown;
     commit?: unknown;
@@ -90,6 +95,7 @@ type Status = {
   chain?: { chainId?: unknown };
   miner?: { provider?: unknown };
   proof?: { backend?: unknown };
+  sector?: { selector?: unknown; bytes?: unknown };
 };
 
 const DEVNET_CHAIN_ID = 31415926;
@@ -148,6 +154,20 @@ export function loadConfig(input: LoadConfigInput = {}): E2EConfig {
   if (proofBackend !== requiredProofBackend(status.proof?.backend, "status proof backend")) {
     throw new Error("deployment proof backend is stale");
   }
+  const sectorSizeSelector = requiredSectorSizeSelector(
+    deployment.proof?.sectorSize?.selector,
+    "deployment sector size selector",
+  );
+  if (sectorSizeSelector !== requiredSectorSizeSelector(status.sector?.selector, "status sector size selector")) {
+    throw new Error("deployment sector size is stale");
+  }
+  const sectorSizeBytes = requiredInteger(deployment.proof?.sectorSize?.bytes, "deployment sector size bytes");
+  if (
+    sectorSizeBytes !== sectorSizeBytesForSelector(sectorSizeSelector)
+    || sectorSizeBytes !== requiredInteger(status.sector?.bytes, "status sector size bytes")
+  ) {
+    throw new Error("deployment sector size bytes are stale");
+  }
 
   const identityKeys = Object.fromEntries(
     IDENTITY_NAMES.map((name) => [name, requiredKey(privateIdentities[name], name)]),
@@ -191,6 +211,8 @@ export function loadConfig(input: LoadConfigInput = {}): E2EConfig {
     deploymentId,
     deploymentRevision,
     proofBackend,
+    sectorSizeBytes,
+    sectorSizeSelector,
     deploymentRecordPath,
     privateKeyTest: identityKeys.client,
     privateKeySp: identityKeys.unauthorized,
@@ -246,6 +268,20 @@ function requiredAddress(value: unknown, label: string): string {
 function requiredProofBackend(value: unknown, label: string): "stacked" | "zigzag" {
   if (value === "stacked" || value === "zigzag") return value;
   throw new Error(`invalid ${label}`);
+}
+
+function requiredSectorSizeSelector(value: unknown, label: string): "2kib" | "8mib" | "512mib" | "32gib" {
+  if (value === "2kib" || value === "8mib" || value === "512mib" || value === "32gib") return value;
+  throw new Error(`invalid ${label}`);
+}
+
+function sectorSizeBytesForSelector(value: "2kib" | "8mib" | "512mib" | "32gib"): number {
+  switch (value) {
+    case "2kib": return 2 * 1024;
+    case "8mib": return 8 * 1024 * 1024;
+    case "512mib": return 512 * 1024 * 1024;
+    case "32gib": return 32 * 1024 * 1024 * 1024;
+  }
 }
 
 function requiredKey(value: unknown, name: string): string {

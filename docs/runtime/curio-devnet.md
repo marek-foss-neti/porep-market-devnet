@@ -234,28 +234,37 @@ leaving Lotus, Curio, and scenario RPC traffic unchanged.
 
 ## Proof backend selection
 
-The local DevNet defaults to the Stacked DRG proof backend. Start from a fresh
-runtime to select a backend explicitly:
+The local DevNet defaults to the Stacked DRG proof backend and `8mib` sectors.
+Start from a fresh runtime to select a backend and sector size explicitly:
 
 ```sh
-just reset stacked
-just reset zigzag
+just reset stacked 8mib
+just reset zigzag 8mib
+just reset zigzag 512mib
 ```
 
-The selected backend is recorded in `.runtime/devnet/proof-backend`,
-`.runtime/devnet/status/latest.json`, and every deployment revision. Lifecycle
+The selected backend is recorded in `.runtime/devnet/proof-backend`; the selected
+sector size is recorded in `.runtime/devnet/sector-size`. Both are also recorded
+in `.runtime/devnet/status/latest.json` and every deployment revision. Lifecycle
 commands refuse to reuse an existing runtime or deployment revision whose proof
-backend differs from the selected runtime backend.
+backend or sector size differs from the selected runtime identity.
 
-`DEVNET_PROOF_BACKEND=stacked|zigzag` is the public selector. Lifecycle scripts
-render the effective container proof environment into the generated Compose
-environment: `FIL_PROOFS_USE_ZIGZAG=1` only for ZigZag, and
-`FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=1` only for ZigZag Curio. Manual
-Compose YAML edits are not part of the supported workflow.
+`DEVNET_PROOF_BACKEND=stacked|zigzag` and
+`DEVNET_SECTOR_SIZE=2kib|8mib|512mib|32gib` are the public selectors. Lifecycle
+scripts render the effective container proof environment into the generated
+Compose environment: `SECTOR_SIZE=<bytes>`, `FIL_PROOFS_USE_ZIGZAG=1` only for
+ZigZag, and `FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=1` only for ZigZag Curio.
+Curio and Lotus also receive the same `FIL_PROOFS_ZIGZAG_SIDECAR_DIR`, backed by
+`.runtime/devnet/zigzag-proof-sidecars`, so Lotus verification can read the
+per-proof `comm_r_star` sidecar written during ZigZag proving. Manual Compose
+YAML edits are not part of the supported workflow.
 
 Proof parameters under `.cache/proof-parameters/` survive resets. Benchmark
-recipes warm missing ZigZag parameters outside measured windows and report the
-selected backend in scenario summaries.
+recipes warm the required static ZigZag Groth16 `*.params` and `*.vk` files
+outside measured windows and write
+`.cache/proof-parameters/.zigzag-devnet-prewarm-<sector>.json`. Per-sector
+ZigZag proof sidecars are runtime artifacts, not proof parameters; reset clears
+them so they cannot leak between backend benchmark runs.
 
 The Docker build does not apply `.patch` files to managed checkouts. Devnet-only
 changes live as full source-file overrides under `source-overrides/` and are

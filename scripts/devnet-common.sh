@@ -16,8 +16,11 @@ DEVNET_COMPOSE="${DEVNET_ROOT}/docker/compose.curio-devnet.yaml"
 DEVNET_COMPOSE_ENV="${DEVNET_RUNTIME_DIR}/compose.env"
 DEVNET_DATA_DIR="${DEVNET_RUNTIME_DIR}/data"
 DEVNET_PROOF_BACKEND_FILE="${DEVNET_RUNTIME_DIR}/proof-backend"
+DEVNET_SECTOR_SIZE_FILE="${DEVNET_RUNTIME_DIR}/sector-size"
 DEVNET_PROOF_PARAMETERS_DIR="${DEVNET_ROOT}/.cache/proof-parameters"
+DEVNET_ZIGZAG_SIDECAR_DIR="${DEVNET_RUNTIME_DIR}/zigzag-proof-sidecars"
 DEVNET_LIFECYCLE_TIMEOUT_MS=120000
+DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS="${DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS:-}"
 DEVNET_PROGRESS_INTERVAL_SECONDS="${DEVNET_PROGRESS_INTERVAL_SECONDS:-15}"
 DEVNET_SERVICES=(lotus contracts-bootstrap lotus-miner curio yugabyte piece-server indexer)
 DEVNET_DATA_DIRECTORIES=(lotus lotus-miner curio piece-server indexer contracts genesis yugabyte yugabyte-disk0 yugabyte-disk1)
@@ -57,12 +60,203 @@ devnet_progress_maybe() {
   fi
 }
 
+devnet_format_duration_seconds() {
+  local seconds="${1:-0}"
+  [[ "${seconds}" =~ ^[0-9]+$ ]] || seconds=0
+  if ((seconds < 60)); then
+    printf '%ss\n' "${seconds}"
+  elif ((seconds < 3600)); then
+    printf '%sm%02ss\n' "$((seconds / 60))" "$((seconds % 60))"
+  else
+    printf '%sh%02sm%02ss\n' "$((seconds / 3600))" "$(((seconds % 3600) / 60))" "$((seconds % 60))"
+  fi
+}
+
+devnet_format_bytes() {
+  local bytes="${1:-0}"
+  awk -v bytes="${bytes}" 'BEGIN {
+    if (bytes < 1024) {
+      printf "%d B", bytes
+    } else if (bytes < 1048576) {
+      printf "%.1f KiB", bytes / 1024
+    } else if (bytes < 1073741824) {
+      printf "%.1f MiB", bytes / 1048576
+    } else {
+      printf "%.1f GiB", bytes / 1073741824
+    }
+  }'
+}
+
+devnet_proof_parameter_file_count() {
+  if [[ ! -d "${DEVNET_PROOF_PARAMETERS_DIR}" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  find "${DEVNET_PROOF_PARAMETERS_DIR}" \
+    -path "${DEVNET_PROOF_PARAMETERS_DIR}/zigzag-proof-sidecars" -prune -o \
+    -type f -print | wc -l | tr -d '[:space:]'
+}
+
+devnet_proof_parameter_cache_bytes() {
+  if [[ ! -d "${DEVNET_PROOF_PARAMETERS_DIR}" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  find "${DEVNET_PROOF_PARAMETERS_DIR}" \
+    -path "${DEVNET_PROOF_PARAMETERS_DIR}/zigzag-proof-sidecars" -prune -o \
+    -type f -exec sh -c '
+      for path do
+        stat -f "%z" "$path" 2>/dev/null || stat -c "%s" "$path"
+      done
+    ' sh {} + |
+    awk '{sum += $1} END {printf "%d\n", sum + 0}'
+}
+
+devnet_proof_parameter_cache_label() {
+  local files bytes
+  files="$(devnet_proof_parameter_file_count)"
+  bytes="$(devnet_proof_parameter_cache_bytes)"
+  printf '%s files, %s\n' "${files}" "$(devnet_format_bytes "${bytes}")"
+}
+
+devnet_recent_proof_parameter_label() {
+  [[ -d "${DEVNET_PROOF_PARAMETERS_DIR}" ]] || return 0
+  local path size
+  path="$(find "${DEVNET_PROOF_PARAMETERS_DIR}" \
+    -path "${DEVNET_PROOF_PARAMETERS_DIR}/zigzag-proof-sidecars" -prune -o \
+    -type f -exec ls -t {} + 2>/dev/null | head -n1 || true)"
+  [[ -n "${path}" ]] || return 0
+  size="$(stat -f "%z" "${path}" 2>/dev/null || stat -c "%s" "${path}" 2>/dev/null || printf '0')"
+  printf '%s (%s)\n' "$(basename "${path}")" "$(devnet_format_bytes "${size}")"
+}
+
+devnet_file_md5() {
+  local path="$1"
+  if command -v md5 >/dev/null 2>&1; then
+    md5 -q "${path}"
+  elif command -v md5sum >/dev/null 2>&1; then
+    md5sum "${path}" | awk '{print $1}'
+  else
+    devnet_die "required command not found: md5 or md5sum"
+  fi
+}
+
+devnet_official_parameters_manifest() {
+  local image_manifest commit source manifest
+  image_manifest="${DEVNET_BUILD_DIR}/images.json"
+  commit=""
+  if [[ -f "${image_manifest}" && ! -L "${image_manifest}" ]]; then
+    commit="$(jq -r '.rustFilProofsCommit // empty' "${image_manifest}")"
+  fi
+  source="$(devnet_rust_fil_proofs_source_path "${commit}")"
+  manifest="${source}/parameters.json"
+  [[ -f "${manifest}" && ! -L "${manifest}" ]] ||
+    devnet_die "official Filecoin proof parameter manifest is missing: ${manifest}"
+  printf '%s\n' "${manifest}"
+}
+
+devnet_quarantine_mismatched_stacked_parameter_cache() {
+  local sector_size sector_size_bytes candidate_metadata manifest key expected path metadata_path base actual
+  local quarantine_dir moved_bases moved_count
+  [[ -d "${DEVNET_PROOF_PARAMETERS_DIR}" && ! -L "${DEVNET_PROOF_PARAMETERS_DIR}" ]] || return 0
+  sector_size="$(devnet_requested_sector_size "${1:-}")"
+  sector_size_bytes="$(devnet_sector_size_bytes "${sector_size}")"
+  candidate_metadata="$(find "${DEVNET_PROOF_PARAMETERS_DIR}" -maxdepth 1 -type f -name 'v28-stacked-proof-of-replication-*.meta' -print -quit)"
+  [[ -n "${candidate_metadata}" ]] || return 0
+  manifest="$(devnet_official_parameters_manifest)"
+  quarantine_dir=""
+  moved_bases=""
+  moved_count=0
+
+  while IFS=$'\t' read -r key expected; do
+    [[ -n "${key}" && "${key}" != */* && "${expected}" =~ ^[0-9a-f]{32}$ ]] ||
+      devnet_die "invalid Stacked parameter manifest entry"
+    path="${DEVNET_PROOF_PARAMETERS_DIR}/${key}"
+    base="${key%.*}"
+    metadata_path="${DEVNET_PROOF_PARAMETERS_DIR}/${base}.meta"
+    [[ -f "${metadata_path}" && ! -L "${metadata_path}" ]] || continue
+    [[ -e "${path}" || -L "${path}" ]] || continue
+    [[ -f "${path}" && ! -L "${path}" ]] ||
+      devnet_die "proof parameter cache entry must be a regular file: ${path}"
+    actual="$(devnet_file_md5 "${path}")"
+    [[ "${actual}" != "${expected}" ]] || continue
+
+    if [[ -z "${quarantine_dir}" ]]; then
+      quarantine_dir="${DEVNET_ROOT}/.runtime/proof-parameter-quarantine/$(date -u +%Y%m%dT%H%M%SZ)-$$-${sector_size}"
+      devnet_require_safe_write_path "${DEVNET_ROOT}/.runtime/proof-parameter-quarantine" directory
+      devnet_require_safe_write_path "${quarantine_dir}" directory
+      mkdir -p "${quarantine_dir}"
+    fi
+    devnet_progress "devnet-up: quarantining non-production Stacked proof parameter ${key} (md5 ${actual} != ${expected})"
+    mv -- "${path}" "${quarantine_dir}/${key}"
+    moved_bases="${moved_bases}${base}"$'\n'
+    moved_count=$((moved_count + 1))
+  done < <(
+    jq -r --argjson sectorSize "${sector_size_bytes}" '
+      to_entries[]
+      | select((.key | startswith("v28-stacked-proof-of-replication-"))
+        and (.value.sector_size == $sectorSize)
+        and (.value.digest | type == "string"))
+      | [.key, .value.digest] | @tsv
+    ' "${manifest}"
+  )
+
+  if [[ -n "${quarantine_dir}" ]]; then
+    while IFS= read -r base; do
+      [[ -n "${base}" && "${base}" != */* ]] || continue
+      metadata_path="${DEVNET_PROOF_PARAMETERS_DIR}/${base}.meta"
+      if [[ -f "${metadata_path}" && ! -L "${metadata_path}" ]]; then
+        mv -- "${metadata_path}" "${quarantine_dir}/$(basename "${metadata_path}")"
+      fi
+    done < <(printf '%s' "${moved_bases}" | awk 'NF && !seen[$0]++')
+    devnet_progress "devnet-up: quarantined ${moved_count} non-production Stacked proof parameter file(s) to ${quarantine_dir}"
+  fi
+}
+
+devnet_last_nonempty_line() {
+  local path="$1"
+  [[ -f "${path}" && ! -L "${path}" ]] || return 0
+  awk 'NF {line=$0} END {if (line != "") print line}' "${path}" | tail -n1 | cut -c1-180
+}
+
+devnet_start_prewarm_progress() {
+  local result_variable="$1"
+  local label="$2"
+  local stderr_log="${3:-}"
+  printf -v "${result_variable}" ''
+  devnet_progress_enabled || return 0
+  (
+    interval="$(devnet_progress_interval_seconds)"
+    started="${SECONDS}"
+    keep_reporting=1
+    while ((keep_reporting)); do
+      sleep "${interval}"
+      elapsed="$((SECONDS - started))"
+      message="${label}: still running after $(devnet_format_duration_seconds "${elapsed}"); cache=$(devnet_proof_parameter_cache_label)"
+      latest="$(devnet_recent_proof_parameter_label)"
+      [[ -z "${latest}" ]] || message="${message}; latest=${latest}"
+      last_line="$(devnet_last_nonempty_line "${stderr_log}")"
+      [[ -z "${last_line}" ]] || message="${message}; last=${last_line}"
+      devnet_progress "${message}"
+    done
+  ) >/dev/null &
+  printf -v "${result_variable}" '%s' "$!"
+}
+
+devnet_stop_prewarm_progress() {
+  local progress_pid="${1:-}"
+  [[ -n "${progress_pid}" ]] || return 0
+  kill "${progress_pid}" 2>/dev/null || true
+  wait "${progress_pid}" 2>/dev/null || true
+}
+
 devnet_compose() {
   env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_DATA_DIR \
-    -u DEVNET_PROOF_BACKEND -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_FIREHORSE_HEIGHT \
+    -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
+    -u DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS \
     -u DEVNET_FILECOIN_SERVICES_SOURCE -u DEVNET_MULTICALL3_SOURCE \
-    -u DEVNET_YUGABYTE_IMAGE -u LOTUS_FIREHORSE_HEIGHT -u FIL_PROOFS_USE_ZIGZAG \
-    -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS \
+    -u DEVNET_YUGABYTE_IMAGE -u LOTUS_FIREHORSE_HEIGHT -u LOTUS_DEVNET_NETWORK_BUNDLE -u SECTOR_SIZE -u FIL_PROOFS_USE_ZIGZAG \
+    -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR \
     docker compose --env-file "${DEVNET_COMPOSE_ENV}" --project-name "${DEVNET_PROJECT}" --file "${DEVNET_COMPOSE}" "$@"
 }
 
@@ -77,6 +271,94 @@ devnet_normalize_proof_backend() {
 
 devnet_requested_proof_backend() {
   devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}}"
+}
+
+devnet_normalize_sector_size() {
+  local value="${1:-8mib}"
+  value="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+  value="${value//_/}"
+  value="${value//-/}"
+  value="${value// /}"
+  value="${value/kb/kib}"
+  value="${value/mb/mib}"
+  value="${value/gb/gib}"
+  case "${value}" in
+    ""|8mib) printf '8mib\n' ;;
+    2kib) printf '2kib\n' ;;
+    512mib) printf '512mib\n' ;;
+    32gib) printf '32gib\n' ;;
+    2mib|1gib|2gib|4gib|8gib)
+      devnet_die "${value} is not a Filecoin registered seal proof sector size; expected 2kib, 8mib, 512mib, or 32gib"
+      ;;
+    64gib)
+      devnet_die "64gib is a registered Filecoin sector size, but this branch wires ZigZag large-sector testing for 512mib and 32gib only"
+      ;;
+    *) devnet_die "invalid sector size: ${1}; expected 2kib, 8mib, 512mib, or 32gib" ;;
+  esac
+}
+
+devnet_requested_sector_size() {
+  devnet_normalize_sector_size "${1:-${DEVNET_SECTOR_SIZE:-8mib}}"
+}
+
+devnet_curio_market_config_timeout_seconds() {
+  local sector_size="${1:-8mib}"
+  local configured="${DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS:-}"
+  if [[ -n "${configured}" ]]; then
+    [[ "${configured}" =~ ^[0-9]+$ ]] || devnet_die "DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS must be a positive integer"
+    ((configured > 0)) || devnet_die "DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS must be a positive integer"
+    printf '%s\n' "${configured}"
+    return 0
+  fi
+
+  case "${sector_size}" in
+    512mib|32gib) printf '14400\n' ;;
+    *) printf '300\n' ;;
+  esac
+}
+
+devnet_sector_size_bytes() {
+  local value
+  value="$(devnet_normalize_sector_size "$1")"
+  case "${value}" in
+    2kib) printf '2048\n' ;;
+    8mib) printf '8388608\n' ;;
+    512mib) printf '536870912\n' ;;
+    32gib) printf '34359738368\n' ;;
+    *) devnet_die "invalid normalized sector size: ${value}" ;;
+  esac
+}
+
+devnet_registered_seal_proof_for_sector_size() {
+  local value
+  value="$(devnet_normalize_sector_size "$1")"
+  case "${value}" in
+    2kib) printf 'StackedDrg2KiBV1_1\n' ;;
+    8mib) printf 'StackedDrg8MiBV1_1\n' ;;
+    512mib) printf 'StackedDrg512MiBV1_1\n' ;;
+    32gib) printf 'StackedDrg32GiBV1_1\n' ;;
+    *) devnet_die "invalid normalized sector size: ${value}" ;;
+  esac
+}
+
+devnet_actor_network_bundle_for_sector_size() {
+  local value
+  value="$(devnet_normalize_sector_size "$1")"
+  case "${value}" in
+    2kib|8mib) printf 'devnet\n' ;;
+    512mib|32gib) printf 'testing\n' ;;
+    *) devnet_die "unsupported sector size: ${value}" ;;
+  esac
+}
+
+devnet_disable_actor_metadata_tasks_for_sector_size() {
+  local value
+  value="$(devnet_normalize_sector_size "$1")"
+  case "${value}" in
+    2kib|8mib) printf '0\n' ;;
+    512mib|32gib) printf '1\n' ;;
+    *) devnet_die "unsupported sector size: ${value}" ;;
+  esac
 }
 
 devnet_fil_proofs_use_zigzag() {
@@ -103,6 +385,22 @@ devnet_firehorse_upgrade_epoch() {
   printf '%s\n' "${value}"
 }
 
+devnet_firehorse_upgrade_epoch_for_sector_size() {
+  local sector_size configured
+  sector_size="$(devnet_normalize_sector_size "$1")"
+  configured="${DEVNET_FIREHORSE_UPGRADE_EPOCH:-}"
+  if [[ -n "${configured}" ]]; then
+    [[ "${configured}" =~ ^[0-9]+$ && "${configured}" -ge 1 ]] ||
+      devnet_die "DEVNET_FIREHORSE_UPGRADE_EPOCH must be a positive integer"
+    printf '%s\n' "${configured}"
+    return 0
+  fi
+  case "${sector_size}" in
+    512mib|32gib) printf '200\n' ;;
+    *) devnet_firehorse_upgrade_epoch ;;
+  esac
+}
+
 devnet_write_proof_backend() {
   local backend temporary
   backend="$(devnet_normalize_proof_backend "$1")"
@@ -117,24 +415,48 @@ devnet_write_proof_backend() {
 devnet_current_proof_backend() {
   local value
   [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]] ||
-    devnet_die "proof backend marker is missing; run just reset stacked or just reset zigzag"
+    devnet_die "proof backend marker is missing; run just reset stacked 8mib or just reset zigzag 8mib"
   value="$(tr -d '\r\n[:space:]' < "${DEVNET_PROOF_BACKEND_FILE}")"
   devnet_normalize_proof_backend "${value}"
 }
 
-devnet_require_proof_backend() {
-  local requested current existing_containers
-  requested="$(devnet_requested_proof_backend "${1:-}")"
+devnet_write_sector_size() {
+  local sector_size temporary
+  sector_size="$(devnet_normalize_sector_size "$1")"
+  devnet_require_safe_write_path "${DEVNET_SECTOR_SIZE_FILE}" file
+  temporary="${DEVNET_SECTOR_SIZE_FILE}.temporary.$$"
+  devnet_require_safe_write_path "${temporary}" file
+  (set -o noclobber; printf '%s\n' "${sector_size}" > "${temporary}") ||
+    devnet_die "failed to create sector size marker"
+  mv -- "${temporary}" "${DEVNET_SECTOR_SIZE_FILE}"
+}
+
+devnet_current_sector_size() {
+  local value
+  [[ -f "${DEVNET_SECTOR_SIZE_FILE}" && ! -L "${DEVNET_SECTOR_SIZE_FILE}" ]] ||
+    devnet_die "sector size marker is missing; run just reset stacked 8mib or just reset zigzag 8mib"
+  value="$(tr -d '\r\n[:space:]' < "${DEVNET_SECTOR_SIZE_FILE}")"
+  devnet_normalize_sector_size "${value}"
+}
+
+devnet_require_runtime_identity() {
+  local requested_backend current_backend requested_sector_size current_sector_size existing_containers
+  requested_backend="$(devnet_requested_proof_backend "${1:-}")"
+  requested_sector_size="$(devnet_requested_sector_size "${2:-}")"
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
-    current="$(devnet_current_proof_backend)"
-    [[ "${current}" == "${requested}" ]] ||
-      devnet_die "existing runtime uses proof backend ${current}; run just reset ${requested} to switch"
+    current_backend="$(devnet_current_proof_backend)"
+    [[ "${current_backend}" == "${requested_backend}" ]] ||
+      devnet_die "existing runtime uses proof backend ${current_backend}; run just reset ${requested_backend} ${requested_sector_size} to switch"
+    current_sector_size="$(devnet_current_sector_size)"
+    [[ "${current_sector_size}" == "${requested_sector_size}" ]] ||
+      devnet_die "existing runtime uses sector size ${current_sector_size}; run just reset ${requested_backend} ${requested_sector_size} to switch"
     return 0
   fi
   existing_containers="$(devnet_compose ps --all --quiet 2>/dev/null || true)"
   [[ -z "${existing_containers//[[:space:]]/}" ]] ||
-    devnet_die "existing runtime has no proof backend marker; run just reset ${requested}"
-  devnet_write_proof_backend "${requested}"
+    devnet_die "existing runtime has no proof backend marker; run just reset ${requested_backend} ${requested_sector_size}"
+  devnet_write_proof_backend "${requested_backend}"
+  devnet_write_sector_size "${requested_sector_size}"
 }
 
 devnet_write_compose_env() {
@@ -190,28 +512,43 @@ devnet_write_compose_env() {
   devnet_require_safe_write_path "${DEVNET_COMPOSE_ENV}" file
   local compose_environment_temporary="${DEVNET_COMPOSE_ENV}.temporary.$$"
   devnet_require_safe_write_path "${compose_environment_temporary}" file
-  local proof_backend firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
+  local proof_backend sector_size sector_size_bytes actor_network_bundle firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
+  local curio_disable_actor_metadata_tasks
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
     proof_backend="$(devnet_current_proof_backend)"
   else
     proof_backend="$(devnet_requested_proof_backend)"
   fi
-  firehorse_height="$(devnet_firehorse_upgrade_epoch)"
+  if [[ -f "${DEVNET_SECTOR_SIZE_FILE}" && ! -L "${DEVNET_SECTOR_SIZE_FILE}" ]]; then
+    sector_size="$(devnet_current_sector_size)"
+  else
+    sector_size="$(devnet_requested_sector_size)"
+  fi
+  sector_size_bytes="$(devnet_sector_size_bytes "${sector_size}")"
+  actor_network_bundle="$(devnet_actor_network_bundle_for_sector_size "${sector_size}")"
+  firehorse_height="$(devnet_firehorse_upgrade_epoch_for_sector_size "${sector_size}")"
   fil_proofs_use_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   fil_proofs_zigzag_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
+  curio_disable_actor_metadata_tasks="$(devnet_disable_actor_metadata_tasks_for_sector_size "${sector_size}")"
 
   (set -o noclobber; cat > "${compose_environment_temporary}" <<EOF
 DEVNET_IMAGE_NAMESPACE=${DEVNET_IMAGE_NAMESPACE}
 DEVNET_CURIO_SHORT_COMMIT=${curio_commit:0:12}
 DEVNET_DATA_DIR=${DEVNET_DATA_DIR}
 DEVNET_PROOF_BACKEND=${proof_backend}
+DEVNET_SECTOR_SIZE=${sector_size}
+LOTUS_DEVNET_NETWORK_BUNDLE=${actor_network_bundle}
 DEVNET_PROOF_PARAMETERS_DIR=${DEVNET_PROOF_PARAMETERS_DIR}
+DEVNET_ZIGZAG_SIDECAR_DIR=${DEVNET_ZIGZAG_SIDECAR_DIR}
 DEVNET_FIREHORSE_HEIGHT=${firehorse_height}
 DEVNET_FILECOIN_SERVICES_SOURCE=${DEVNET_ROOT}/.cache/sources/filecoin_services/${services_commit}
 DEVNET_MULTICALL3_SOURCE=${DEVNET_ROOT}/.cache/sources/multicall3/${multicall_commit}
 DEVNET_YUGABYTE_IMAGE=yugabytedb/yugabyte:2024.1.0.0-b129@sha256:5074792658b19c1379d79fdfe418d33a6587c2637422f56d0d224d8bbbe277a8
+SECTOR_SIZE=${sector_size_bytes}
 FIL_PROOFS_USE_ZIGZAG=${fil_proofs_use_zigzag}
 FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${fil_proofs_zigzag_generate_missing_params}
+FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/var/tmp/filecoin-zigzag-proof-sidecars
+CURIO_DISABLE_ACTOR_METADATA_TASKS=${curio_disable_actor_metadata_tasks}
 EOF
   ) || devnet_die "failed to create generated Compose environment"
   mv -- "${compose_environment_temporary}" "${DEVNET_COMPOSE_ENV}"
@@ -319,7 +656,8 @@ devnet_validate_write_targets() {
     "${DEVNET_RUNTIME_DIR}/status" \
     "${DEVNET_ROOT}/.runtime/verification-backups" \
     "${DEVNET_ROOT}/.cache" \
-    "${DEVNET_PROOF_PARAMETERS_DIR}"; do
+    "${DEVNET_PROOF_PARAMETERS_DIR}" \
+    "${DEVNET_ZIGZAG_SIDECAR_DIR}"; do
     devnet_require_safe_write_path "${path}" directory
   done
   for directory in "${DEVNET_DATA_DIRECTORIES[@]}"; do
@@ -328,6 +666,7 @@ devnet_validate_write_targets() {
   for path in \
     "${DEVNET_COMPOSE_ENV}" \
     "${DEVNET_PROOF_BACKEND_FILE}" \
+    "${DEVNET_SECTOR_SIZE_FILE}" \
     "${DEVNET_RUNTIME_DIR}/ownership.marker" \
     "${DEVNET_RUNTIME_DIR}/generation" \
     "${DEVNET_DATA_DIR}/piece-server/.synapse-sdk.ready"; do
@@ -350,7 +689,7 @@ devnet_require_ownership_marker() {
 
 devnet_prepare_runtime() {
   devnet_validate_write_targets
-  mkdir -p "${DEVNET_DATA_DIR}" "${DEVNET_LOG_DIR}" "${DEVNET_PROOF_PARAMETERS_DIR}"
+  mkdir -p "${DEVNET_DATA_DIR}" "${DEVNET_LOG_DIR}" "${DEVNET_PROOF_PARAMETERS_DIR}" "${DEVNET_ZIGZAG_SIDECAR_DIR}"
   for directory in "${DEVNET_DATA_DIRECTORIES[@]}"; do mkdir -p "${DEVNET_DATA_DIR}/${directory}"; done
   devnet_validate_write_targets
   local synapse_marker="${DEVNET_DATA_DIR}/piece-server/.synapse-sdk.ready"
@@ -553,14 +892,18 @@ devnet_zigzag_source_override_required_paths() {
 source-overrides/curio/cmd/sptool/toolbox_deal_client.go
 source-overrides/curio/lib/ffi/unseal_funcs.go
 source-overrides/curio/market/mk20/ddo_v1.go
+source-overrides/curio/scripts/makefiles/10-deps.mk
 source-overrides/curio/tasks/piece/task_park_piece.go
 source-overrides/curio/tasks/unseal/task_unseal_decode.go
 source-overrides/curio/tasks/unseal/task_unseal_sdr.go
 source-overrides/filecoin-ffi/rust/Cargo.lock
 source-overrides/filecoin-ffi/rust/Cargo.toml
+source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
 source-overrides/filecoin-ffi/rust/src/proofs/api.rs
 source-overrides/fvm-4.8.2-zigzag/Cargo.toml
+source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs
 source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs
+source-overrides/lotus/build/buildconstants/devnet_network_bundle.go
 source-overrides/lotus/entrypoint.sh
 EOF
 }

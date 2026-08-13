@@ -38,7 +38,7 @@ function fixture(): string {
         epoch: 210,
         provider: "t01004",
       },
-      proof: { backend: "stacked" },
+      proof: { backend: "stacked", sectorSize: { selector: "8mib", bytes: 8_388_608 } },
       target: {
         mode: "local",
         sourcePath: snapshotPath,
@@ -76,6 +76,7 @@ function fixture(): string {
       chain: { chainId: "0x1df5e76" },
       miner: { provider: "t01004" },
       proof: { backend: "stacked" },
+      sector: { selector: "8mib", bytes: 8_388_608 },
     }),
   );
   return projectRoot;
@@ -91,6 +92,8 @@ test("loadConfig reads current deployment, status, and test identities", () => {
   assert.equal(config.deploymentId, "deployment-fixture");
   assert.equal(config.deploymentRevision, 0);
   assert.equal(config.proofBackend, "stacked");
+  assert.equal(config.sectorSizeSelector, "8mib");
+  assert.equal(config.sectorSizeBytes, 8_388_608);
   assert.equal(config.provider, "t01004");
   assert.equal(config.expectedPorepCommit, "b".repeat(40));
   assert.equal(config.deploymentPorepCommit, "a".repeat(40));
@@ -118,6 +121,7 @@ test("loadConfig rejects a stale deployment generation", () => {
     chain: { chainId: "0x1df5e76" },
     miner: { provider: "t01004" },
     proof: { backend: "stacked" },
+    sector: { selector: "8mib", bytes: 8_388_608 },
   }));
 
   assert.throws(() => loadConfig({ projectRoot, env: {} }), /deployment generation is stale/);

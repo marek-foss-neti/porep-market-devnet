@@ -16,14 +16,20 @@ export interface ComposeInspection {
 export interface ComposeRuntimeContract {
   curioShortCommit: string;
   dataDirectory: string;
+  actorNetworkBundle: "devnet" | "testing";
   firehorseHeight: string;
   filecoinServicesSource: string;
+  curioDisableActorMetadataTasks: string;
   filProofsUseZigZag: string;
   filProofsZigZagGenerateMissingParams: string;
+  filProofsZigZagSidecarDirectory: string;
   imageNamespace: string;
   multicall3Source: string;
   proofBackend: "stacked" | "zigzag";
   proofParametersDirectory: string;
+  sectorSizeBytes: number;
+  sectorSizeSelector: "2kib" | "8mib" | "512mib" | "32gib";
+  zigzagSidecarDirectory: string;
   yugabyteImage: string;
 }
 
@@ -45,15 +51,21 @@ export interface DevnetStatusInspection {
 const composeEnvironmentKeys = [
   "DEVNET_CURIO_SHORT_COMMIT",
   "DEVNET_DATA_DIR",
+  "LOTUS_DEVNET_NETWORK_BUNDLE",
   "DEVNET_FIREHORSE_HEIGHT",
   "DEVNET_FILECOIN_SERVICES_SOURCE",
   "DEVNET_IMAGE_NAMESPACE",
   "DEVNET_MULTICALL3_SOURCE",
   "DEVNET_PROOF_BACKEND",
   "DEVNET_PROOF_PARAMETERS_DIR",
+  "DEVNET_SECTOR_SIZE",
+  "DEVNET_ZIGZAG_SIDECAR_DIR",
   "DEVNET_YUGABYTE_IMAGE",
+  "SECTOR_SIZE",
+  "CURIO_DISABLE_ACTOR_METADATA_TASKS",
   "FIL_PROOFS_USE_ZIGZAG",
   "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS",
+  "FIL_PROOFS_ZIGZAG_SIDECAR_DIR",
 ] as const;
 
 export function inspectCompose(source: string, lock: RuntimeLock): ComposeInspection {
@@ -108,6 +120,7 @@ export function inspectRenderedCompose(
     contract.filecoinServicesSource,
     contract.multicall3Source,
     contract.proofParametersDirectory,
+    contract.zigzagSidecarDirectory,
   ].map((path) => resolve(path));
 
   for (const name of names) {
@@ -142,13 +155,40 @@ export function inspectRenderedCompose(
     ) {
       throw new Error("curio FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS mismatch");
     }
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_ZIGZAG_SIDECAR_DIR !== contract.filProofsZigZagSidecarDirectory
+    ) {
+      throw new Error(`${name} FIL_PROOFS_ZIGZAG_SIDECAR_DIR mismatch`);
+    }
     if (name === "lotus") {
+      if (environment.LOTUS_DEVNET_NETWORK_BUNDLE !== contract.actorNetworkBundle) {
+        throw new Error("lotus LOTUS_DEVNET_NETWORK_BUNDLE mismatch");
+      }
       if (environment.LOTUS_GENESIS_NETWORK_VERSION !== String(lock.network.genesis.networkVersion)) {
         throw new Error("lotus LOTUS_GENESIS_NETWORK_VERSION mismatch");
       }
-      if (environment.LOTUS_FIREHORSE_HEIGHT !== contract.firehorseHeight) {
+      if (environment.LOTUS_FIREHORSE_HEIGHT !== String(firehorseEpochForSectorSize(contract.sectorSizeSelector, lock))) {
         throw new Error("lotus LOTUS_FIREHORSE_HEIGHT mismatch");
       }
+      if (environment.SECTOR_SIZE !== String(contract.sectorSizeBytes)) {
+        throw new Error("lotus SECTOR_SIZE mismatch");
+      }
+    }
+    if (name === "lotus-miner" && environment.LOTUS_DEVNET_NETWORK_BUNDLE !== contract.actorNetworkBundle) {
+      throw new Error("lotus-miner LOTUS_DEVNET_NETWORK_BUNDLE mismatch");
+    }
+    if (name === "lotus-miner" && environment.SECTOR_SIZE !== String(contract.sectorSizeBytes)) {
+      throw new Error("lotus-miner SECTOR_SIZE mismatch");
+    }
+    if (name === "curio" && environment.CURIO_NEW_MINER_SECTOR_SIZE !== contract.sectorSizeSelector) {
+      throw new Error("curio CURIO_NEW_MINER_SECTOR_SIZE mismatch");
+    }
+    if (
+      name === "curio"
+      && environment.CURIO_DISABLE_ACTOR_METADATA_TASKS !== contract.curioDisableActorMetadataTasks
+    ) {
+      throw new Error("curio CURIO_DISABLE_ACTOR_METADATA_TASKS mismatch");
     }
     images.push(service.image);
 
@@ -230,17 +270,28 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     values[key] = value;
   }
   assertExactKeys(values, [...composeEnvironmentKeys], "compose environment");
+  const sectorSizeSelector = sectorSizeSelectorValue(requiredValue(values, "DEVNET_SECTOR_SIZE"));
+  const curioDisableActorMetadataTasks = requiredValue(values, "CURIO_DISABLE_ACTOR_METADATA_TASKS");
+  if (curioDisableActorMetadataTasks !== disableActorMetadataTasksForSectorSize(sectorSizeSelector)) {
+    throw new Error("CURIO_DISABLE_ACTOR_METADATA_TASKS does not match sector size");
+  }
   return {
     curioShortCommit: requiredValue(values, "DEVNET_CURIO_SHORT_COMMIT"),
     dataDirectory: requiredValue(values, "DEVNET_DATA_DIR"),
+    actorNetworkBundle: actorNetworkBundleValue(requiredValue(values, "LOTUS_DEVNET_NETWORK_BUNDLE")),
     firehorseHeight: requiredValue(values, "DEVNET_FIREHORSE_HEIGHT"),
     filecoinServicesSource: requiredValue(values, "DEVNET_FILECOIN_SERVICES_SOURCE"),
+    curioDisableActorMetadataTasks,
     filProofsUseZigZag: requiredValue(values, "FIL_PROOFS_USE_ZIGZAG"),
     filProofsZigZagGenerateMissingParams: requiredValue(values, "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS"),
+    filProofsZigZagSidecarDirectory: requiredValue(values, "FIL_PROOFS_ZIGZAG_SIDECAR_DIR"),
     imageNamespace: requiredValue(values, "DEVNET_IMAGE_NAMESPACE"),
     multicall3Source: requiredValue(values, "DEVNET_MULTICALL3_SOURCE"),
     proofBackend: proofBackendValue(requiredValue(values, "DEVNET_PROOF_BACKEND")),
     proofParametersDirectory: requiredValue(values, "DEVNET_PROOF_PARAMETERS_DIR"),
+    sectorSizeBytes: sectorSizeBytesValue(requiredValue(values, "SECTOR_SIZE")),
+    sectorSizeSelector,
+    zigzagSidecarDirectory: requiredValue(values, "DEVNET_ZIGZAG_SIDECAR_DIR"),
     yugabyteImage: requiredValue(values, "DEVNET_YUGABYTE_IMAGE"),
   };
 }
@@ -293,10 +344,22 @@ export function inspectDevnetStatus(
   const curioProof = record(proof.curio, "proof.curio");
   if (
     lotusProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
+    || lotusProof.FIL_PROOFS_ZIGZAG_SIDECAR_DIR !== "/var/tmp/filecoin-zigzag-proof-sidecars"
     || curioProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
     || curioProof.FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS !== expectedProofEnv
+    || curioProof.FIL_PROOFS_ZIGZAG_SIDECAR_DIR !== "/var/tmp/filecoin-zigzag-proof-sidecars"
   ) {
     throw new Error("devnet proof backend environment is invalid");
+  }
+
+  const sector = record(root.sector, "sector");
+  const sectorSizeSelector = sectorSizeSelectorValue(sector.selector);
+  const sectorSizeBytes = sectorSizeBytesValue(sector.bytes);
+  if (
+    sectorSizeBytes !== sectorSizeBytesForSelector(sectorSizeSelector)
+    || sector.registeredSealProof !== registeredSealProofForSectorSize(sectorSizeSelector)
+  ) {
+    throw new Error("devnet sector selector is invalid");
   }
 
   const compose = array(root.compose, "compose").map((value, index) => {
@@ -332,14 +395,17 @@ export function inspectDevnetStatus(
   }
 
   const chain = record(root.chain, "chain");
+  const expectedActorNetworkBundle = actorNetworkBundleForSectorSize(sectorSizeSelector);
+  const expectedActorCids = actorCidsForNetworkBundle(expectedActorNetworkBundle, lock);
   if (
     chain.chainId !== `0x${lock.network.chainId.toString(16)}`
     || !Number.isInteger(chain.epoch)
-    || (chain.epoch as number) < lock.network.firehorse.epoch
+    || (chain.epoch as number) < firehorseEpochForSectorSize(sectorSizeSelector, lock)
     || chain.networkVersion !== lock.network.firehorse.networkVersion
     || chain.actorsVersion !== lock.network.firehorse.actorsVersion
-    || chain.manifestCid !== lock.network.actorsV18.manifestCid
-    || chain.minerActorCodeCid !== lock.network.actorsV18.storageMinerActorCid
+    || chain.actorNetworkBundle !== expectedActorNetworkBundle
+    || chain.manifestCid !== expectedActorCids.manifestCid
+    || chain.minerActorCodeCid !== expectedActorCids.storageMinerActorCid
   ) {
     throw new Error("live chain does not match the required NV28 actor state");
   }
@@ -355,7 +421,7 @@ export function inspectDevnetStatus(
     || miner.worker.length === 0
     || !Array.isArray(miner.control)
     || !miner.control.every((address) => typeof address === "string" && address.length > 0)
-    || miner.sectorSize !== 8_388_608
+    || miner.sectorSize !== sectorSizeBytes
   ) {
     throw new Error("Curio provider evidence is invalid");
   }
@@ -422,6 +488,67 @@ function requiredValue(values: Record<string, string>, key: string): string {
 function proofBackendValue(value: unknown): "stacked" | "zigzag" {
   if (value === "stacked" || value === "zigzag") return value;
   throw new Error("proof backend is invalid");
+}
+
+function actorNetworkBundleValue(value: unknown): "devnet" | "testing" {
+  if (value === "devnet" || value === "testing") return value;
+  throw new Error("actor network bundle is invalid");
+}
+
+function actorNetworkBundleForSectorSize(value: "2kib" | "8mib" | "512mib" | "32gib"): "devnet" | "testing" {
+  return value === "512mib" || value === "32gib" ? "testing" : "devnet";
+}
+
+function disableActorMetadataTasksForSectorSize(value: "2kib" | "8mib" | "512mib" | "32gib"): string {
+  return value === "512mib" || value === "32gib" ? "1" : "0";
+}
+
+export function firehorseEpochForSectorSize(value: "2kib" | "8mib" | "512mib" | "32gib", lock: RuntimeLock): number {
+  return value === "512mib" || value === "32gib" ? 200 : lock.network.firehorse.epoch;
+}
+
+function actorCidsForNetworkBundle(
+  value: "devnet" | "testing",
+  lock: RuntimeLock,
+): { manifestCid: string; storageMinerActorCid: string } {
+  if (value === "devnet") return lock.network.actorsV18;
+  return {
+    manifestCid: "bafy2bzacece6i7k26rjexzyedrr5qcag7xdntw72tdsealzy6qqdrankk4a7g",
+    storageMinerActorCid: "bafk2bzaceaxfll3kmvqwq2bsyxpo5esfmmvdjjkuwk4ddp3rfveguri3j3or4",
+  };
+}
+
+function sectorSizeSelectorValue(value: unknown): "2kib" | "8mib" | "512mib" | "32gib" {
+  if (value === "2kib" || value === "8mib" || value === "512mib" || value === "32gib") return value;
+  throw new Error("sector size selector is invalid");
+}
+
+function sectorSizeBytesValue(value: unknown): number {
+  const parsed = typeof value === "string" && /^[0-9]+$/.test(value)
+    ? Number(value)
+    : value;
+  if (!Number.isSafeInteger(parsed) || Number(parsed) <= 0) {
+    throw new Error("sector size bytes are invalid");
+  }
+  return parsed as number;
+}
+
+function sectorSizeBytesForSelector(value: "2kib" | "8mib" | "512mib" | "32gib"): number {
+  switch (value) {
+    case "2kib": return 2 * 1024;
+    case "8mib": return 8 * 1024 * 1024;
+    case "512mib": return 512 * 1024 * 1024;
+    case "32gib": return 32 * 1024 * 1024 * 1024;
+  }
+}
+
+function registeredSealProofForSectorSize(value: "2kib" | "8mib" | "512mib" | "32gib"): string {
+  switch (value) {
+    case "2kib": return "StackedDrg2KiBV1_1";
+    case "8mib": return "StackedDrg8MiBV1_1";
+    case "512mib": return "StackedDrg512MiBV1_1";
+    case "32gib": return "StackedDrg32GiBV1_1";
+  }
 }
 
 function environmentRecord(value: unknown): Record<string, string> {

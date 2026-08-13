@@ -12,8 +12,8 @@ build-contracts:
 test-contracts source='':
     @bash scripts/contracts-test-target.sh '{{source}}'
 
-up backend='stacked':
-    @bash scripts/devnet-up.sh '{{backend}}'
+up backend='stacked' sector_size='8mib':
+    @bash scripts/devnet-up.sh '{{backend}}' '{{sector_size}}'
 
 status:
     @bash scripts/devnet-status.sh
@@ -58,6 +58,13 @@ bench-seal-unseal deployment='active':
 bench-retrieval mode='both' deployment='active':
     @RETRIEVAL_BENCH_MODE='{{mode}}' just test-scenario bench-retrieval '{{deployment}}' 14400000
 
+bench-proof-micro backend='stacked' sector_size='8mib':
+    @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}'
+
+bench-proof-micro-backends sector_size='8mib':
+    @bash scripts/bench-proof-micro.sh zigzag '{{sector_size}}'
+    @bash scripts/bench-proof-micro.sh stacked '{{sector_size}}'
+
 test-scenario name deployment='active' timeout_ms='7200000':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
     @node scripts/run-with-timeout.mjs --timeout-ms '{{timeout_ms}}' -- npm --prefix e2e run scenario -- '{{name}}'
@@ -66,8 +73,8 @@ test-e2e suite='contract' deployment='active':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
     @node scripts/run-with-timeout.mjs --timeout-ms 43200000 -- npm --prefix e2e run matrix -- '{{suite}}'
 
-bench-proof-backends:
-    @bash scripts/bench-proof-backends.sh
+bench-proof-backends sector_size='8mib':
+    @bash scripts/bench-proof-backends.sh '{{sector_size}}'
 
 verify-runtime:
     @npm --prefix tools run cli -- runtime lock verify
@@ -98,6 +105,6 @@ logs service='':
 down:
     @bash scripts/devnet-down.sh
 
-reset backend='stacked':
-    @bash scripts/devnet-reset.sh '{{backend}}'
-    @bash scripts/devnet-up.sh '{{backend}}'
+reset backend='stacked' sector_size='8mib':
+    @bash scripts/devnet-reset.sh '{{backend}}' '{{sector_size}}'
+    @bash scripts/devnet-up.sh '{{backend}}' '{{sector_size}}'

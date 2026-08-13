@@ -65,6 +65,8 @@ function testContext(env: Record<string, string | undefined> = {}): ScenarioCont
       deploymentId: "deployment-test",
       deploymentRevision: 0,
       proofBackend: "stacked",
+      sectorSizeBytes: 8_388_608,
+      sectorSizeSelector: "8mib",
       deploymentRecordPath: join(dir, "latest.json"),
       privateKeyTest: "0x1",
       privateKeySp: "0x2",

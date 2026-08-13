@@ -17,6 +17,8 @@ chain_id="$((chain_hex))"
 epoch="$(jq -r '.chain.epoch' "${status}")"
 provider="$(jq -r '.miner.provider' "${status}")"
 proof_backend="$(jq -r '.proof.backend' "${status}")"
+sector_size_selector="$(jq -r '.sector.selector' "${status}")"
+sector_size_bytes="$(jq -r '.sector.bytes' "${status}")"
 genesis_cid="$(
   devnet_compose exec -T lotus lotus chain list --epoch 0 --count 1 --format '<tipset>' |
     tr -d '\r\n'
@@ -72,6 +74,97 @@ ensure_meta_allocator_notary() {
     sleep 2
   done
   devnet_die "MetaAllocator DataCap authority did not become active"
+}
+
+latest_root_msig_transaction_id() {
+  devnet_compose exec -T lotus lotus msig inspect f080 |
+    awk '/^Transactions:/{flag=1; next} flag && /^[0-9]+/{print $1}' |
+    sort -nr |
+    head -n1
+}
+
+wait_for_actor_address() {
+  local address="$1"
+  local label="$2"
+  for _ in {1..60}; do
+    if devnet_compose exec -T lotus lotus state get-actor "${address}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  devnet_die "${label} actor did not become active: ${address}"
+}
+
+ensure_mk12_client_datacap() {
+  local notary_allowance=1000000000000
+  local client_allowance=1000000000
+  local client current notary notary_file before_tx_id new_tx_id
+  client="$(
+    devnet_compose exec -T piece-server \
+      sptool --actor t01000 toolbox mk12-client wallet default |
+      tr -d '\r\n'
+  )"
+  [[ "${client}" == t* ]] || devnet_die "could not resolve mk12 client wallet"
+
+  current="$(devnet_compose exec -T lotus lotus filplus check-client-datacap "${client}" 2>/dev/null || true)"
+  if [[ -n "${current}" && "${current}" != *"not a verified client"* ]]; then
+    printf 'mk12 client DataCap: %s\n' "${current}"
+    return 0
+  fi
+
+  notary_file="${DEVNET_DATA_DIR}/contracts/mk12-client-notary.addr"
+  if [[ -f "${notary_file}" && ! -L "${notary_file}" ]]; then
+    notary="$(tr -d '\r\n' < "${notary_file}")"
+  else
+    devnet_require_safe_write_path "${notary_file}" file
+    notary="$(devnet_compose exec -T lotus lotus wallet new secp256k1 | tr -d '\r\n')"
+    printf '%s\n' "${notary}" > "${notary_file}"
+  fi
+  [[ "${notary}" == t* ]] || devnet_die "could not create mk12 client notary wallet"
+
+  if ! devnet_compose exec -T lotus lotus state get-actor "${notary}" >/dev/null 2>&1; then
+    devnet_compose exec -T lotus lotus send "${notary}" 10 >>"${deployment_dir}/deploy.log"
+    wait_for_actor_address "${notary}" "mk12 client notary"
+  fi
+
+  current="$(devnet_compose exec -T lotus lotus filplus check-notary-datacap "${notary}" 2>/dev/null || true)"
+  if [[ -z "${current}" || "${current}" == *"not found"* ]]; then
+    before_tx_id="$(latest_root_msig_transaction_id)"
+    devnet_compose exec -T lotus lotus-shed verifreg add-verifier \
+      t0100 "${notary}" "${notary_allowance}" >>"${deployment_dir}/deploy.log"
+
+    for _ in {1..30}; do
+      new_tx_id="$(latest_root_msig_transaction_id)"
+      [[ -n "${new_tx_id}" && "${new_tx_id}" != "${before_tx_id}" ]] && break
+      sleep 2
+    done
+    [[ -n "${new_tx_id}" && "${new_tx_id}" != "${before_tx_id}" ]] ||
+      devnet_die "mk12 client notary verifier proposal was not created"
+
+    devnet_compose exec -T lotus lotus msig approve --from t0101 f080 "${new_tx_id}" \
+      >>"${deployment_dir}/deploy.log"
+    for _ in {1..60}; do
+      current="$(devnet_compose exec -T lotus lotus filplus check-notary-datacap "${notary}" 2>/dev/null || true)"
+      if [[ -n "${current}" && "${current}" != *"not found"* ]]; then
+        break
+      fi
+      sleep 2
+    done
+    [[ -n "${current}" && "${current}" != *"not found"* ]] ||
+      devnet_die "mk12 client notary DataCap authority did not become active"
+  fi
+
+  devnet_compose exec -T lotus lotus filplus grant-datacap \
+    --from "${notary}" "${client}" "${client_allowance}" >>"${deployment_dir}/deploy.log"
+  for _ in {1..60}; do
+    current="$(devnet_compose exec -T lotus lotus filplus check-client-datacap "${client}" 2>/dev/null || true)"
+    if [[ -n "${current}" && "${current}" != *"not a verified client"* ]]; then
+      printf 'mk12 client DataCap: %s\n' "${current}"
+      return 0
+    fi
+    sleep 2
+  done
+  devnet_die "mk12 client DataCap did not become active"
 }
 
 normalized_runtime_hash() {
@@ -170,6 +263,8 @@ node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" --timeout-ms 1800000 -- \
   -e "EPOCH=${epoch}" \
   -e "PROVIDER=${provider}" \
   -e "PROOF_BACKEND=${proof_backend}" \
+  -e "SECTOR_SIZE_SELECTOR=${sector_size_selector}" \
+  -e "SECTOR_SIZE_BYTES=${sector_size_bytes}" \
   -e "DEPLOYMENT_ID=${deployment_id}" \
   -e "DEPLOYMENT_ROOT=/workspace/.runtime/deployments/${deployment_id}" \
   -e "POREP_TARGET_ROOT=/workspace/${porep_snapshot#"${DEVNET_ROOT}/"}" \
@@ -182,10 +277,11 @@ node "${DEVNET_ROOT}/scripts/run-with-timeout.mjs" --timeout-ms 1800000 -- \
   "${image}" /workspace/scripts/contracts-deploy-in-container.sh
 
 npm --prefix "${DEVNET_ROOT}/tools" run cli -- deployment revision inspect \
-  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" <"${temporary}"
+  "${generation}" "${genesis_cid}" "${chain_id}" "${provider}" "${proof_backend}" "${sector_size_selector}" <"${temporary}"
 devnet_verify_deployment_code "${temporary}"
 verify_target_runtime_bytecode "${temporary}" "${porep_snapshot}"
 ensure_meta_allocator_notary "${temporary}"
+ensure_mk12_client_datacap
 mv -- "${temporary}" "${manifest}"
 
 active="${deployments_root}/active.json"

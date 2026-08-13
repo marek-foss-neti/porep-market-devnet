@@ -193,6 +193,9 @@ test("deliver-seal-unseal-retrieval benchmark summary labels HTTP and forced sec
   context.state.set("PROOF_PARAMETER_CACHE_STATUS", "present");
   context.state.set("PROOF_PARAMETER_CACHE_FILE_COUNT", 3);
   context.state.set("PROOF_PARAMETER_CACHE_BYTES", 1024 * 1024);
+  context.state.set("ZIGZAG_SIDECAR_DIR", join(runDir, "zigzag-proof-sidecars"));
+  context.state.set("ZIGZAG_SIDECAR_FILE_COUNT", 2);
+  context.state.set("ZIGZAG_SIDECAR_BYTES", 4096);
   context.state.set("DEVNET_CURIO_COMMIT", "c".repeat(40));
   context.state.set("DEVNET_LOTUS_COMMIT", "d".repeat(40));
   context.state.set("DEVNET_IMAGE_PLATFORM", "linux/arm64");
@@ -256,6 +259,7 @@ test("deliver-seal-unseal-retrieval benchmark summary labels HTTP and forced sec
   assert.match(report, /## Benchmark environment/);
   assert.match(report, /Proof backend selector \| stacked/);
   assert.match(report, /Proof parameter cache \| present, 3 files, 1\.00 MiB/);
+  assert.match(report, /ZigZag sidecars \| .*zigzag-proof-sidecars, 2 files, 4\.00 KiB/);
   assert.match(report, /Curio source commit \| `cccccccccccc`/);
   assert.match(report, /Docker \| version 29\.2\.1, 10 CPUs, 8\.00 GiB/);
   assert.match(report, /Cache isolation: fresh devnet per backend; Curio restart before HTTP requests/);
@@ -284,6 +288,8 @@ function config(projectRoot: string): E2EConfig {
     deploymentId: "deployment-test",
     deploymentRevision: 2,
     proofBackend: "stacked",
+    sectorSizeBytes: 8_388_608,
+    sectorSizeSelector: "8mib",
     deploymentRecordPath: join(projectRoot, "002.json"),
     privateKeyTest: key,
     privateKeySp: key,

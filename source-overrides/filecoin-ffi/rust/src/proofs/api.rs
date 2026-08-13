@@ -36,11 +36,14 @@ pub type ApiVanillaProof = Vec<u8>;
 
 const ZIGZAG_DEVNET_ENV: &str = "FIL_PROOFS_USE_ZIGZAG";
 const ZIGZAG_PARAMETER_CACHE_ENV: &str = "FIL_PROOFS_PARAMETER_CACHE";
+const ZIGZAG_SIDECAR_DIR_ENV: &str = "FIL_PROOFS_ZIGZAG_SIDECAR_DIR";
 const ZIGZAG_ENVELOPE_KIND: &str = "filecoin-ffi-zigzag-devnet";
 const ZIGZAG_ENVELOPE_VERSION: u8 = 1;
 const ZIGZAG_SNARK_PROOF_BYTES: usize = 192;
 const ZIGZAG_2_KIB: u64 = 2 * 1024;
 const ZIGZAG_8_MIB: u64 = 8 * 1024 * 1024;
+const ZIGZAG_512_MIB: u64 = 512 * 1024 * 1024;
+const ZIGZAG_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const ZIGZAG_CURIO_TREE_D_FILE: &str = "sc-02-data-tree-d.dat";
 const ZIGZAG_CURIO_REPLICA_ID_FILE: &str = "zigzag-replica-id.json";
 const ZIGZAG_PROOF_SIDECAR_DIR: &str = "zigzag-proof-sidecars";
@@ -116,7 +119,10 @@ fn zigzag_registered_porep_id(registered_proof: RegisteredSealProof) -> [u8; 32]
 }
 
 fn zigzag_supported_sector_size(sector_size: u64) -> bool {
-    matches!(sector_size, ZIGZAG_2_KIB | ZIGZAG_8_MIB)
+    matches!(
+        sector_size,
+        ZIGZAG_2_KIB | ZIGZAG_8_MIB | ZIGZAG_512_MIB | ZIGZAG_32_GIB
+    )
 }
 
 fn zigzag_devnet_proof(registered_proof: RegisteredSealProof) -> bool {
@@ -128,7 +134,7 @@ fn zigzag_porep_config(registered_proof: RegisteredSealProof) -> Result<zigzag::
     let sector_size = zigzag_registered_sector_size(registered_proof);
     ensure!(
         zigzag_supported_sector_size(sector_size),
-        "ZigZag devnet FFI only supports 2KiB and 8MiB sectors, got {} bytes for {:?}",
+        "ZigZag devnet FFI only supports 2KiB, 8MiB, 512MiB, and 32GiB sectors, got {} bytes for {:?}",
         sector_size,
         registered_proof
     );
@@ -190,10 +196,16 @@ fn registered_seal_proof_from_curio_name(value: &str) -> Option<RegisteredSealPr
     match value {
         "StackedDrg2KiBV1" => Some(StackedDrg2KiBV1),
         "StackedDrg8MiBV1" => Some(StackedDrg8MiBV1),
+        "StackedDrg512MiBV1" => Some(StackedDrg512MiBV1),
+        "StackedDrg32GiBV1" => Some(StackedDrg32GiBV1),
         "StackedDrg2KiBV1_1" => Some(StackedDrg2KiBV1_1),
         "StackedDrg8MiBV1_1" => Some(StackedDrg8MiBV1_1),
+        "StackedDrg512MiBV1_1" => Some(StackedDrg512MiBV1_1),
+        "StackedDrg32GiBV1_1" => Some(StackedDrg32GiBV1_1),
         "StackedDrg2KiBV1_1_Feat_SyntheticPoRep" => Some(StackedDrg2KiBV1_1_Feat_SyntheticPoRep),
         "StackedDrg8MiBV1_1_Feat_SyntheticPoRep" => Some(StackedDrg8MiBV1_1_Feat_SyntheticPoRep),
+        "StackedDrg512MiBV1_1_Feat_SyntheticPoRep" => Some(StackedDrg512MiBV1_1_Feat_SyntheticPoRep),
+        "StackedDrg32GiBV1_1_Feat_SyntheticPoRep" => Some(StackedDrg32GiBV1_1_Feat_SyntheticPoRep),
         _ => None,
     }
 }
@@ -272,6 +284,7 @@ fn read_curio_tree_d_sector(cache_dir: &std::path::Path, sector_size: u64) -> Re
     Ok(data)
 }
 
+#[allow(dead_code)]
 fn encode_zigzag_proof_envelope(
     comm_r: [u8; 32],
     comm_r_star: [u8; 32],
@@ -311,6 +324,12 @@ fn zigzag_parameter_cache_dir() -> std::path::PathBuf {
         .unwrap_or_else(|_| std::path::PathBuf::from("/var/tmp/filecoin-proof-parameters"))
 }
 
+fn zigzag_proof_sidecar_dir() -> std::path::PathBuf {
+    std::env::var(ZIGZAG_SIDECAR_DIR_ENV)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| zigzag_parameter_cache_dir().join(ZIGZAG_PROOF_SIDECAR_DIR))
+}
+
 fn zigzag_proof_prefix_hex(proof: &[u8]) -> String {
     let prefix_len = proof.len().min(16);
     hex::encode(&proof[..prefix_len])
@@ -323,8 +342,7 @@ fn zigzag_proof_sidecar_path(
     comm_d: &[u8; 32],
     proof: &[u8],
 ) -> std::path::PathBuf {
-    zigzag_parameter_cache_dir()
-        .join(ZIGZAG_PROOF_SIDECAR_DIR)
+    zigzag_proof_sidecar_dir()
         .join(format!(
             "v{}-rp{}-s{}-cr{}-cd{}-p{}.json",
             ZIGZAG_ENVELOPE_VERSION,

@@ -65,6 +65,15 @@ const filecoinFfiApiOverridePath = join(
   "proofs",
   "api.rs",
 );
+const filecoinFfiMicrobenchOverridePath = join(
+  repositoryRoot,
+  "source-overrides",
+  "filecoin-ffi",
+  "rust",
+  "src",
+  "bin",
+  "porep-proof-microbench.rs",
+);
 const filecoinFfiCargoTomlOverridePath = join(
   repositoryRoot,
   "source-overrides",
@@ -85,6 +94,15 @@ const lotusEntrypointOverridePath = join(
   "source-overrides",
   "lotus",
   "entrypoint.sh",
+);
+const curioTasksOverridePath = join(
+  repositoryRoot,
+  "source-overrides",
+  "curio",
+  "cmd",
+  "curio",
+  "tasks",
+  "tasks.go",
 );
 const curioUnsealFuncsOverridePath = join(
   repositoryRoot,
@@ -131,17 +149,22 @@ const dockerSurfaceInputs = [
   "docker/indexer/Dockerfile",
 ] as const;
 const sourceOverrideInputs = [
+  "source-overrides/curio/cmd/curio/tasks/tasks.go",
   "source-overrides/curio/cmd/sptool/toolbox_deal_client.go",
   "source-overrides/curio/lib/ffi/unseal_funcs.go",
   "source-overrides/curio/market/mk20/ddo_v1.go",
+  "source-overrides/curio/scripts/makefiles/10-deps.mk",
   "source-overrides/curio/tasks/piece/task_park_piece.go",
   "source-overrides/curio/tasks/unseal/task_unseal_decode.go",
   "source-overrides/curio/tasks/unseal/task_unseal_sdr.go",
   "source-overrides/filecoin-ffi/rust/Cargo.lock",
   "source-overrides/filecoin-ffi/rust/Cargo.toml",
+  "source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
   "source-overrides/filecoin-ffi/rust/src/proofs/api.rs",
   "source-overrides/fvm-4.8.2-zigzag/Cargo.toml",
+  "source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs",
   "source-overrides/fvm-4.8.2-zigzag/src/kernel/filecoin.rs",
+  "source-overrides/lotus/build/buildconstants/devnet_network_bundle.go",
   "source-overrides/lotus/entrypoint.sh",
 ] as const;
 
@@ -213,9 +236,11 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
     commonScript,
     compose,
     filecoinFfiApiOverride,
+    filecoinFfiMicrobenchOverride,
     filecoinFfiCargoTomlOverride,
     fvmZigzagKernelOverride,
     lotusEntrypointOverride,
+    curioTasksOverride,
     curioUnsealFuncsOverride,
     curioUnsealSdrOverride,
   ] = await Promise.all([
@@ -225,9 +250,11 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
     readFile(commonScriptPath, "utf8"),
     readFile(composePath, "utf8"),
     readFile(filecoinFfiApiOverridePath, "utf8"),
+    readFile(filecoinFfiMicrobenchOverridePath, "utf8"),
     readFile(filecoinFfiCargoTomlOverridePath, "utf8"),
     readFile(fvmZigzagKernelOverridePath, "utf8"),
     readFile(lotusEntrypointOverridePath, "utf8"),
+    readFile(curioTasksOverridePath, "utf8"),
     readFile(curioUnsealFuncsOverridePath, "utf8"),
     readFile(curioUnsealSdrOverridePath, "utf8"),
   ]);
@@ -236,10 +263,20 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiApiOverride, /zigzag_prove_from_cache/);
   assert.match(filecoinFfiApiOverride, /zigzag_pre_commit_phase1_with_replica_id/);
   assert.match(filecoinFfiApiOverride, /zigzag_verify_seal/);
+  assert.match(filecoinFfiApiOverride, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
+  assert.match(filecoinFfiMicrobenchOverride, /porep-proof-microbench/);
+  assert.match(filecoinFfiMicrobenchOverride, /zigzag_prove_from_cache/);
+  assert.match(filecoinFfiMicrobenchOverride, /seal_pre_commit_phase1/);
+  assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS/);
+  assert.match(filecoinFfiMicrobenchOverride, /parameter_cache_identifier/);
+  assert.match(filecoinFfiMicrobenchOverride, /verifying_key_rewritten/);
   assert.match(filecoinFfiCargoTomlOverride, /fvm-4\.8\.2-zigzag/);
   assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_USE_ZIGZAG/);
+  assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
   assert.match(fvmZigzagKernelOverride, /read_zigzag_proof_sidecar/);
   assert.match(fvmZigzagKernelOverride, /zigzag_verify_seal/);
+  assert.match(curioTasksOverride, /CURIO_DISABLE_ACTOR_METADATA_TASKS/);
+  assert.match(curioTasksOverride, /StorageGCMark and SectorMetadata tasks are disabled/);
   assert.match(curioUnsealFuncsOverride, /FIL_PROOFS_USE_ZIGZAG/);
   assert.match(curioUnsealSdrOverride, /unseal skip sdr key for zigzag/);
   assert.match(curioUnsealFuncsOverride, /filecoinffi\.Unseal/);
@@ -262,28 +299,41 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(dockerfile, /COPY --from=rust-fil-proofs-local \/ \/opt\/lotus\/extern\/rust-fil-proofs/);
   assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/curio\/ \/opt\/curio\//);
   assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/filecoin-ffi\/ \/opt\/curio\/extern\/filecoin-ffi\//);
+  assert.match(dockerfile, /--bin porep-proof-microbench/);
+  assert.match(dockerfile, /COPY --from=curio-builder .*porep-proof-microbench \/usr\/local\/bin\/porep-proof-microbench/);
+  assert.match(dockerfile, /--bin porep-proof-microbench[\s\S]*--locked/);
+  assert.match(dockerfile, /\/var\/tmp\/filecoin-zigzag-proof-sidecars/);
   assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/fvm-4\.8\.2-zigzag\/ \/opt\/curio\/extern\/fvm-4\.8\.2-zigzag\//);
   assert.doesNotMatch(dockerfile, /git apply/);
   assert.match(dockerfile, /cargo fetch --manifest-path extern\/filecoin-ffi\/rust\/Cargo\.toml/);
   assert.match(dockerfile, /fvm-4\.8\.2-zigzag/);
   assert.match(dockerfile, /FROM \$\{GO_BUILDER_IMAGE\} AS lotus-builder/);
   assert.match(dockerfile, /COPY --from=lotus-source \/ \./);
+  assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/lotus\/build\/ \/opt\/lotus\/build\//);
   assert.match(dockerfile, /make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed/);
   assert.match(dockerfile, /COPY --from=lotus-builder \/opt\/lotus\/lotus /);
   assert.doesNotMatch(dockerfile, /ENV[\s\S]*FIL_PROOFS_USE_ZIGZAG/);
   assert.match(dockerfile, /io\.porep-market\.zigzag\.rust-fil-proofs\.commit/);
   assert.match(lotusDockerfile, /COPY --from=harness-overlay source-overrides\/lotus\/entrypoint\.sh \/app\/entrypoint\.sh/);
   assert.doesNotMatch(lotusDockerfile, /git apply/);
-  assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
+  assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
   assert.match(lotusEntrypointOverride, /without_zigzag_proofs lotus-seed .*pre-seal/);
 
   const lotusService = compose.match(/  lotus:\n[\s\S]*?\n  contracts-bootstrap:/)?.[0] ?? "";
   const lotusMinerService = compose.match(/  lotus-miner:\n[\s\S]*?\n  curio:/)?.[0] ?? "";
   const curioService = compose.match(/  curio:\n[\s\S]*?\n  yugabyte:/)?.[0] ?? "";
   assert.match(curioService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
+  assert.match(curioService, /CURIO_NEW_MINER_SECTOR_SIZE=\$\{DEVNET_SECTOR_SIZE\}/);
+  assert.match(curioService, /CURIO_DISABLE_ACTOR_METADATA_TASKS=\$\{CURIO_DISABLE_ACTOR_METADATA_TASKS\}/);
   assert.match(curioService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=\$\{FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS\}/);
+  assert.match(curioService, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}/);
+  assert.match(curioService, /\$\{DEVNET_ZIGZAG_SIDECAR_DIR\}:\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}:rw/);
   assert.match(lotusService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
+  assert.match(lotusService, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}/);
+  assert.match(lotusService, /LOTUS_DEVNET_NETWORK_BUNDLE=\$\{LOTUS_DEVNET_NETWORK_BUNDLE\}/);
+  assert.match(lotusService, /\$\{DEVNET_ZIGZAG_SIDECAR_DIR\}:\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}:rw/);
   assert.doesNotMatch(lotusService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
+  assert.match(lotusMinerService, /LOTUS_DEVNET_NETWORK_BUNDLE=\$\{LOTUS_DEVNET_NETWORK_BUNDLE\}/);
   assert.doesNotMatch(lotusMinerService, /FIL_PROOFS_USE_ZIGZAG/);
 });
 
@@ -302,11 +352,20 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
     },
     proof: {
       backend: "zigzag",
-      lotus: { FIL_PROOFS_USE_ZIGZAG: "1" },
+      lotus: {
+        FIL_PROOFS_USE_ZIGZAG: "1",
+        FIL_PROOFS_ZIGZAG_SIDECAR_DIR: "/var/tmp/filecoin-zigzag-proof-sidecars",
+      },
       curio: {
         FIL_PROOFS_USE_ZIGZAG: "1",
         FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: "1",
+        FIL_PROOFS_ZIGZAG_SIDECAR_DIR: "/var/tmp/filecoin-zigzag-proof-sidecars",
       },
+    },
+    sector: {
+      selector: "8mib",
+      bytes: 8_388_608,
+      registeredSealProof: "StackedDrg8MiBV1_1",
     },
     compose: lock.runtime.services.map((service) => ({
       service,
@@ -319,6 +378,7 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
       epoch: 250,
       networkVersion: 28,
       actorsVersion: 18,
+      actorNetworkBundle: "devnet",
       manifestCid: lock.network.actorsV18.manifestCid,
       minerActorCodeCid: lock.network.actorsV18.storageMinerActorCid,
     },
@@ -343,6 +403,24 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
   assert.equal(inspected.provider, provider);
   assert.equal(inspected.epoch, 250);
 
+  const largeSectorReady = JSON.parse(JSON.stringify(ready)) as typeof ready;
+  largeSectorReady.sector = {
+    selector: "512mib",
+    bytes: 536_870_912,
+    registeredSealProof: "StackedDrg512MiBV1_1",
+  };
+  largeSectorReady.chain.actorNetworkBundle = "testing";
+  largeSectorReady.chain.manifestCid = "bafy2bzacece6i7k26rjexzyedrr5qcag7xdntw72tdsealzy6qqdrankk4a7g";
+  largeSectorReady.chain.minerActorCodeCid = "bafk2bzaceaxfll3kmvqwq2bsyxpo5esfmmvdjjkuwk4ddp3rfveguri3j3or4";
+  largeSectorReady.miner.sectorSize = 536_870_912;
+  assert.equal(inspectDevnetStatus(JSON.stringify(largeSectorReady), lock).ready, true);
+  const largeSectorBeforeUpgrade = JSON.parse(JSON.stringify(largeSectorReady)) as typeof ready;
+  largeSectorBeforeUpgrade.chain.epoch = 199;
+  assert.throws(
+    () => inspectDevnetStatus(JSON.stringify(largeSectorBeforeUpgrade), lock),
+    /live chain does not match the required NV28 actor state/,
+  );
+
   for (const mutate of [
     (value: typeof ready) => { value.chain.chainId = "0x1"; },
     (value: typeof ready) => { value.chain.networkVersion = 27; },
@@ -350,6 +428,7 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
     (value: typeof ready) => { value.compose[0]!.health = "starting"; },
     (value: typeof ready) => { value.miner.provider = "t01000"; },
     (value: typeof ready) => { value.miner.sectorSize = 2_048; },
+    (value: typeof ready) => { value.sector.bytes = 512; },
     (value: typeof ready) => { value.curio.marketReady = false; },
   ]) {
     const invalid = structuredClone(ready);
@@ -370,7 +449,7 @@ test("public status command is bounded and reports a stopped project precisely",
   assert.match(statusScript, /deadline=\$\(\(command_deadline - 65\)\)/);
   assert.match(statusScript, /diagnostic_timeout_ms/);
   assert.match(statusScript, /status_pause \|\| break/);
-  assert.match(statusScript, /devnet_progress "devnet-status: waiting for \$\{proof_backend\} devnet readiness"/);
+  assert.match(statusScript, /devnet_progress "devnet-status: waiting for \$\{proof_backend\} \$\{sector_size_selector\} devnet readiness"/);
   assert.match(statusScript, /devnet_progress_maybe status_progress_last/);
   assert.match(statusScript, /\.runtime\/devnet\/status\/latest\.json/);
   assert.match(statusScript, /Filecoin\.StateMinerInfo/);
@@ -385,8 +464,11 @@ test("lifecycle progress output is throttled and fixture-safe", async () => {
   assert.match(commonScript, /DEVNET_PROGRESS_INTERVAL_SECONDS/);
   assert.match(commonScript, /DEVNET_PROGRESS:-1/);
   assert.match(commonScript, /DEVNET_TEST_COMMAND_LOG/);
+  assert.match(commonScript, /DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS/);
+  assert.match(commonScript, /devnet_curio_market_config_timeout_seconds\(\)/);
   assert.match(commonScript, /devnet_progress_maybe\(\)/);
-  assert.match(upScript, /devnet_progress "devnet-up: starting \$\{backend\} containers"/);
+  assert.match(upScript, /devnet_progress "devnet-up: starting \$\{backend\} containers with \$\{sector_size\} sectors"/);
+  assert.match(upScript, /large-sector startup may fetch production proof params/);
   assert.match(upScript, /devnet_progress_maybe progress_last/);
   assert.match(upScript, /devnet-up: restarting Curio after market config overrides/);
 
@@ -434,20 +516,104 @@ test("lifecycle progress output is throttled and fixture-safe", async () => {
   assert.equal(silent.stdout, "last=-999999\n");
 });
 
+test("Curio market config timeout is longer for large sectors and overrideable", async () => {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; devnet_curio_market_config_timeout_seconds 8mib; devnet_curio_market_config_timeout_seconds 512mib; DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS=42 devnet_curio_market_config_timeout_seconds 32gib',
+      "devnet-market-config-timeout-fixture",
+      commonScriptPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "300\n14400\n42\n");
+
+  const rejected = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS=0 devnet_curio_market_config_timeout_seconds 512mib',
+      "devnet-market-config-timeout-reject-fixture",
+      commonScriptPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS must be a positive integer/);
+});
+
+test("large-sector testing actor bundle disables Curio actor metadata tasks", async () => {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; devnet_disable_actor_metadata_tasks_for_sector_size 8mib; devnet_disable_actor_metadata_tasks_for_sector_size 512mib; devnet_disable_actor_metadata_tasks_for_sector_size 32gib',
+      "devnet-actor-metadata-fixture",
+      commonScriptPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "0\n1\n1\n");
+});
+
+test("FireHorse upgrade epoch gets a large-sector startup buffer and remains overrideable", async () => {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; devnet_firehorse_upgrade_epoch_for_sector_size 8mib; devnet_firehorse_upgrade_epoch_for_sector_size 512mib; DEVNET_FIREHORSE_UPGRADE_EPOCH=42 devnet_firehorse_upgrade_epoch_for_sector_size 32gib',
+      "devnet-firehorse-epoch-fixture",
+      commonScriptPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "20\n200\n42\n");
+
+  const rejected = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; DEVNET_FIREHORSE_UPGRADE_EPOCH=0 devnet_firehorse_upgrade_epoch_for_sector_size 512mib',
+      "devnet-firehorse-epoch-reject-fixture",
+      commonScriptPath,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /DEVNET_FIREHORSE_UPGRADE_EPOCH must be a positive integer/);
+});
+
 test("proof backend benchmark runner performs fresh isolated comparisons and aggregates evidence", async () => {
   const [justfile, script] = await Promise.all([
     readFile(join(repositoryRoot, "justfile"), "utf8"),
     readFile(benchProofBackendsScriptPath, "utf8"),
   ]);
 
-  assert.match(justfile, /bench-proof-backends:\n\s+@bash scripts\/bench-proof-backends\.sh/);
+  assert.match(justfile, /bench-proof-backends sector_size='8mib':\n\s+@bash scripts\/bench-proof-backends\.sh '\{\{sector_size\}\}'/);
+  assert.match(justfile, /bench-proof-micro backend='stacked' sector_size='8mib':\n\s+@bash scripts\/bench-proof-micro\.sh '\{\{backend\}\}' '\{\{sector_size\}\}'/);
+  assert.match(justfile, /bench-proof-micro-backends sector_size='8mib':/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
+  assert.match(script, /prewarm_backend_params/);
+  assert.match(script, /porep-proof-microbench/);
+  assert.match(script, /--prewarm-only/);
+  assert.match(script, /using isolated Stacked microbench parameter cache/);
+  assert.match(script, /devnet_start_prewarm_progress/);
   assert.match(script, /prewarm_zigzag_if_needed/);
-  assert.match(script, /just reset zigzag/);
+  assert.match(script, /zigzag_static_params_ready/);
+  assert.match(script, /\.zigzag-devnet-prewarm-\$\{bench_sector_size\}\.json/);
+  assert.match(script, /zigzag_static_param_pattern/);
+  assert.match(script, /v\*-zigzag-proof-of-replication-merkletree-poseidon_hasher-2-0-0-sha256_hasher-\*\.params/);
+  assert.match(script, /v\*-zigzag-proof-of-replication-merkletree-poseidon_hasher-2-0-0-sha256_hasher-\*\.vk/);
+  assert.match(script, /sidecarPolicy: "runtime-only-fresh-devnet"/);
+  assert.match(script, /just reset zigzag "\$\{bench_sector_size\}"/);
   assert.match(script, /bench-proof-backends: ZigZag prewarm: reset fresh devnet/);
   assert.match(script, /just test-deliver-seal-unseal-retrieval active/);
-  assert.match(script, /just reset "\$\{backend\}"/);
+  assert.match(script, /just reset "\$\{backend\}" "\$\{bench_sector_size\}"/);
   assert.match(script, /just deploy/);
   assert.match(script, /run measured deliver\/seal\/unseal\/retrieval benchmark/);
   assert.match(script, /just bench-deliver-seal-unseal-retrieval active/);
@@ -458,6 +624,72 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /Proof backend benchmark comparison/);
 });
 
+test("mismatched generated Stacked proof parameters are quarantined before devnet startup", async () => {
+  const fixture = await createLifecycleFixture();
+  const source = join(
+    fixture.root,
+    ".cache",
+    "sources",
+    "rust_fil_proofs",
+    rustFilProofsSourceCommit,
+  );
+  const cache = join(fixture.root, ".cache", "proof-parameters");
+  const parameterId = "v28-stacked-proof-of-replication-merkletree-poseidon_hasher-8-0-0-sha256_hasher-fixture";
+  const paramsKey = `${parameterId}.params`;
+  const verifyingKey = `${parameterId}.vk`;
+  const metadataKey = `${parameterId}.meta`;
+  try {
+    await mkdir(cache, { recursive: true });
+    await writeFile(
+      join(source, "parameters.json"),
+      `${JSON.stringify({
+        [paramsKey]: {
+          cid: "QmParams",
+          digest: createHash("md5").update("official params").digest("hex"),
+          sector_size: 536_870_912,
+        },
+        [verifyingKey]: {
+          cid: "QmVk",
+          digest: createHash("md5").update("official vk").digest("hex"),
+          sector_size: 536_870_912,
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(join(cache, paramsKey), "local generated params", "utf8");
+    await writeFile(join(cache, verifyingKey), "local generated vk", "utf8");
+    await writeFile(join(cache, metadataKey), '{"sector_size":536870912}\n', "utf8");
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'source "$1"; devnet_quarantine_mismatched_stacked_parameter_cache 512mib; find "$2/.runtime/proof-parameter-quarantine" -type f | LC_ALL=C sort',
+        "devnet-stacked-param-quarantine-fixture",
+        join(fixture.root, "scripts", "devnet-common.sh"),
+        fixture.root,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DEVNET_RUST_FIL_PROOFS_SOURCE: source,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /quarantining non-production Stacked proof parameter/);
+    assert.ok(result.stdout.includes(paramsKey), result.stdout);
+    assert.ok(result.stdout.includes(verifyingKey), result.stdout);
+    assert.ok(result.stdout.includes(metadataKey), result.stdout);
+    await assert.rejects(lstat(join(cache, paramsKey)), { code: "ENOENT" });
+    await assert.rejects(lstat(join(cache, verifyingKey)), { code: "ENOENT" });
+    await assert.rejects(lstat(join(cache, metadataKey)), { code: "ENOENT" });
+  } finally {
+    await rm(fixture.fixtureBase, { recursive: true, force: true });
+  }
+});
+
 async function renderTaskThreeCompose(): Promise<{
   contract: ComposeRuntimeContract;
   rendered: string;
@@ -465,6 +697,7 @@ async function renderTaskThreeCompose(): Promise<{
   const fixtureRoot = await mkdtemp(join(tmpdir(), "devnet-compose-render-"));
   const dataDirectory = join(fixtureRoot, ".runtime", "devnet", "data");
   const proofParametersDirectory = join(fixtureRoot, ".cache", "proof-parameters");
+  const zigzagSidecarDirectory = join(fixtureRoot, ".runtime", "devnet", "zigzag-proof-sidecars");
   const filecoinServicesSource = join(
     fixtureRoot,
     ".cache",
@@ -491,13 +724,19 @@ async function renderTaskThreeCompose(): Promise<{
       `DEVNET_CURIO_SHORT_COMMIT=${curioShortCommit}`,
       `DEVNET_DATA_DIR=${dataDirectory}`,
       "DEVNET_PROOF_BACKEND=stacked",
+      "DEVNET_SECTOR_SIZE=8mib",
+      "LOTUS_DEVNET_NETWORK_BUNDLE=devnet",
       `DEVNET_PROOF_PARAMETERS_DIR=${proofParametersDirectory}`,
+      `DEVNET_ZIGZAG_SIDECAR_DIR=${zigzagSidecarDirectory}`,
       "DEVNET_FIREHORSE_HEIGHT=20",
       `DEVNET_FILECOIN_SERVICES_SOURCE=${filecoinServicesSource}`,
       `DEVNET_MULTICALL3_SOURCE=${multicall3Source}`,
       `DEVNET_YUGABYTE_IMAGE=${yugabyteImage}`,
+      "SECTOR_SIZE=8388608",
       "FIL_PROOFS_USE_ZIGZAG=0",
       "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0",
+      "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/var/tmp/filecoin-zigzag-proof-sidecars",
+      "CURIO_DISABLE_ACTOR_METADATA_TASKS=0",
       "",
     ].join("\n"),
     "utf8",
@@ -537,14 +776,20 @@ async function renderTaskThreeCompose(): Promise<{
     contract: {
       curioShortCommit,
       dataDirectory,
+      actorNetworkBundle: "devnet",
       firehorseHeight: "20",
       filecoinServicesSource,
+      curioDisableActorMetadataTasks: "0",
       filProofsUseZigZag: "0",
       filProofsZigZagGenerateMissingParams: "0",
+      filProofsZigZagSidecarDirectory: "/var/tmp/filecoin-zigzag-proof-sidecars",
       imageNamespace,
       multicall3Source,
       proofBackend: "stacked",
       proofParametersDirectory,
+      sectorSizeBytes: 8_388_608,
+      sectorSizeSelector: "8mib",
+      zigzagSidecarDirectory,
       yugabyteImage,
     },
     rendered: result.stdout,
@@ -559,7 +804,7 @@ test("rendered compose inspector enforces the complete Task 3 contract", async (
   assert.deepEqual(inspected.services, [...lock.runtime.services].sort());
   assert.equal(inspected.images.length, 7);
   assert.equal(inspected.ports.length, 13);
-  assert.equal(inspected.mounts.length, 32);
+  assert.equal(inspected.mounts.length, 34);
   assert.deepEqual(inspected.healthyServices, [
     "curio",
     "indexer",
@@ -659,13 +904,19 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
         `DEVNET_CURIO_SHORT_COMMIT=${contract.curioShortCommit}`,
         `DEVNET_DATA_DIR=${contract.dataDirectory}`,
         `DEVNET_PROOF_BACKEND=${contract.proofBackend}`,
+        `DEVNET_SECTOR_SIZE=${contract.sectorSizeSelector}`,
+        `LOTUS_DEVNET_NETWORK_BUNDLE=${contract.actorNetworkBundle}`,
         `DEVNET_PROOF_PARAMETERS_DIR=${contract.proofParametersDirectory}`,
+        `DEVNET_ZIGZAG_SIDECAR_DIR=${contract.zigzagSidecarDirectory}`,
         `DEVNET_FIREHORSE_HEIGHT=${contract.firehorseHeight}`,
         `DEVNET_FILECOIN_SERVICES_SOURCE=${contract.filecoinServicesSource}`,
         `DEVNET_MULTICALL3_SOURCE=${contract.multicall3Source}`,
         `DEVNET_YUGABYTE_IMAGE=${contract.yugabyteImage}`,
+        `SECTOR_SIZE=${contract.sectorSizeBytes}`,
         `FIL_PROOFS_USE_ZIGZAG=${contract.filProofsUseZigZag}`,
         `FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${contract.filProofsZigZagGenerateMissingParams}`,
+        `FIL_PROOFS_ZIGZAG_SIDECAR_DIR=${contract.filProofsZigZagSidecarDirectory}`,
+        `CURIO_DISABLE_ACTOR_METADATA_TASKS=${contract.actorNetworkBundle === "testing" ? "1" : "0"}`,
         "",
       ].join("\n"),
       "utf8",
@@ -690,7 +941,7 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
       },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /7 services, 7 images, 13 ports, 32 mounts/);
+    assert.match(result.stdout, /7 services, 7 images, 13 ports, 34 mounts/);
 
     const up = await readFile(upScriptPath, "utf8");
     const inspection = up.indexOf("devnet_inspect_rendered_compose");
@@ -845,6 +1096,7 @@ test("runtime preparation rejects symlinks at every writable path before outside
     { kind: "file", path: ".runtime/devnet/ownership.marker" },
     { kind: "directory", path: ".runtime/devnet/logs" },
     { kind: "directory", path: ".runtime/devnet/status" },
+    { kind: "directory", path: ".runtime/devnet/zigzag-proof-sidecars" },
     { kind: "directory", path: ".runtime/deployments" },
     { kind: "directory", path: ".runtime/verification-backups" },
     { kind: "directory", path: ".cache" },
@@ -917,6 +1169,7 @@ test("runtime preparation creates the exact tree and never overwrites a mismatch
       ".runtime/devnet",
       ".runtime/devnet/data",
       ".runtime/devnet/logs",
+      ".runtime/devnet/zigzag-proof-sidecars",
       ".cache",
       ".cache/proof-parameters",
       ...[
@@ -1062,7 +1315,7 @@ if [[ " $* " == *" sources verify "* ]]; then
 fi
 if [[ " $* " == *" devnet compose inspect "* ]]; then
   cat >/dev/null
-  printf '7 services, 7 images, 13 ports, 32 mounts\\n'
+  printf '7 services, 7 images, 13 ports, 34 mounts\\n'
   exit 0
 fi
 exit 65
@@ -1103,9 +1356,15 @@ exit 65
     assert.match(composeEnvironment, new RegExp(`DEVNET_DATA_DIR=${fixture.root}/\\.runtime/devnet/data`));
     assert.match(composeEnvironment, /DEVNET_IMAGE_NAMESPACE=porep-market-curio-devnet/);
     assert.match(composeEnvironment, /DEVNET_PROOF_BACKEND=stacked/);
+    assert.match(composeEnvironment, /DEVNET_SECTOR_SIZE=8mib/);
+    assert.match(composeEnvironment, /LOTUS_DEVNET_NETWORK_BUNDLE=devnet/);
+    assert.match(composeEnvironment, new RegExp(`DEVNET_ZIGZAG_SIDECAR_DIR=${fixture.root}/\\.runtime/devnet/zigzag-proof-sidecars`));
     assert.match(composeEnvironment, /DEVNET_FIREHORSE_HEIGHT=20/);
+    assert.match(composeEnvironment, /SECTOR_SIZE=8388608/);
     assert.match(composeEnvironment, /FIL_PROOFS_USE_ZIGZAG=0/);
     assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0/);
+    assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\/var\/tmp\/filecoin-zigzag-proof-sidecars/);
+    assert.match(composeEnvironment, /CURIO_DISABLE_ACTOR_METADATA_TASKS=0/);
     assert.doesNotMatch(composeEnvironment, /hostile/);
     assert.equal(
       await readFile(
@@ -1195,6 +1454,7 @@ test("reset keeps bounded evidence and deletes disposable chain state", async ()
       ".runtime/devnet/data/lotus",
       ".runtime/devnet/logs",
       ".runtime/devnet/status",
+      ".runtime/devnet/zigzag-proof-sidecars",
       ".runtime/deployments",
       ".runtime/devnet/build",
       ".cache/proof-parameters",
@@ -1205,6 +1465,7 @@ test("reset keeps bounded evidence and deletes disposable chain state", async ()
     await writeFile(join(fixture.root, ".runtime/devnet/data/lotus/state"), "state\n", "utf8");
     await writeFile(join(fixture.root, ".runtime/devnet/logs/old.log"), "old log\n", "utf8");
     await writeFile(join(fixture.root, ".runtime/devnet/status/latest.json"), "{}\n", "utf8");
+    await writeFile(join(fixture.root, ".runtime/devnet/zigzag-proof-sidecars/sidecar"), "sidecar\n", "utf8");
     await writeFile(join(fixture.root, ".runtime/deployments/active.json"), "{}\n", "utf8");
     await writeFile(join(fixture.root, ".runtime/devnet/compose.env"), "fixture=true\n", "utf8");
     await writeFile(join(fixture.root, ".runtime/devnet/generation"), "generation-one\n", "utf8");
@@ -1240,6 +1501,10 @@ test("reset keeps bounded evidence and deletes disposable chain state", async ()
       lstat(join(fixture.root, ".runtime/devnet/data/lotus/state")),
       { code: "ENOENT" },
     );
+    await assert.rejects(
+      lstat(join(fixture.root, ".runtime/devnet/zigzag-proof-sidecars/sidecar")),
+      { code: "ENOENT" },
+    );
 
     for (const stale of [
       ".runtime/devnet/status",
@@ -1257,6 +1522,7 @@ test("reset keeps bounded evidence and deletes disposable chain state", async ()
     assert.equal(await readFile(join(fixture.root, ".cache/sources/curio/source"), "utf8"), "source-cache\n");
     assert.equal((await lstat(join(fixture.root, ".runtime/devnet/data"))).isDirectory(), true);
     assert.equal((await lstat(join(fixture.root, ".runtime/devnet/logs"))).isDirectory(), true);
+    assert.equal((await lstat(join(fixture.root, ".runtime/devnet/zigzag-proof-sidecars"))).isDirectory(), true);
 
     const commands = await readFile(fixture.commandLog, "utf8");
     assert.equal((commands.match(/^node /gm) ?? []).length, 2);
@@ -1871,6 +2137,51 @@ test("all project Dockerfiles omit VOLUME and derived definitions transparently 
         [
           "COPY entrypoint.sh /app",
           "COPY --from=harness-overlay source-overrides/lotus/entrypoint.sh /app/entrypoint.sh",
+          "",
+          "USER root",
+        ].join("\n"),
+      );
+    }
+    if (service === "lotus-miner") {
+      expected = expected.replace(
+        "COPY entrypoint.sh /app\n\nUSER root",
+        [
+          "COPY entrypoint.sh /app",
+          "RUN perl -0pi -e 's/lotus wait-api/lotus wait-api --timeout \"\\${LOTUS_WAIT_API_TIMEOUT:-10m}\"/g' /app/entrypoint.sh",
+          "",
+          "USER root",
+        ].join("\n"),
+      );
+    }
+    if (service === "curio") {
+      expected = expected.replace(
+        "COPY entrypoint.sh /app\n\nUSER root",
+        [
+          "COPY entrypoint.sh /app",
+          "RUN perl -0pi -e 's/lotus wait-api/lotus wait-api --timeout \"\\${LOTUS_WAIT_API_TIMEOUT:-10m}\"/g; s/--sector-size 8MiB/--sector-size \"\\${CURIO_NEW_MINER_SECTOR_SIZE:-\\${SECTOR_SIZE:-8MiB}}\"/g' /app/entrypoint.sh",
+          "",
+          "USER root",
+        ].join("\n"),
+      );
+    }
+    if (service === "piece-server") {
+      expected = expected.replace(
+        "COPY entrypoint.sh /app\nCOPY sample/* /app/sample/\n\nUSER root",
+        [
+          "COPY entrypoint.sh /app",
+          "RUN perl -0pi -e 's/lotus wait-api/lotus wait-api --timeout \"\\${LOTUS_WAIT_API_TIMEOUT:-10m}\"/g' /app/entrypoint.sh",
+          "COPY sample/* /app/sample/",
+          "",
+          "USER root",
+        ].join("\n"),
+      );
+    }
+    if (service === "indexer") {
+      expected = expected.replace(
+        "COPY entrypoint.sh /app\n\nUSER root",
+        [
+          "COPY entrypoint.sh /app",
+          "RUN perl -0pi -e 's/lotus wait-api/lotus wait-api --timeout \"\\${LOTUS_WAIT_API_TIMEOUT:-10m}\"/g' /app/entrypoint.sh",
           "",
           "USER root",
         ].join("\n"),

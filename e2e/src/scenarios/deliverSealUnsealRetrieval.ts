@@ -12,6 +12,7 @@ import {
   setCurioUnsealTarget,
   unsealWaitStepName,
   waitForCurioUnseal,
+  waitForCurioSectorPiece,
   waitForSealedOnly,
   type CurioSectorPiece,
   type CurioStorageState,
@@ -48,6 +49,8 @@ export async function runDeliverSealUnsealRetrieval(
   options: DeliverSealUnsealRetrievalOptions = {},
 ): Promise<void> {
   context.state.set("DEVNET_PROOF_BACKEND", context.config.proofBackend);
+  context.state.set("DEVNET_SECTOR_SIZE", context.config.sectorSizeSelector);
+  context.state.set("DEVNET_SECTOR_SIZE_BYTES", context.config.sectorSizeBytes);
   if (options.benchmark) {
     context.state.set("BENCHMARK_KIND", "deliver-seal-unseal-retrieval");
     context.state.set("BENCH_ISOLATION", "fresh-devnet");
@@ -85,7 +88,11 @@ export async function runDeliverSealUnsealRetrieval(
   const sealed = await runStep(context, "seal and prove-commit delivered piece", () =>
     maybeMonitor(context, options, "seal-prove", "SEAL_PROVE", async () => {
       const pipeline = await waitForCurioSector(context, delivered.dealId);
-      const sectorPiece = readCurioSectorPiece(context, delivered.dealId, delivered.piece.pieceCid);
+      const sectorPiece = await waitForCurioSectorPiece(
+        context,
+        delivered.dealId,
+        delivered.piece.pieceCid,
+      );
       assert.equal(sectorPiece.sector, pipeline.sector);
       assert.equal(sectorPiece.pieceCid, delivered.piece.pieceCid);
       assert.equal(sectorPiece.pieceSize, Number(delivered.piece.pieceSize));
@@ -223,9 +230,16 @@ async function waitForCurioReadyAfterRestart(context: ScenarioContext): Promise<
   for (let elapsed = 0; elapsed < timeoutSeconds; elapsed += 2) {
     const apiReady = dockerExecOk(context, "curio", ["curio", "cli", "--machine", "curio:12300", "info"]);
     const marketReady = await httpHealthOk(`${baseUrl}/health`);
-    if (apiReady && marketReady) return;
+    const retrievalReady = marketReady && await httpPieceHandlerReady(baseUrl);
+    if (apiReady && marketReady && retrievalReady) {
+      await sleep(1_000);
+      return;
+    }
     if (elapsed === 0 || elapsed % 30 === 0) {
-      console.log(`  waiting for Curio restart readiness: api=${apiReady} market=${marketReady}`);
+      console.log(
+        `  waiting for Curio restart readiness: api=${apiReady} `
+          + `market=${marketReady} retrieval=${retrievalReady}`,
+      );
     }
     await sleep(2000);
   }
@@ -238,6 +252,21 @@ async function httpHealthOk(url: string): Promise<boolean> {
   try {
     const response = await fetch(url, { signal: controller.signal });
     return response.ok && (await response.text()) === "Service is up and running";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function httpPieceHandlerReady(baseUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2_000);
+  const probeCid = "bafybeigdyrzt5sfp7udm7hu76arvkavx46d3jhgldf6vbcrbkq2w7byw7u";
+  try {
+    const response = await fetch(`${baseUrl}/piece/${probeCid}`, { signal: controller.signal });
+    const body = await response.text();
+    return response.status !== 503 || !/denylist not yet loaded/i.test(body);
   } catch {
     return false;
   } finally {
@@ -367,16 +396,22 @@ function recordStatusSnapshot(context: ScenarioContext): void {
   const status = readJsonRecord(statusPath);
   if (status === undefined) return;
   const proof = asRecord(status.proof);
+  const sector = asRecord(status.sector);
   const lotusProof = asRecord(proof?.lotus);
   const curioProof = asRecord(proof?.curio);
   recordString(context, "STATUS_PROOF_BACKEND", proof?.backend);
+  recordString(context, "STATUS_SECTOR_SIZE", sector?.selector);
+  recordNumber(context, "STATUS_SECTOR_SIZE_BYTES", sector?.bytes);
+  recordString(context, "STATUS_REGISTERED_SEAL_PROOF", sector?.registeredSealProof);
   recordString(context, "STATUS_LOTUS_FIL_PROOFS_USE_ZIGZAG", lotusProof?.FIL_PROOFS_USE_ZIGZAG);
+  recordString(context, "STATUS_LOTUS_FIL_PROOFS_ZIGZAG_SIDECAR_DIR", lotusProof?.FIL_PROOFS_ZIGZAG_SIDECAR_DIR);
   recordString(context, "STATUS_CURIO_FIL_PROOFS_USE_ZIGZAG", curioProof?.FIL_PROOFS_USE_ZIGZAG);
   recordString(
     context,
     "STATUS_CURIO_FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS",
     curioProof?.FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS,
   );
+  recordString(context, "STATUS_CURIO_FIL_PROOFS_ZIGZAG_SIDECAR_DIR", curioProof?.FIL_PROOFS_ZIGZAG_SIDECAR_DIR);
   const build = asRecord(status.build);
   recordString(context, "STATUS_CURIO_COMMIT", build?.curioCommit);
   recordString(context, "STATUS_LOTUS_COMMIT", build?.lotusCommit);
@@ -428,10 +463,18 @@ function recordProofParameterCache(context: ScenarioContext): void {
     context.state.set("PROOF_PARAMETER_CACHE_BYTES", 0);
     return;
   }
-  const summary = summarizeDirectory(directory);
+  const summary = summarizeDirectory(directory, new Set(["zigzag-proof-sidecars"]));
   context.state.set("PROOF_PARAMETER_CACHE_STATUS", summary.fileCount === 0 ? "empty" : "present");
   context.state.set("PROOF_PARAMETER_CACHE_FILE_COUNT", summary.fileCount);
   context.state.set("PROOF_PARAMETER_CACHE_BYTES", summary.bytes);
+
+  const sidecarDirectory = join(context.projectRoot, ".runtime/devnet/zigzag-proof-sidecars");
+  context.state.set("ZIGZAG_SIDECAR_DIR", sidecarDirectory);
+  const sidecarSummary = existsSync(sidecarDirectory)
+    ? summarizeDirectory(sidecarDirectory)
+    : { fileCount: 0, bytes: 0 };
+  context.state.set("ZIGZAG_SIDECAR_FILE_COUNT", sidecarSummary.fileCount);
+  context.state.set("ZIGZAG_SIDECAR_BYTES", sidecarSummary.bytes);
 }
 
 function recordDockerSnapshot(context: ScenarioContext): void {
@@ -449,10 +492,14 @@ function recordDockerSnapshot(context: ScenarioContext): void {
   recordString(context, "DOCKER_ARCHITECTURE", info.Architecture);
 }
 
-function summarizeDirectory(directory: string): { fileCount: number; bytes: number } {
+function summarizeDirectory(
+  directory: string,
+  excludedTopLevelDirectories: Set<string> = new Set(),
+): { fileCount: number; bytes: number } {
   let fileCount = 0;
   let bytes = 0;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (excludedTopLevelDirectories.has(entry.name)) continue;
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {

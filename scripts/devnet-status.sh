@@ -9,7 +9,11 @@ devnet_require_command node
 devnet_require_runtime_tree
 devnet_require_ownership_marker
 proof_backend="$(devnet_current_proof_backend)"
-firehorse_epoch="$(devnet_firehorse_upgrade_epoch)"
+sector_size_selector="$(devnet_current_sector_size)"
+expected_sector_size="$(devnet_sector_size_bytes "${sector_size_selector}")"
+registered_seal_proof="$(devnet_registered_seal_proof_for_sector_size "${sector_size_selector}")"
+actor_network_bundle="$(devnet_actor_network_bundle_for_sector_size "${sector_size_selector}")"
+firehorse_epoch="$(devnet_firehorse_upgrade_epoch_for_sector_size "${sector_size_selector}")"
 status_path="${DEVNET_ROOT}/.runtime/devnet/status/latest.json"
 mkdir -p "$(dirname "${status_path}")"
 # Keep ten seconds of margin below the documented 20-minute wall budget.
@@ -20,7 +24,7 @@ running="$(
     bash -c 'source "$1"; devnet_compose ps --quiet' devnet-status "${DEVNET_ROOT}/scripts/devnet-common.sh"
 )"
 [[ -n "${running}" ]] || devnet_die "project is not running; run just up"
-devnet_progress "devnet-status: waiting for ${proof_backend} devnet readiness"
+devnet_progress "devnet-status: waiting for ${proof_backend} ${sector_size_selector} devnet readiness"
 
 bounded_compose() {
   local remaining_seconds=$((deadline - SECONDS))
@@ -166,12 +170,19 @@ while ((SECONDS < deadline)); do
     'select count(*) from curio.harmony_task;' 2>/dev/null | tail -1 || true)"
   lotus_fil_proofs_use_zigzag="$(bounded_compose exec -T lotus sh -c \
     'printf "%s" "${FIL_PROOFS_USE_ZIGZAG:-}"' 2>/dev/null || true)"
+  lotus_actor_network_bundle="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${LOTUS_DEVNET_NETWORK_BUNDLE:-}"' 2>/dev/null || true)"
   curio_fil_proofs_use_zigzag="$(bounded_compose exec -T curio sh -c \
     'printf "%s" "${FIL_PROOFS_USE_ZIGZAG:-}"' 2>/dev/null || true)"
   curio_zigzag_generate_missing_params="$(bounded_compose exec -T curio sh -c \
     'printf "%s" "${FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS:-}"' 2>/dev/null || true)"
+  lotus_zigzag_sidecar_dir="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_ZIGZAG_SIDECAR_DIR:-}"' 2>/dev/null || true)"
+  curio_zigzag_sidecar_dir="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_ZIGZAG_SIDECAR_DIR:-}"' 2>/dev/null || true)"
   expected_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   expected_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
+  expected_sidecar_dir="/var/tmp/filecoin-zigzag-proof-sidecars"
 
   build_curio="$(jq -r '.curioCommit' "${DEVNET_BUILD_DIR}/images.json")"
   build_lotus="$(jq -r '.lotusCommit' "${DEVNET_BUILD_DIR}/images.json")"
@@ -187,8 +198,9 @@ while ((SECONDS < deadline)); do
     || -z "${owner}"
     || -z "${worker}"
     || "$(jq -r 'type == "array" and all(.[]; type == "string" and length > 0)' <<<"${control_addresses:-null}" 2>/dev/null || true)" != true
-    || "${sector_size}" != 8388608
+    || "${sector_size}" != "${expected_sector_size}"
     || -z "${chain_id}"
+    || "${lotus_actor_network_bundle}" != "${actor_network_bundle}"
     || "${curio_version}" != *"${build_curio}"*
     || ! "${build_rust_fil_proofs}" =~ ^[0-9a-f]{40}$
     || "${api_ready}" != true
@@ -197,6 +209,8 @@ while ((SECONDS < deadline)); do
     || "${lotus_fil_proofs_use_zigzag}" != "${expected_zigzag}"
     || "${curio_fil_proofs_use_zigzag}" != "${expected_zigzag}"
     || "${curio_zigzag_generate_missing_params}" != "${expected_generate_missing_params}"
+    || "${lotus_zigzag_sidecar_dir}" != "${expected_sidecar_dir}"
+    || "${curio_zigzag_sidecar_dir}" != "${expected_sidecar_dir}"
     || -z "${generation}"
   ]]; then
     last_state="semantic probes incomplete at epoch ${epoch}"
@@ -228,9 +242,14 @@ while ((SECONDS < deadline)); do
     --arg buildRustFilProofs "${build_rust_fil_proofs}" \
     --arg platform "${build_platform}" \
     --arg proofBackend "${proof_backend}" \
+    --arg actorNetworkBundle "${actor_network_bundle}" \
+    --arg sectorSizeSelector "${sector_size_selector}" \
+    --arg registeredSealProof "${registered_seal_proof}" \
     --arg lotusZigZag "${lotus_fil_proofs_use_zigzag}" \
     --arg curioZigZag "${curio_fil_proofs_use_zigzag}" \
     --arg curioGenerateMissingParams "${curio_zigzag_generate_missing_params}" \
+    --arg lotusSidecarDir "${lotus_zigzag_sidecar_dir}" \
+    --arg curioSidecarDir "${curio_zigzag_sidecar_dir}" \
     --argjson compose "${compose_status}" \
     --arg chainId "${chain_id}" \
     --argjson epoch "${epoch}" \
@@ -256,11 +275,20 @@ while ((SECONDS < deadline)); do
       },
       proof: {
         backend: $proofBackend,
-        lotus: {FIL_PROOFS_USE_ZIGZAG: $lotusZigZag},
+        lotus: {
+          FIL_PROOFS_USE_ZIGZAG: $lotusZigZag,
+          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $lotusSidecarDir
+        },
         curio: {
           FIL_PROOFS_USE_ZIGZAG: $curioZigZag,
-          FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: $curioGenerateMissingParams
+          FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: $curioGenerateMissingParams,
+          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $curioSidecarDir
         }
+      },
+      sector: {
+        selector: $sectorSizeSelector,
+        bytes: $sectorSize,
+        registeredSealProof: $registeredSealProof
       },
       compose: $compose,
       chain: {
@@ -268,6 +296,7 @@ while ((SECONDS < deadline)); do
         epoch: $epoch,
         networkVersion: $networkVersion,
         actorsVersion: $actorsVersion,
+        actorNetworkBundle: $actorNetworkBundle,
         manifestCid: $manifestCid,
         minerActorCodeCid: $minerActorCodeCid
       },
@@ -288,7 +317,7 @@ while ((SECONDS < deadline)); do
     }' > "${temporary}"
   npm --prefix "${DEVNET_ROOT}/tools" run cli -- devnet status inspect < "${temporary}"
   mv -- "${temporary}" "${status_path}"
-  devnet_progress "devnet-status: ready backend=${proof_backend} epoch=${epoch} provider=${provider}"
+  devnet_progress "devnet-status: ready backend=${proof_backend} sector=${sector_size_selector} epoch=${epoch} provider=${provider}"
   exit 0
 done
 
