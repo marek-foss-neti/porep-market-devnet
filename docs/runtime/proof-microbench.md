@@ -15,6 +15,19 @@ just bench-proof-micro-backends 8mib
 The command uses the already built `curio-all-in-one` image and writes reports
 under `.runtime/runs/<timestamp>-bench-proof-micro-<backend>-<sector>/`.
 
+Stacked/SDR microbench runs enable `FIL_PROOFS_USE_MULTICORE_SDR=1` by default,
+because the `porep-proof-microbench` binary is built with the `multicore-sdr`
+feature and this better matches the optimized Stacked replication path. ZigZag
+runs force that setting to `0`, since it is not part of the ZigZag path. To run
+an explicit single-core SDR control case:
+
+```bash
+BENCH_STACKED_USE_MULTICORE_SDR=0 just bench-proof-micro stacked 8mib
+```
+
+Each generated `summary.md` records both the Stacked SDR replication mode and
+the effective `FIL_PROOFS_USE_MULTICORE_SDR` value.
+
 By default the microbench is intentionally limited to `2kib` and `8mib` sectors,
 because it performs a complete local seal/prove/verify/unseal cycle and keeps
 the generated user bytes for exact recovery checks. Larger registered sector
