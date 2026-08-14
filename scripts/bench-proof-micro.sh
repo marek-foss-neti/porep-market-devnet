@@ -65,6 +65,16 @@ parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
 if [[ "${backend}" == "stacked" ]]; then
   parameter_cache_host="${run_dir}/stacked-proof-parameter-cache"
 fi
+docker_parent_cache_args=()
+if [[ "${backend}" == "zigzag" ]]; then
+  zigzag_parent_cache_host="${DEVNET_ROOT}/.cache/zigzag-parent-cache"
+  devnet_require_safe_write_path "${zigzag_parent_cache_host}" directory
+  mkdir -p "${zigzag_parent_cache_host}"
+  docker_parent_cache_args=(
+    -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents"
+    -v "${zigzag_parent_cache_host}:/var/tmp/filecoin-parents:rw"
+  )
+fi
 mkdir -p "${work_dir}"
 mkdir -p "${parameter_cache_host}"
 
@@ -72,6 +82,8 @@ devnet_progress "bench-proof-micro: backend=${backend} sector_size=${sector_size
 if [[ "${backend}" == "stacked" ]]; then
   devnet_progress "bench-proof-micro: using isolated Stacked parameter cache at ${parameter_cache_host}"
   devnet_progress "bench-proof-micro: Stacked SDR replication=${stacked_sdr_replication_mode} FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
+else
+  devnet_progress "bench-proof-micro: using persistent ZigZag parent cache at ${zigzag_parent_cache_host}"
 fi
 devnet_progress "bench-proof-micro: prewarming ${backend} PoRep params for ${sector_size} outside measured phases"
 docker run --rm \
@@ -83,6 +95,7 @@ docker run --rm \
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
   -v "${run_dir}:/bench-run:rw" \
+  ${docker_parent_cache_args[@]+"${docker_parent_cache_args[@]}"} \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -118,6 +131,7 @@ if docker run --rm \
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
   -v "${run_dir}:/bench-run:rw" \
+  ${docker_parent_cache_args[@]+"${docker_parent_cache_args[@]}"} \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -174,6 +188,7 @@ summary_md="${run_dir}/summary.md"
       "| Verify seal | `" + (.verify_seal | tostring) + "` |",
       "| Raw unseal bytes match | `" + (.raw_unseal_bytes_match | tostring) + "` |",
       "| Proof parameter cache | `" + .proof_parameter_cache + "` |",
+      "| ZigZag parent cache | `" + ($prewarm[0].zigzag_parent_cache // "not-applicable") + "` |",
       "| Parameter cache id | `" + ($prewarm[0].parameter_cache_identifier // "unknown") + "` |",
       "| Parameter cache params | `" + ($prewarm[0].parameter_cache_params_path // "unknown") + "` |",
       "| Parameter cache verifying key | `" + ($prewarm[0].parameter_cache_verifying_key_path // "unknown") + "` |",

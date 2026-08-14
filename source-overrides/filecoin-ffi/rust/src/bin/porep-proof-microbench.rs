@@ -24,7 +24,7 @@ use storage_proofs_porep_zigzag::{
     stacked::{StackedCircuit, StackedCompound, StackedDrg},
     zigzag::{
         circuit::{ZigZagCircuit, ZigZagCompound},
-        ZigZagDrgPoRep,
+        prepare_parent_table, ZigZagDrgPoRep,
     },
 };
 
@@ -78,6 +78,7 @@ struct ParamPrewarmSummary {
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
     proof_parameter_cache: String,
+    zigzag_parent_cache: Option<String>,
     parameter_cache_identifier: String,
     parameter_cache_metadata_path: String,
     parameter_cache_params_path: String,
@@ -257,6 +258,10 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        zigzag_parent_cache: match args.backend {
+            Backend::Stacked => None,
+            Backend::ZigZag => Some(zigzag_parent_cache_dir().display().to_string()),
+        },
         parameter_cache_identifier: prewarm.cache_identifier,
         parameter_cache_metadata_path: prewarm.metadata_path.display().to_string(),
         parameter_cache_params_path: prewarm.params_path.display().to_string(),
@@ -383,6 +388,14 @@ fn prewarm_zigzag_params(
     let public_params =
         zigzag::parameters::zigzag_public_params::<zigzag::constants::ZigZagTree>(&porep_config)
             .context("get ZigZag public params")?;
+    eprintln!(
+        "prewarming ZigZag parent tables in {}",
+        zigzag_parent_cache_dir().display()
+    );
+    prepare_parent_table(&public_params.graph).context("prepare ZigZag forward parent table")?;
+    let reversed_graph = public_params.graph.zigzag();
+    prepare_parent_table(&reversed_graph).context("prepare ZigZag reversed parent table")?;
+
     let cache_identifier = <ZigZagCompound<
         zigzag::constants::ZigZagTree,
         zigzag::constants::DefaultPieceHasher,
@@ -725,6 +738,16 @@ fn proof_parameter_cache_dir() -> PathBuf {
     std::env::var("FIL_PROOFS_PARAMETER_CACHE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-proof-parameters"))
+}
+
+fn zigzag_parent_cache_dir() -> PathBuf {
+    std::env::var("FIL_PROOFS_PARENT_CACHE")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            std::env::var("FIL_PROOFS_CACHE_DIR")
+                .map(|base| PathBuf::from(base).join("filecoin-parents"))
+        })
+        .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-parents"))
 }
 
 fn process_cpu_ms() -> u128 {
