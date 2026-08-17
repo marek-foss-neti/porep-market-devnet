@@ -43,10 +43,10 @@ time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
 Each run first executes `porep-proof-microbench --prewarm-only` in a separate
-container to generate or load the exact PoRep Groth parameters for the selected
-backend and sector size. The prewarm output is written to `param-prewarm.json`.
-This keeps first-run parameter generation and its memory peak out of the
-measured proof phases in `summary.json`.
+container to generate or load the exact PoRep Groth parameters and backend
+parent cache for the selected backend and sector size. The prewarm output is
+written to `param-prewarm.json`. This keeps first-run parameter/cache generation
+and its memory peak out of the measured proof phases in `summary.json`.
 
 Stacked/SDR microbench runs use an isolated parameter cache under the run
 directory, because local Groth parameter generation is not the official
@@ -54,6 +54,14 @@ Filecoin production parameter set that Lotus checksum-validates on startup.
 ZigZag microbench runs continue to use `.cache/proof-parameters/`, because
 these devnet-specific ZigZag parameters need to be available to the ZigZag
 runtime verifier.
+
+Both backends use persistent parent-cache directories under `.cache/`, mounted
+as `FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents`. Stacked/SDR uses its
+existing windowed parent cache. ZigZag uses the restore-zigzag parent table with
+the same windowed mmap model, so the on-disk cache can be large without mapping
+the whole file into RAM. `DEVNET_PARENT_CACHE_WINDOW_NODES` sets the default
+window size; `BENCH_PARENT_CACHE_WINDOW_NODES` can override it for benchmark
+runs.
 
 During long prewarms the lifecycle scripts print a heartbeat every
 `DEVNET_PROGRESS_INTERVAL_SECONDS` seconds with elapsed time, proof-parameter
@@ -81,12 +89,14 @@ closest comparable scope is commit phase 1 plus commit phase 2, both operating
 from persisted pre-commit cache and the sealed replica.
 
 The report includes wall time, process CPU time, max RSS, proof length,
-registered seal proof, verify result, and raw byte recovery. Proof parameter
-generation is separated from measured phases by `param-prewarm.json`; keep the
-shared `.cache/proof-parameters` directory when comparing repeated runs.
+registered seal proof, verify result, raw byte recovery, parent-cache directory,
+and parent-cache window size. Proof parameter and parent-cache generation are
+separated from measured phases by `param-prewarm.json`; keep the shared
+`.cache/proof-parameters` and backend parent-cache directories when comparing
+repeated runs.
 The canonical `just bench-proof-backends <sector>` runner uses the same
-`--prewarm-only` path for both backends before it starts any fresh-devnet
-measurement.
+`--prewarm-only` path for both backends against the shared devnet proof
+parameter cache before it starts any fresh-devnet measurement.
 
 ZigZag proof sidecars used by the Curio/Lotus FFI integration are not part of
 this direct Rust microbench. The microbench verifies with `comm_r_star` in

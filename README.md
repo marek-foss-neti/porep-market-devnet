@@ -106,14 +106,20 @@ override it with `DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS` only when you know
 the local cache is already warm or the network is unusually slow.
 
 Before each measured microbench run, the script prewarms the exact PoRep Groth
-parameters for the selected backend and sector size in a separate container.
-The first large-sector run may therefore spend significant time creating
-missing `.params` and `.vk` files under `.cache/proof-parameters/`, recorded in
+parameters and the backend parent cache for the selected sector size in a
+separate container. The first large-sector run may therefore spend significant
+time creating missing `.params`, `.vk`, and parent-cache files, recorded in
 `param-prewarm.json`; that prewarm time is kept out of the measured proof
 phases. Stacked microbench parameter generation is isolated under the run
 directory so it cannot overwrite production Filecoin proof parameters used by
 Lotus. ZigZag prewarm still uses `.cache/proof-parameters/` because those
 parameters are devnet-specific and must be visible to the ZigZag verifier.
+Both backends use persistent parent-cache directories under `.cache/`, mounted
+as `FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents`.
+The canonical `just bench-proof-backends <sector>` runner is stricter: it
+prewarms both backends into the shared devnet proof-parameter cache before the
+fresh measured devnet resets, so Curio and Lotus use the warmed files during
+the full seal/unseal/retrieval comparison.
 
 The prewarm records the exact parameter cache id and verifies that the cached
 `.vk` matches the Groth params for that id, rewriting only a stale `.vk` when

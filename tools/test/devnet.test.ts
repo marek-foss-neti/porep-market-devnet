@@ -130,7 +130,7 @@ const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
 const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "7a4dbb741bdf68080326ae27f4e0ddf33033a280";
+const rustFilProofsSourceCommit = "7996df427bb3d497677b3b5f8db58c65d6e6ab4b";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -316,7 +316,11 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(dockerfile, /io\.porep-market\.zigzag\.rust-fil-proofs\.commit/);
   assert.match(lotusDockerfile, /COPY --from=harness-overlay source-overrides\/lotus\/entrypoint\.sh \/app\/entrypoint\.sh/);
   assert.doesNotMatch(lotusDockerfile, /git apply/);
-  assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
+  assert.match(lotusEntrypointOverride, /env -u FIL_PROOFS_USE_ZIGZAG[\s\S]*-u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS[\s\S]*-u FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
+  assert.match(lotusEntrypointOverride, /-u FIL_PROOFS_PARENT_CACHE/);
+  assert.match(lotusEntrypointOverride, /-u FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE/);
+  assert.match(lotusEntrypointOverride, /-u FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE/);
+  assert.match(lotusEntrypointOverride, /-u FIL_PROOFS_SDR_PARENTS_CACHE_SIZE/);
   assert.match(lotusEntrypointOverride, /without_zigzag_proofs lotus-seed .*pre-seal/);
 
   const lotusService = compose.match(/  lotus:\n[\s\S]*?\n  contracts-bootstrap:/)?.[0] ?? "";
@@ -327,10 +331,20 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(curioService, /CURIO_DISABLE_ACTOR_METADATA_TASKS=\$\{CURIO_DISABLE_ACTOR_METADATA_TASKS\}/);
   assert.match(curioService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=\$\{FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS\}/);
   assert.match(curioService, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}/);
+  assert.match(curioService, /FIL_PROOFS_PARENT_CACHE=\$\{FIL_PROOFS_PARENT_CACHE\}/);
+  assert.match(curioService, /FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=\$\{FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE\}/);
+  assert.match(curioService, /FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=\$\{FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE\}/);
+  assert.match(curioService, /FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=\$\{FIL_PROOFS_SDR_PARENTS_CACHE_SIZE\}/);
+  assert.match(curioService, /\$\{DEVNET_PARENT_CACHE_DIR\}:\$\{FIL_PROOFS_PARENT_CACHE\}:rw/);
   assert.match(curioService, /\$\{DEVNET_ZIGZAG_SIDECAR_DIR\}:\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}:rw/);
   assert.match(lotusService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
   assert.match(lotusService, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}/);
+  assert.match(lotusService, /FIL_PROOFS_PARENT_CACHE=\$\{FIL_PROOFS_PARENT_CACHE\}/);
+  assert.match(lotusService, /FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=\$\{FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE\}/);
+  assert.match(lotusService, /FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=\$\{FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE\}/);
+  assert.match(lotusService, /FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=\$\{FIL_PROOFS_SDR_PARENTS_CACHE_SIZE\}/);
   assert.match(lotusService, /LOTUS_DEVNET_NETWORK_BUNDLE=\$\{LOTUS_DEVNET_NETWORK_BUNDLE\}/);
+  assert.match(lotusService, /\$\{DEVNET_PARENT_CACHE_DIR\}:\$\{FIL_PROOFS_PARENT_CACHE\}:rw/);
   assert.match(lotusService, /\$\{DEVNET_ZIGZAG_SIDECAR_DIR\}:\$\{FIL_PROOFS_ZIGZAG_SIDECAR_DIR\}:rw/);
   assert.doesNotMatch(lotusService, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS/);
   assert.match(lotusMinerService, /LOTUS_DEVNET_NETWORK_BUNDLE=\$\{LOTUS_DEVNET_NETWORK_BUNDLE\}/);
@@ -355,11 +369,19 @@ test("devnet status accepts only complete semantic readiness evidence", async ()
       lotus: {
         FIL_PROOFS_USE_ZIGZAG: "1",
         FIL_PROOFS_ZIGZAG_SIDECAR_DIR: "/var/tmp/filecoin-zigzag-proof-sidecars",
+        FIL_PROOFS_PARENT_CACHE: "/var/tmp/filecoin-parents",
+        FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE: "1",
+        FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE: "2048",
+        FIL_PROOFS_SDR_PARENTS_CACHE_SIZE: "2048",
       },
       curio: {
         FIL_PROOFS_USE_ZIGZAG: "1",
         FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: "1",
         FIL_PROOFS_ZIGZAG_SIDECAR_DIR: "/var/tmp/filecoin-zigzag-proof-sidecars",
+        FIL_PROOFS_PARENT_CACHE: "/var/tmp/filecoin-parents",
+        FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE: "1",
+        FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE: "2048",
+        FIL_PROOFS_SDR_PARENTS_CACHE_SIZE: "2048",
       },
     },
     sector: {
@@ -601,7 +623,8 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /prewarm_backend_params/);
   assert.match(script, /porep-proof-microbench/);
   assert.match(script, /--prewarm-only/);
-  assert.match(script, /using isolated Stacked microbench parameter cache/);
+  assert.match(script, /using devnet proof parameter cache/);
+  assert.doesNotMatch(script, /using isolated Stacked microbench parameter cache/);
   assert.match(script, /devnet_start_prewarm_progress/);
   assert.match(script, /prewarm_zigzag_if_needed/);
   assert.match(script, /zigzag_static_params_ready/);
@@ -697,6 +720,7 @@ async function renderTaskThreeCompose(): Promise<{
   const fixtureRoot = await mkdtemp(join(tmpdir(), "devnet-compose-render-"));
   const dataDirectory = join(fixtureRoot, ".runtime", "devnet", "data");
   const proofParametersDirectory = join(fixtureRoot, ".cache", "proof-parameters");
+  const parentCacheDirectory = join(fixtureRoot, ".cache", "stacked-parent-cache");
   const zigzagSidecarDirectory = join(fixtureRoot, ".runtime", "devnet", "zigzag-proof-sidecars");
   const filecoinServicesSource = join(
     fixtureRoot,
@@ -727,6 +751,7 @@ async function renderTaskThreeCompose(): Promise<{
       "DEVNET_SECTOR_SIZE=8mib",
       "LOTUS_DEVNET_NETWORK_BUNDLE=devnet",
       `DEVNET_PROOF_PARAMETERS_DIR=${proofParametersDirectory}`,
+      `DEVNET_PARENT_CACHE_DIR=${parentCacheDirectory}`,
       `DEVNET_ZIGZAG_SIDECAR_DIR=${zigzagSidecarDirectory}`,
       "DEVNET_FIREHORSE_HEIGHT=20",
       `DEVNET_FILECOIN_SERVICES_SOURCE=${filecoinServicesSource}`,
@@ -736,6 +761,10 @@ async function renderTaskThreeCompose(): Promise<{
       "FIL_PROOFS_USE_ZIGZAG=0",
       "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0",
       "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/var/tmp/filecoin-zigzag-proof-sidecars",
+      "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents",
+      "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0",
+      "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=2048",
+      "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=2048",
       "CURIO_DISABLE_ACTOR_METADATA_TASKS=0",
       "",
     ].join("\n"),
@@ -780,11 +809,16 @@ async function renderTaskThreeCompose(): Promise<{
       firehorseHeight: "20",
       filecoinServicesSource,
       curioDisableActorMetadataTasks: "0",
+      filProofsParentCache: "/var/tmp/filecoin-parents",
+      filProofsSdrParentsCacheSize: "2048",
       filProofsUseZigZag: "0",
+      filProofsUseZigZagParentCache: "0",
+      filProofsZigZagParentCacheSize: "2048",
       filProofsZigZagGenerateMissingParams: "0",
       filProofsZigZagSidecarDirectory: "/var/tmp/filecoin-zigzag-proof-sidecars",
       imageNamespace,
       multicall3Source,
+      parentCacheDirectory,
       proofBackend: "stacked",
       proofParametersDirectory,
       sectorSizeBytes: 8_388_608,
@@ -804,7 +838,7 @@ test("rendered compose inspector enforces the complete Task 3 contract", async (
   assert.deepEqual(inspected.services, [...lock.runtime.services].sort());
   assert.equal(inspected.images.length, 7);
   assert.equal(inspected.ports.length, 13);
-  assert.equal(inspected.mounts.length, 34);
+  assert.equal(inspected.mounts.length, 36);
   assert.deepEqual(inspected.healthyServices, [
     "curio",
     "indexer",
@@ -907,6 +941,7 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
         `DEVNET_SECTOR_SIZE=${contract.sectorSizeSelector}`,
         `LOTUS_DEVNET_NETWORK_BUNDLE=${contract.actorNetworkBundle}`,
         `DEVNET_PROOF_PARAMETERS_DIR=${contract.proofParametersDirectory}`,
+        `DEVNET_PARENT_CACHE_DIR=${contract.parentCacheDirectory}`,
         `DEVNET_ZIGZAG_SIDECAR_DIR=${contract.zigzagSidecarDirectory}`,
         `DEVNET_FIREHORSE_HEIGHT=${contract.firehorseHeight}`,
         `DEVNET_FILECOIN_SERVICES_SOURCE=${contract.filecoinServicesSource}`,
@@ -916,6 +951,10 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
         `FIL_PROOFS_USE_ZIGZAG=${contract.filProofsUseZigZag}`,
         `FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${contract.filProofsZigZagGenerateMissingParams}`,
         `FIL_PROOFS_ZIGZAG_SIDECAR_DIR=${contract.filProofsZigZagSidecarDirectory}`,
+        `FIL_PROOFS_PARENT_CACHE=${contract.filProofsParentCache}`,
+        `FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=${contract.filProofsUseZigZagParentCache}`,
+        `FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=${contract.filProofsZigZagParentCacheSize}`,
+        `FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=${contract.filProofsSdrParentsCacheSize}`,
         `CURIO_DISABLE_ACTOR_METADATA_TASKS=${contract.actorNetworkBundle === "testing" ? "1" : "0"}`,
         "",
       ].join("\n"),
@@ -941,7 +980,7 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
       },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /7 services, 7 images, 13 ports, 34 mounts/);
+    assert.match(result.stdout, /7 services, 7 images, 13 ports, 36 mounts/);
 
     const up = await readFile(upScriptPath, "utf8");
     const inspection = up.indexOf("devnet_inspect_rendered_compose");
@@ -1358,12 +1397,17 @@ exit 65
     assert.match(composeEnvironment, /DEVNET_PROOF_BACKEND=stacked/);
     assert.match(composeEnvironment, /DEVNET_SECTOR_SIZE=8mib/);
     assert.match(composeEnvironment, /LOTUS_DEVNET_NETWORK_BUNDLE=devnet/);
+    assert.match(composeEnvironment, new RegExp(`DEVNET_PARENT_CACHE_DIR=${fixture.root}/\\.cache/stacked-parent-cache`));
     assert.match(composeEnvironment, new RegExp(`DEVNET_ZIGZAG_SIDECAR_DIR=${fixture.root}/\\.runtime/devnet/zigzag-proof-sidecars`));
     assert.match(composeEnvironment, /DEVNET_FIREHORSE_HEIGHT=20/);
     assert.match(composeEnvironment, /SECTOR_SIZE=8388608/);
     assert.match(composeEnvironment, /FIL_PROOFS_USE_ZIGZAG=0/);
     assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=0/);
     assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR=\/var\/tmp\/filecoin-zigzag-proof-sidecars/);
+    assert.match(composeEnvironment, /FIL_PROOFS_PARENT_CACHE=\/var\/tmp\/filecoin-parents/);
+    assert.match(composeEnvironment, /FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0/);
+    assert.match(composeEnvironment, /FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=2048/);
+    assert.match(composeEnvironment, /FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=2048/);
     assert.match(composeEnvironment, /CURIO_DISABLE_ACTOR_METADATA_TASKS=0/);
     assert.doesNotMatch(composeEnvironment, /hostile/);
     assert.equal(

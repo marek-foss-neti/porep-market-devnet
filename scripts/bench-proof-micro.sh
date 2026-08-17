@@ -65,16 +65,26 @@ parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
 if [[ "${backend}" == "stacked" ]]; then
   parameter_cache_host="${run_dir}/stacked-proof-parameter-cache"
 fi
-docker_parent_cache_args=()
-if [[ "${backend}" == "zigzag" ]]; then
-  zigzag_parent_cache_host="${DEVNET_ROOT}/.cache/zigzag-parent-cache"
-  devnet_require_safe_write_path "${zigzag_parent_cache_host}" directory
-  mkdir -p "${zigzag_parent_cache_host}"
-  docker_parent_cache_args=(
-    -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents"
-    -v "${zigzag_parent_cache_host}:/var/tmp/filecoin-parents:rw"
-  )
+if [[ -n "${BENCH_PARENT_CACHE_WINDOW_NODES:-}" ]]; then
+  DEVNET_PARENT_CACHE_WINDOW_NODES="${BENCH_PARENT_CACHE_WINDOW_NODES}"
 fi
+parent_cache_host="$(devnet_parent_cache_dir_for_backend "${backend}")"
+parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
+parent_cache_kind="${backend}"
+if [[ "${backend}" == "zigzag" ]]; then
+  parent_cache_kind="ZigZag"
+elif [[ "${backend}" == "stacked" ]]; then
+  parent_cache_kind="Stacked"
+fi
+devnet_require_safe_write_path "${parent_cache_host}" directory
+mkdir -p "${parent_cache_host}"
+docker_parent_cache_args=(
+  -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents"
+  -e "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=$(devnet_fil_proofs_use_zigzag "${backend}")"
+  -e "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=${parent_cache_window_nodes}"
+  -e "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=${parent_cache_window_nodes}"
+  -v "${parent_cache_host}:/var/tmp/filecoin-parents:rw"
+)
 mkdir -p "${work_dir}"
 mkdir -p "${parameter_cache_host}"
 
@@ -82,9 +92,8 @@ devnet_progress "bench-proof-micro: backend=${backend} sector_size=${sector_size
 if [[ "${backend}" == "stacked" ]]; then
   devnet_progress "bench-proof-micro: using isolated Stacked parameter cache at ${parameter_cache_host}"
   devnet_progress "bench-proof-micro: Stacked SDR replication=${stacked_sdr_replication_mode} FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
-else
-  devnet_progress "bench-proof-micro: using persistent ZigZag parent cache at ${zigzag_parent_cache_host}"
 fi
+devnet_progress "bench-proof-micro: using persistent ${parent_cache_kind} parent cache at ${parent_cache_host} window_nodes=${parent_cache_window_nodes}"
 devnet_progress "bench-proof-micro: prewarming ${backend} PoRep params for ${sector_size} outside measured phases"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
@@ -95,7 +104,7 @@ docker run --rm \
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
   -v "${run_dir}:/bench-run:rw" \
-  ${docker_parent_cache_args[@]+"${docker_parent_cache_args[@]}"} \
+  "${docker_parent_cache_args[@]}" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -131,7 +140,7 @@ if docker run --rm \
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
   -v "${run_dir}:/bench-run:rw" \
-  ${docker_parent_cache_args[@]+"${docker_parent_cache_args[@]}"} \
+  "${docker_parent_cache_args[@]}" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -166,6 +175,8 @@ summary_md="${run_dir}/summary.md"
   jq -r \
     --arg filProofsUseMulticoreSdr "${stacked_multicore_sdr_requested}" \
     --arg stackedSdrReplicationMode "${stacked_sdr_replication_mode}" \
+    --arg parentCacheHost "${parent_cache_host}" \
+    --arg parentCacheWindowNodes "${parent_cache_window_nodes}" \
     --slurpfile prewarm "${prewarm_summary_json}" '
     def ms($value): ($value | tostring) + " ms";
     def bytes($raw):
@@ -188,7 +199,8 @@ summary_md="${run_dir}/summary.md"
       "| Verify seal | `" + (.verify_seal | tostring) + "` |",
       "| Raw unseal bytes match | `" + (.raw_unseal_bytes_match | tostring) + "` |",
       "| Proof parameter cache | `" + .proof_parameter_cache + "` |",
-      "| ZigZag parent cache | `" + ($prewarm[0].zigzag_parent_cache // "not-applicable") + "` |",
+      "| Parent cache | `" + ($prewarm[0].parent_cache // $parentCacheHost) + "` |",
+      "| Parent cache window nodes | `" + (($prewarm[0].parent_cache_window_nodes // $parentCacheWindowNodes) | tostring) + "` |",
       "| Parameter cache id | `" + ($prewarm[0].parameter_cache_identifier // "unknown") + "` |",
       "| Parameter cache params | `" + ($prewarm[0].parameter_cache_params_path // "unknown") + "` |",
       "| Parameter cache verifying key | `" + ($prewarm[0].parameter_cache_verifying_key_path // "unknown") + "` |",

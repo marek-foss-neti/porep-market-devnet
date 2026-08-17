@@ -180,9 +180,29 @@ while ((SECONDS < deadline)); do
     'printf "%s" "${FIL_PROOFS_ZIGZAG_SIDECAR_DIR:-}"' 2>/dev/null || true)"
   curio_zigzag_sidecar_dir="$(bounded_compose exec -T curio sh -c \
     'printf "%s" "${FIL_PROOFS_ZIGZAG_SIDECAR_DIR:-}"' 2>/dev/null || true)"
+  lotus_parent_cache="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_PARENT_CACHE:-}"' 2>/dev/null || true)"
+  curio_parent_cache="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_PARENT_CACHE:-}"' 2>/dev/null || true)"
+  lotus_use_zigzag_parent_cache="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE:-}"' 2>/dev/null || true)"
+  curio_use_zigzag_parent_cache="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE:-}"' 2>/dev/null || true)"
+  lotus_zigzag_parent_cache_size="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE:-}"' 2>/dev/null || true)"
+  curio_zigzag_parent_cache_size="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE:-}"' 2>/dev/null || true)"
+  lotus_sdr_parents_cache_size="$(bounded_compose exec -T lotus sh -c \
+    'printf "%s" "${FIL_PROOFS_SDR_PARENTS_CACHE_SIZE:-}"' 2>/dev/null || true)"
+  curio_sdr_parents_cache_size="$(bounded_compose exec -T curio sh -c \
+    'printf "%s" "${FIL_PROOFS_SDR_PARENTS_CACHE_SIZE:-}"' 2>/dev/null || true)"
   expected_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   expected_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
   expected_sidecar_dir="/var/tmp/filecoin-zigzag-proof-sidecars"
+  expected_parent_cache="/var/tmp/filecoin-parents"
+  expected_parent_cache_window_nodes="$(awk -F= '$1 == "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE" {print substr($0, index($0, "=") + 1); exit}' "${DEVNET_COMPOSE_ENV}")"
+  [[ "${expected_parent_cache_window_nodes}" =~ ^[0-9]+$ && "${expected_parent_cache_window_nodes}" -ge 1 ]] ||
+    expected_parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
 
   build_curio="$(jq -r '.curioCommit' "${DEVNET_BUILD_DIR}/images.json")"
   build_lotus="$(jq -r '.lotusCommit' "${DEVNET_BUILD_DIR}/images.json")"
@@ -211,6 +231,14 @@ while ((SECONDS < deadline)); do
     || "${curio_zigzag_generate_missing_params}" != "${expected_generate_missing_params}"
     || "${lotus_zigzag_sidecar_dir}" != "${expected_sidecar_dir}"
     || "${curio_zigzag_sidecar_dir}" != "${expected_sidecar_dir}"
+    || "${lotus_parent_cache}" != "${expected_parent_cache}"
+    || "${curio_parent_cache}" != "${expected_parent_cache}"
+    || "${lotus_use_zigzag_parent_cache}" != "${expected_zigzag}"
+    || "${curio_use_zigzag_parent_cache}" != "${expected_zigzag}"
+    || "${lotus_zigzag_parent_cache_size}" != "${expected_parent_cache_window_nodes}"
+    || "${curio_zigzag_parent_cache_size}" != "${expected_parent_cache_window_nodes}"
+    || "${lotus_sdr_parents_cache_size}" != "${expected_parent_cache_window_nodes}"
+    || "${curio_sdr_parents_cache_size}" != "${expected_parent_cache_window_nodes}"
     || -z "${generation}"
   ]]; then
     last_state="semantic probes incomplete at epoch ${epoch}"
@@ -250,6 +278,14 @@ while ((SECONDS < deadline)); do
     --arg curioGenerateMissingParams "${curio_zigzag_generate_missing_params}" \
     --arg lotusSidecarDir "${lotus_zigzag_sidecar_dir}" \
     --arg curioSidecarDir "${curio_zigzag_sidecar_dir}" \
+    --arg lotusParentCache "${lotus_parent_cache}" \
+    --arg curioParentCache "${curio_parent_cache}" \
+    --arg lotusUseZigZagParentCache "${lotus_use_zigzag_parent_cache}" \
+    --arg curioUseZigZagParentCache "${curio_use_zigzag_parent_cache}" \
+    --arg lotusZigZagParentCacheSize "${lotus_zigzag_parent_cache_size}" \
+    --arg curioZigZagParentCacheSize "${curio_zigzag_parent_cache_size}" \
+    --arg lotusSdrParentsCacheSize "${lotus_sdr_parents_cache_size}" \
+    --arg curioSdrParentsCacheSize "${curio_sdr_parents_cache_size}" \
     --argjson compose "${compose_status}" \
     --arg chainId "${chain_id}" \
     --argjson epoch "${epoch}" \
@@ -277,12 +313,20 @@ while ((SECONDS < deadline)); do
         backend: $proofBackend,
         lotus: {
           FIL_PROOFS_USE_ZIGZAG: $lotusZigZag,
-          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $lotusSidecarDir
+          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $lotusSidecarDir,
+          FIL_PROOFS_PARENT_CACHE: $lotusParentCache,
+          FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE: $lotusUseZigZagParentCache,
+          FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE: $lotusZigZagParentCacheSize,
+          FIL_PROOFS_SDR_PARENTS_CACHE_SIZE: $lotusSdrParentsCacheSize
         },
         curio: {
           FIL_PROOFS_USE_ZIGZAG: $curioZigZag,
           FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS: $curioGenerateMissingParams,
-          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $curioSidecarDir
+          FIL_PROOFS_ZIGZAG_SIDECAR_DIR: $curioSidecarDir,
+          FIL_PROOFS_PARENT_CACHE: $curioParentCache,
+          FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE: $curioUseZigZagParentCache,
+          FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE: $curioZigZagParentCacheSize,
+          FIL_PROOFS_SDR_PARENTS_CACHE_SIZE: $curioSdrParentsCacheSize
         }
       },
       sector: {

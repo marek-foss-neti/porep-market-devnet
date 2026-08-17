@@ -10,6 +10,10 @@ backend_order="${BENCH_BACKEND_ORDER:-zigzag,stacked}"
 repetitions="${BENCH_REPETITIONS:-1}"
 bench_sector_size="$(devnet_requested_sector_size "${1:-${BENCH_SECTOR_SIZE:-${DEVNET_SECTOR_SIZE:-8mib}}}")"
 bench_sector_size_bytes="$(devnet_sector_size_bytes "${bench_sector_size}")"
+if [[ -n "${BENCH_PARENT_CACHE_WINDOW_NODES:-}" ]]; then
+  DEVNET_PARENT_CACHE_WINDOW_NODES="${BENCH_PARENT_CACHE_WINDOW_NODES}"
+fi
+parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
 [[ "${repetitions}" =~ ^[0-9]+$ && "${repetitions}" -ge 1 ]] ||
   devnet_die "BENCH_REPETITIONS must be a positive integer"
 
@@ -75,24 +79,29 @@ proof_microbench_image() {
 
 prewarm_backend_params() {
   local backend="$1"
-  local image prewarm_summary prewarm_stderr prewarm_pid prewarm_progress_pid status parameter_cache_host
+  local image prewarm_summary prewarm_stderr prewarm_pid prewarm_progress_pid status parameter_cache_host parent_cache_host
   image="$(proof_microbench_image)"
   prewarm_summary="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.json"
   prewarm_stderr="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.stderr.log"
   parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
-  if [[ "${backend}" == "stacked" ]]; then
-    parameter_cache_host="${comparison_dir}/stacked-proof-parameter-cache-${bench_sector_size}"
-    mkdir -p "${parameter_cache_host}"
-    devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using isolated Stacked microbench parameter cache at ${parameter_cache_host}"
-  fi
+  parent_cache_host="$(devnet_parent_cache_dir_for_backend "${backend}")"
+  devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using devnet proof parameter cache at ${parameter_cache_host}"
+  devnet_require_safe_write_path "${parent_cache_host}" directory
+  mkdir -p "${parent_cache_host}"
+  devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using persistent parent cache at ${parent_cache_host} window_nodes=${parent_cache_window_nodes}"
   devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: prewarming exact PoRep params outside measured benchmark windows"
   docker run --rm \
     --user "$(id -u):$(id -g)" \
     -e "FIL_PROOFS_PARAMETER_CACHE=/var/tmp/filecoin-proof-parameters" \
     -e "FIL_PROOFS_USE_ZIGZAG=$(devnet_fil_proofs_use_zigzag "${backend}")" \
+    -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents" \
+    -e "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=$(devnet_fil_proofs_use_zigzag "${backend}")" \
+    -e "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=${parent_cache_window_nodes}" \
+    -e "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=${parent_cache_window_nodes}" \
     -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars" \
     -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1" \
     -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
+    -v "${parent_cache_host}:/var/tmp/filecoin-parents:rw" \
     -v "${comparison_dir}:/bench-run:rw" \
     "${image}" \
     porep-proof-microbench \
@@ -146,6 +155,8 @@ prewarm_backend_params() {
       proofParameterCacheStatus:"present",
       proofParameterCacheFileCount:$proofParameterCacheFileCount,
       proofParameterCacheBytes:$proofParameterCacheBytes,
+      parentCache:($prewarm[0].parent_cache // ""),
+      parentCacheWindowNodes:($prewarm[0].parent_cache_window_nodes // ""),
       reason:$reason
     }' >> "${records}"
 }

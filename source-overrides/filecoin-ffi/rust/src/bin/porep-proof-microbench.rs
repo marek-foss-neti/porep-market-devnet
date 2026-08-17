@@ -78,6 +78,8 @@ struct ParamPrewarmSummary {
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
     proof_parameter_cache: String,
+    parent_cache: String,
+    parent_cache_window_nodes: u32,
     zigzag_parent_cache: Option<String>,
     parameter_cache_identifier: String,
     parameter_cache_metadata_path: String,
@@ -258,9 +260,11 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        parent_cache: parent_cache_dir().display().to_string(),
+        parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
         zigzag_parent_cache: match args.backend {
             Backend::Stacked => None,
-            Backend::ZigZag => Some(zigzag_parent_cache_dir().display().to_string()),
+            Backend::ZigZag => Some(parent_cache_dir().display().to_string()),
         },
         parameter_cache_identifier: prewarm.cache_identifier,
         parameter_cache_metadata_path: prewarm.metadata_path.display().to_string(),
@@ -296,6 +300,14 @@ fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
 ) -> Result<ParamPrewarmResult> {
     let public_params = zigzag::parameters::public_params::<Tree>(&porep_config)
         .context("get Stacked public params")?;
+    eprintln!(
+        "prewarming Stacked parent cache in {}",
+        parent_cache_dir().display()
+    );
+    let _parent_cache = public_params
+        .graph
+        .parent_cache()
+        .context("prepare Stacked parent cache")?;
     let cache_identifier = <StackedCompound<
         Tree,
         zigzag::constants::DefaultPieceHasher,
@@ -390,7 +402,7 @@ fn prewarm_zigzag_params(
             .context("get ZigZag public params")?;
     eprintln!(
         "prewarming ZigZag parent tables in {}",
-        zigzag_parent_cache_dir().display()
+        parent_cache_dir().display()
     );
     prepare_parent_table(&public_params.graph).context("prepare ZigZag forward parent table")?;
     let reversed_graph = public_params.graph.zigzag();
@@ -740,7 +752,7 @@ fn proof_parameter_cache_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-proof-parameters"))
 }
 
-fn zigzag_parent_cache_dir() -> PathBuf {
+fn parent_cache_dir() -> PathBuf {
     std::env::var("FIL_PROOFS_PARENT_CACHE")
         .map(PathBuf::from)
         .or_else(|_| {
@@ -748,6 +760,18 @@ fn zigzag_parent_cache_dir() -> PathBuf {
                 .map(|base| PathBuf::from(base).join("filecoin-parents"))
         })
         .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-parents"))
+}
+
+fn parent_cache_window_nodes(backend: Backend) -> u32 {
+    let variable = match backend {
+        Backend::Stacked => "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE",
+        Backend::ZigZag => "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE",
+    };
+    std::env::var(variable)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(2_048)
 }
 
 fn process_cpu_ms() -> u128 {

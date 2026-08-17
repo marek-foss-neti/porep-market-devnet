@@ -256,12 +256,15 @@ Compose environment: `SECTOR_SIZE=<bytes>`, `FIL_PROOFS_USE_ZIGZAG=1` only for
 ZigZag, and `FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=1` only for ZigZag Curio.
 Curio and Lotus also receive the same `FIL_PROOFS_ZIGZAG_SIDECAR_DIR`, backed by
 `.runtime/devnet/zigzag-proof-sidecars`, so Lotus verification can read the
-per-proof `comm_r_star` sidecar written during ZigZag proving. Manual Compose
-YAML edits are not part of the supported workflow.
+per-proof `comm_r_star` sidecar written during ZigZag proving. They also receive
+the backend-specific `FIL_PROOFS_PARENT_CACHE`, backed by
+`.cache/stacked-parent-cache` or `.cache/zigzag-parent-cache`, plus matching SDR
+and ZigZag parent-cache window settings. Manual Compose YAML edits are not part
+of the supported workflow.
 
-Proof parameters under `.cache/proof-parameters/` survive resets. Benchmark
-recipes warm the required static ZigZag Groth16 `*.params` and `*.vk` files
-outside measured windows and write
+Proof parameters under `.cache/proof-parameters/` and backend parent caches under
+`.cache/*-parent-cache/` survive resets. Benchmark recipes warm the required
+static ZigZag Groth16 `*.params` and `*.vk` files outside measured windows and write
 `.cache/proof-parameters/.zigzag-devnet-prewarm-<sector>.json`. Per-sector
 ZigZag proof sidecars are runtime artifacts, not proof parameters; reset clears
 them so they cannot leak between backend benchmark runs.

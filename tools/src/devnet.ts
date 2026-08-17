@@ -20,11 +20,16 @@ export interface ComposeRuntimeContract {
   firehorseHeight: string;
   filecoinServicesSource: string;
   curioDisableActorMetadataTasks: string;
+  filProofsParentCache: string;
+  filProofsSdrParentsCacheSize: string;
   filProofsUseZigZag: string;
+  filProofsUseZigZagParentCache: string;
+  filProofsZigZagParentCacheSize: string;
   filProofsZigZagGenerateMissingParams: string;
   filProofsZigZagSidecarDirectory: string;
   imageNamespace: string;
   multicall3Source: string;
+  parentCacheDirectory: string;
   proofBackend: "stacked" | "zigzag";
   proofParametersDirectory: string;
   sectorSizeBytes: number;
@@ -56,6 +61,7 @@ const composeEnvironmentKeys = [
   "DEVNET_FILECOIN_SERVICES_SOURCE",
   "DEVNET_IMAGE_NAMESPACE",
   "DEVNET_MULTICALL3_SOURCE",
+  "DEVNET_PARENT_CACHE_DIR",
   "DEVNET_PROOF_BACKEND",
   "DEVNET_PROOF_PARAMETERS_DIR",
   "DEVNET_SECTOR_SIZE",
@@ -63,7 +69,11 @@ const composeEnvironmentKeys = [
   "DEVNET_YUGABYTE_IMAGE",
   "SECTOR_SIZE",
   "CURIO_DISABLE_ACTOR_METADATA_TASKS",
+  "FIL_PROOFS_PARENT_CACHE",
+  "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE",
   "FIL_PROOFS_USE_ZIGZAG",
+  "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE",
+  "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE",
   "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS",
   "FIL_PROOFS_ZIGZAG_SIDECAR_DIR",
 ] as const;
@@ -119,6 +129,7 @@ export function inspectRenderedCompose(
     contract.dataDirectory,
     contract.filecoinServicesSource,
     contract.multicall3Source,
+    contract.parentCacheDirectory,
     contract.proofParametersDirectory,
     contract.zigzagSidecarDirectory,
   ].map((path) => resolve(path));
@@ -147,6 +158,30 @@ export function inspectRenderedCompose(
       && environment.FIL_PROOFS_USE_ZIGZAG !== contract.filProofsUseZigZag
     ) {
       throw new Error(`${name} FIL_PROOFS_USE_ZIGZAG mismatch`);
+    }
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_PARENT_CACHE !== contract.filProofsParentCache
+    ) {
+      throw new Error(`${name} FIL_PROOFS_PARENT_CACHE mismatch`);
+    }
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE !== contract.filProofsUseZigZagParentCache
+    ) {
+      throw new Error(`${name} FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE mismatch`);
+    }
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE !== contract.filProofsZigZagParentCacheSize
+    ) {
+      throw new Error(`${name} FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE mismatch`);
+    }
+    if (
+      (name === "lotus" || name === "curio")
+      && environment.FIL_PROOFS_SDR_PARENTS_CACHE_SIZE !== contract.filProofsSdrParentsCacheSize
+    ) {
+      throw new Error(`${name} FIL_PROOFS_SDR_PARENTS_CACHE_SIZE mismatch`);
     }
     if (
       name === "curio"
@@ -282,11 +317,16 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     firehorseHeight: requiredValue(values, "DEVNET_FIREHORSE_HEIGHT"),
     filecoinServicesSource: requiredValue(values, "DEVNET_FILECOIN_SERVICES_SOURCE"),
     curioDisableActorMetadataTasks,
+    filProofsParentCache: requiredValue(values, "FIL_PROOFS_PARENT_CACHE"),
+    filProofsSdrParentsCacheSize: requiredValue(values, "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE"),
     filProofsUseZigZag: requiredValue(values, "FIL_PROOFS_USE_ZIGZAG"),
+    filProofsUseZigZagParentCache: requiredValue(values, "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE"),
+    filProofsZigZagParentCacheSize: requiredValue(values, "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE"),
     filProofsZigZagGenerateMissingParams: requiredValue(values, "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS"),
     filProofsZigZagSidecarDirectory: requiredValue(values, "FIL_PROOFS_ZIGZAG_SIDECAR_DIR"),
     imageNamespace: requiredValue(values, "DEVNET_IMAGE_NAMESPACE"),
     multicall3Source: requiredValue(values, "DEVNET_MULTICALL3_SOURCE"),
+    parentCacheDirectory: requiredValue(values, "DEVNET_PARENT_CACHE_DIR"),
     proofBackend: proofBackendValue(requiredValue(values, "DEVNET_PROOF_BACKEND")),
     proofParametersDirectory: requiredValue(values, "DEVNET_PROOF_PARAMETERS_DIR"),
     sectorSizeBytes: sectorSizeBytesValue(requiredValue(values, "SECTOR_SIZE")),
@@ -342,12 +382,25 @@ export function inspectDevnetStatus(
   const expectedProofEnv = proofBackend === "zigzag" ? "1" : "0";
   const lotusProof = record(proof.lotus, "proof.lotus");
   const curioProof = record(proof.curio, "proof.curio");
+  const lotusZigZagParentWindow = String(lotusProof.FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE ?? "");
+  const curioZigZagParentWindow = String(curioProof.FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE ?? "");
+  const lotusSdrParentWindow = String(lotusProof.FIL_PROOFS_SDR_PARENTS_CACHE_SIZE ?? "");
+  const curioSdrParentWindow = String(curioProof.FIL_PROOFS_SDR_PARENTS_CACHE_SIZE ?? "");
   if (
     lotusProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
     || lotusProof.FIL_PROOFS_ZIGZAG_SIDECAR_DIR !== "/var/tmp/filecoin-zigzag-proof-sidecars"
+    || lotusProof.FIL_PROOFS_PARENT_CACHE !== "/var/tmp/filecoin-parents"
+    || lotusProof.FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE !== expectedProofEnv
     || curioProof.FIL_PROOFS_USE_ZIGZAG !== expectedProofEnv
     || curioProof.FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS !== expectedProofEnv
     || curioProof.FIL_PROOFS_ZIGZAG_SIDECAR_DIR !== "/var/tmp/filecoin-zigzag-proof-sidecars"
+    || curioProof.FIL_PROOFS_PARENT_CACHE !== "/var/tmp/filecoin-parents"
+    || curioProof.FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE !== expectedProofEnv
+    || !/^[0-9]+$/.test(lotusZigZagParentWindow)
+    || lotusZigZagParentWindow === "0"
+    || curioZigZagParentWindow !== lotusZigZagParentWindow
+    || lotusSdrParentWindow !== lotusZigZagParentWindow
+    || curioSdrParentWindow !== lotusZigZagParentWindow
   ) {
     throw new Error("devnet proof backend environment is invalid");
   }

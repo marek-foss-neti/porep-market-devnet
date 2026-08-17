@@ -30,7 +30,7 @@ sources:
     repository: https://github.com/marek-foss-neti/rust-fil-proofs.git
     upstream_repository: https://github.com/filecoin-project/rust-fil-proofs.git
     branch: restore-zigzag
-    commit: d4f31c3374b26da031b8c1d448215e5a6cf982be
+    commit: 7996df427bb3d497677b3b5f8db58c65d6e6ab4b
     compatibility: restore-zigzag ZigZag API with CPU optimizations for local seal/unseal/retrieval benchmarks
     submodules: {}
   curio:

@@ -252,11 +252,12 @@ devnet_stop_prewarm_progress() {
 
 devnet_compose() {
   env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_DATA_DIR \
-    -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
+    -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_PARENT_CACHE_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
     -u DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS \
     -u DEVNET_FILECOIN_SERVICES_SOURCE -u DEVNET_MULTICALL3_SOURCE \
     -u DEVNET_YUGABYTE_IMAGE -u LOTUS_FIREHORSE_HEIGHT -u LOTUS_DEVNET_NETWORK_BUNDLE -u SECTOR_SIZE -u FIL_PROOFS_USE_ZIGZAG \
-    -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR \
+    -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR -u FIL_PROOFS_PARENT_CACHE \
+    -u FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE -u FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE -u FIL_PROOFS_SDR_PARENTS_CACHE_SIZE \
     docker compose --env-file "${DEVNET_COMPOSE_ENV}" --project-name "${DEVNET_PROJECT}" --file "${DEVNET_COMPOSE}" "$@"
 }
 
@@ -371,6 +372,23 @@ devnet_fil_proofs_zigzag_generate_missing_params() {
   local backend
   backend="$(devnet_normalize_proof_backend "$1")"
   [[ "${backend}" == zigzag ]] && printf '1\n' || printf '0\n'
+}
+
+devnet_parent_cache_dir_for_backend() {
+  local backend
+  backend="$(devnet_normalize_proof_backend "$1")"
+  if [[ "${backend}" == "zigzag" ]]; then
+    printf '%s\n' "${DEVNET_ROOT}/.cache/zigzag-parent-cache"
+  else
+    printf '%s\n' "${DEVNET_ROOT}/.cache/stacked-parent-cache"
+  fi
+}
+
+devnet_parent_cache_window_nodes() {
+  local value="${DEVNET_PARENT_CACHE_WINDOW_NODES:-2048}"
+  [[ "${value}" =~ ^[0-9]+$ && "${value}" -ge 1 ]] ||
+    devnet_die "DEVNET_PARENT_CACHE_WINDOW_NODES must be a positive integer"
+  printf '%s\n' "${value}"
 }
 
 devnet_firehorse_upgrade_epoch() {
@@ -513,6 +531,7 @@ devnet_write_compose_env() {
   local compose_environment_temporary="${DEVNET_COMPOSE_ENV}.temporary.$$"
   devnet_require_safe_write_path "${compose_environment_temporary}" file
   local proof_backend sector_size sector_size_bytes actor_network_bundle firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
+  local parent_cache_dir parent_cache_window_nodes
   local curio_disable_actor_metadata_tasks
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
     proof_backend="$(devnet_current_proof_backend)"
@@ -529,7 +548,11 @@ devnet_write_compose_env() {
   firehorse_height="$(devnet_firehorse_upgrade_epoch_for_sector_size "${sector_size}")"
   fil_proofs_use_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   fil_proofs_zigzag_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
+  parent_cache_dir="$(devnet_parent_cache_dir_for_backend "${proof_backend}")"
+  parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
   curio_disable_actor_metadata_tasks="$(devnet_disable_actor_metadata_tasks_for_sector_size "${sector_size}")"
+  devnet_require_safe_write_path "${parent_cache_dir}" directory
+  mkdir -p "${parent_cache_dir}"
 
   (set -o noclobber; cat > "${compose_environment_temporary}" <<EOF
 DEVNET_IMAGE_NAMESPACE=${DEVNET_IMAGE_NAMESPACE}
@@ -539,6 +562,7 @@ DEVNET_PROOF_BACKEND=${proof_backend}
 DEVNET_SECTOR_SIZE=${sector_size}
 LOTUS_DEVNET_NETWORK_BUNDLE=${actor_network_bundle}
 DEVNET_PROOF_PARAMETERS_DIR=${DEVNET_PROOF_PARAMETERS_DIR}
+DEVNET_PARENT_CACHE_DIR=${parent_cache_dir}
 DEVNET_ZIGZAG_SIDECAR_DIR=${DEVNET_ZIGZAG_SIDECAR_DIR}
 DEVNET_FIREHORSE_HEIGHT=${firehorse_height}
 DEVNET_FILECOIN_SERVICES_SOURCE=${DEVNET_ROOT}/.cache/sources/filecoin_services/${services_commit}
@@ -548,6 +572,10 @@ SECTOR_SIZE=${sector_size_bytes}
 FIL_PROOFS_USE_ZIGZAG=${fil_proofs_use_zigzag}
 FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS=${fil_proofs_zigzag_generate_missing_params}
 FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/var/tmp/filecoin-zigzag-proof-sidecars
+FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents
+FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=${fil_proofs_use_zigzag}
+FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=${parent_cache_window_nodes}
+FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=${parent_cache_window_nodes}
 CURIO_DISABLE_ACTOR_METADATA_TASKS=${curio_disable_actor_metadata_tasks}
 EOF
   ) || devnet_die "failed to create generated Compose environment"
@@ -657,6 +685,8 @@ devnet_validate_write_targets() {
     "${DEVNET_ROOT}/.runtime/verification-backups" \
     "${DEVNET_ROOT}/.cache" \
     "${DEVNET_PROOF_PARAMETERS_DIR}" \
+    "${DEVNET_ROOT}/.cache/stacked-parent-cache" \
+    "${DEVNET_ROOT}/.cache/zigzag-parent-cache" \
     "${DEVNET_ZIGZAG_SIDECAR_DIR}"; do
     devnet_require_safe_write_path "${path}" directory
   done
@@ -689,7 +719,7 @@ devnet_require_ownership_marker() {
 
 devnet_prepare_runtime() {
   devnet_validate_write_targets
-  mkdir -p "${DEVNET_DATA_DIR}" "${DEVNET_LOG_DIR}" "${DEVNET_PROOF_PARAMETERS_DIR}" "${DEVNET_ZIGZAG_SIDECAR_DIR}"
+  mkdir -p "${DEVNET_DATA_DIR}" "${DEVNET_LOG_DIR}" "${DEVNET_PROOF_PARAMETERS_DIR}" "${DEVNET_ROOT}/.cache/stacked-parent-cache" "${DEVNET_ROOT}/.cache/zigzag-parent-cache" "${DEVNET_ZIGZAG_SIDECAR_DIR}"
   for directory in "${DEVNET_DATA_DIRECTORIES[@]}"; do mkdir -p "${DEVNET_DATA_DIR}/${directory}"; done
   devnet_validate_write_targets
   local synapse_marker="${DEVNET_DATA_DIR}/piece-server/.synapse-sdk.ready"
