@@ -64,13 +64,17 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal zigza
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal-backends 32gib
 ```
 
-`prepare-fixture` creates a deterministic full-sector piece, seals it, and
-writes `fixture.json`, the sealed sector, and the seal cache under
-`.runtime/proof-micro-fixtures/<backend>-<sector>/`. It stops after
-pre-commit phase 2 and never calls Groth parameter generation, prove, or verify.
-`unseal-only` then loads that fixture and measures only the raw range recovery
-phase. If the fixture is missing, the script prepares it first and still keeps
-fixture preparation outside the measured unseal phase.
+`prepare-fixture` creates a deterministic full-sector piece and writes a
+`minimal-unseal` fixture under
+`.runtime/proof-micro-fixtures/<backend>-<sector>-minimal-unseal/`. Stacked/SDR
+still runs pre-commit phase 1/2 because its raw unseal helper needs the seal
+cache, then deletes the now-unused staged sector. ZigZag skips pre-commit tree
+construction entirely: it applies the same layered encoding transform that
+`zigzag_unseal_range` later reverses, but it does not write `tree-d`,
+`tree-r-*`, `zigzag-aux.json`, `.meta`, `.params`, or `.vk` files. `unseal-only`
+then loads that fixture and measures only the raw range recovery phase. If the
+fixture is missing, the script prepares it first and still keeps fixture
+preparation outside the measured unseal phase.
 
 In this direct Rust microbench, "retrieval" means recovering an unpadded byte
 range from the sealed sector without Curio scheduling, HTTP serving, piece park,
@@ -82,13 +86,15 @@ tests:
 BENCH_UNSEAL_RANGE_SIZE=1048576 just bench-proof-micro-unseal-backends 8mib
 ```
 
-The unseal-only path intentionally skips the proof-parameter cache and does not
-read or create `.meta`, `.params`, or `.vk` files. ZigZag uses
-`zigzag_unseal_range` over a copy-on-write mmap of the sealed sector. Stacked
-/ SDR uses Filecoin proofs' `get_unsealed_range_mapped`, which is the mapped
-raw unseal helper used by the Stacked path. Both functions unseal the sealed
-sector and write the requested unpadded range to a verification sink that checks
-the deterministic bytes without writing another large output file.
+The unseal-only measured path intentionally skips the proof-parameter cache and
+does not read or create `.meta`, `.params`, or `.vk` files. ZigZag uses
+`zigzag_unseal_range` over a copy-on-write mmap of the encoded sector and relies
+on the backend parent cache, not a per-sector proof cache. Stacked/SDR uses
+Filecoin proofs' `get_unsealed_range_mapped`, which is the mapped raw unseal
+helper used by the Stacked path and requires the per-sector seal cache. Both
+functions recover the requested unpadded range and write it to a verification
+sink that checks the deterministic bytes without writing another large output
+file.
 
 Large fixtures and parent caches can live outside the repository by passing
 host paths:

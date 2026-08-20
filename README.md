@@ -108,10 +108,14 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal zigza
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal-backends 32gib
 ```
 
-This creates or reuses `.runtime/proof-micro-fixtures/<backend>-<sector>/` and
-measures only raw range recovery from the sealed sector. It skips
-`.meta/.params/.vk` entirely. For large remote runs, keep big cache/fixture data
-outside the repo:
+This creates or reuses a `minimal-unseal` fixture under
+`.runtime/proof-micro-fixtures/<backend>-<sector>-minimal-unseal/` and measures
+only raw range recovery from the sealed sector. ZigZag fixtures store only the
+encoded sector plus `fixture.json`; they do not write per-sector `tree-d`,
+`tree-r-*`, `zigzag-aux.json`, `.meta`, `.params`, or `.vk` files. Stacked/SDR
+keeps the seal cache required by `get_unsealed_range_mapped`, but deletes the
+unused staged sector after fixture preparation. For large remote runs, keep big
+cache/fixture data outside the repo:
 
 ```sh
 BENCH_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-prewarm-debug-32gib/parent-cache \

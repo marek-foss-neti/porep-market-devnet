@@ -20,10 +20,10 @@ use storage_proofs_core_zigzag::{
     sector::SectorId as ZigZagSectorId,
 };
 use storage_proofs_porep_zigzag::{
-    stacked::{StackedCircuit, StackedCompound, StackedDrg},
+    stacked::{generate_replica_id, StackedCircuit, StackedCompound, StackedDrg},
     zigzag::{
         circuit::{ZigZagCircuit, ZigZagCompound},
-        prepare_parent_table, ZigZagDrgPoRep,
+        encode as zigzag_encode, prepare_parent_table, ZigZagDrgPoRep,
     },
 };
 
@@ -79,6 +79,8 @@ struct BenchmarkSummary {
 #[derive(Debug, Deserialize, Serialize)]
 struct FixtureManifest {
     schema_version: u8,
+    #[serde(default = "legacy_fixture_kind")]
+    fixture_kind: String,
     backend: Backend,
     sector_size_label: String,
     sector_size_bytes: u64,
@@ -90,8 +92,10 @@ struct FixtureManifest {
     sector_id: u64,
     ticket: String,
     comm_d: String,
-    comm_r: String,
+    comm_r: Option<String>,
     comm_r_star: Option<String>,
+    #[serde(default)]
+    proof_cache_artifacts: Vec<String>,
     unpadded_bytes: u64,
     deterministic_pattern: String,
 }
@@ -109,6 +113,7 @@ struct FixtureSummary {
 struct UnsealOnlySummary {
     schema_version: u8,
     mode: &'static str,
+    fixture_kind: String,
     backend: Backend,
     sector_size_label: String,
     sector_size_bytes: u64,
@@ -117,6 +122,7 @@ struct UnsealOnlySummary {
     fixture_manifest_path: String,
     sealed_path: String,
     cache_dir: String,
+    proof_cache_artifacts: Vec<String>,
     proof_parameter_cache: String,
     proof_parameter_cache_skipped: bool,
     parent_cache: String,
@@ -667,6 +673,12 @@ fn prepare_stacked_fixture(
     let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
         seal::seal_pre_commit_phase2(phase1_out, &cache_dir, &sealed_path)
     })?;
+    fs::remove_file(&staged_path).with_context(|| {
+        format!(
+            "remove unused Stacked staged sector {}",
+            staged_path.display()
+        )
+    })?;
 
     fixture_manifest(
         args,
@@ -675,8 +687,9 @@ fn prepare_stacked_fixture(
         &cache_dir,
         0,
         pre_commit.comm_d,
-        pre_commit.comm_r,
+        Some(pre_commit.comm_r),
         None,
+        vec!["seal-cache".to_string()],
         raw_len,
     )
 }
@@ -703,10 +716,18 @@ fn prepare_zigzag_fixture(
         sealed.flush().context("flush ZigZag fixture sector")?;
         Ok(piece_info)
     })?;
-    let piece_infos = vec![piece_info];
+    let comm_d = piece_info.commitment;
+    let sector_id = 0;
+    let replica_id =
+        generate_replica_id::<<zigzag::constants::ZigZagTree as MerkleTreeTrait>::Hasher, _>(
+            &PROVER_ID,
+            sector_id,
+            &TICKET,
+            comm_d,
+            &porep_config.porep_id,
+        );
 
-    let sector_id = ZigZagSectorId::from(0);
-    let phase1_out = measure(phases, "prepare_fixture_pre_commit_phase1", || {
+    measure(phases, "prepare_fixture_encode_layers", || {
         let sealed = OpenOptions::new()
             .read(true)
             .write(true)
@@ -717,23 +738,18 @@ fn prepare_zigzag_fixture(
                 .map_mut(&sealed)
                 .with_context(|| format!("mmap ZigZag fixture sector {}", sealed_path.display()))?
         };
-        let (phase1_out, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::constants::ZigZagTree>(
-            &porep_config,
-            &cache_dir,
-            PROVER_ID,
-            sector_id,
-            TICKET,
-            &mut data[..],
-            &piece_infos,
-        )?;
-        drop(state);
+        let public_params = zigzag::parameters::zigzag_public_params::<
+            zigzag::constants::ZigZagTree,
+        >(&porep_config)?;
+        let mut graph = public_params.graph.clone();
+        for layer in 0..public_params.layer_challenges.layers() {
+            zigzag_encode(&graph, &replica_id, &mut data[..])
+                .with_context(|| format!("encode ZigZag fixture layer {layer}"))?;
+            graph = graph.zigzag();
+        }
         data.flush()
             .with_context(|| format!("flush sealed ZigZag fixture {}", sealed_path.display()))?;
-        Ok(phase1_out)
-    })?;
-
-    let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
-        zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)
+        Ok(())
     })?;
 
     fixture_manifest(
@@ -742,9 +758,10 @@ fn prepare_zigzag_fixture(
         &sealed_path,
         &cache_dir,
         0,
-        pre_commit.comm_d,
-        pre_commit.comm_r,
-        Some(pre_commit.comm_r_star),
+        comm_d,
+        None,
+        None,
+        Vec::new(),
         raw_len,
     )
 }
@@ -851,6 +868,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
     Ok(UnsealOnlySummary {
         schema_version: 1,
         mode: "unseal-only",
+        fixture_kind: manifest.fixture_kind,
         backend,
         sector_size_label: manifest.sector_size_label,
         sector_size_bytes: manifest.sector_size_bytes,
@@ -859,6 +877,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
         fixture_manifest_path: manifest_path.display().to_string(),
         sealed_path,
         cache_dir,
+        proof_cache_artifacts: manifest.proof_cache_artifacts,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_parameter_cache_skipped: true,
         parent_cache: parent_cache_dir().display().to_string(),
@@ -1208,6 +1227,10 @@ fn fixture_manifest_path(args: &Args) -> PathBuf {
     args.work_dir.join("fixture.json")
 }
 
+fn legacy_fixture_kind() -> String {
+    "legacy".to_string()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fixture_manifest(
     args: &Args,
@@ -1216,12 +1239,14 @@ fn fixture_manifest(
     cache_dir: &PathBuf,
     sector_id: u64,
     comm_d: [u8; 32],
-    comm_r: [u8; 32],
+    comm_r: Option<[u8; 32]>,
     comm_r_star: Option<[u8; 32]>,
+    proof_cache_artifacts: Vec<String>,
     unpadded_bytes: u64,
 ) -> Result<FixtureManifest> {
     Ok(FixtureManifest {
         schema_version: 1,
+        fixture_kind: "minimal-unseal".to_string(),
         backend: args.backend,
         sector_size_label: args.sector_size_label.clone(),
         sector_size_bytes: args.sector_size_bytes,
@@ -1233,8 +1258,9 @@ fn fixture_manifest(
         sector_id,
         ticket: hex::encode(TICKET),
         comm_d: hex::encode(comm_d),
-        comm_r: hex::encode(comm_r),
+        comm_r: comm_r.map(hex::encode),
         comm_r_star: comm_r_star.map(hex::encode),
+        proof_cache_artifacts,
         unpadded_bytes,
         deterministic_pattern: "byte(i)=(i*31+(i>>3)+17)&0xff".to_string(),
     })
@@ -1252,6 +1278,11 @@ fn ensure_fixture_matches_args(args: &Args, manifest: &FixtureManifest) -> Resul
         manifest.schema_version == 1,
         "unsupported fixture schema version {}",
         manifest.schema_version
+    );
+    ensure!(
+        manifest.fixture_kind == "minimal-unseal",
+        "fixture kind {} is not supported by unseal-only; recreate the fixture with the current bench-proof-micro script",
+        manifest.fixture_kind
     );
     ensure!(
         manifest.backend == args.backend,

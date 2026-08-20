@@ -79,7 +79,7 @@ else
   fixture_override="${BENCH_STACKED_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
   parent_cache_override="${BENCH_STACKED_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
 fi
-fixture_host="${4:-${fixture_override:-${DEVNET_ROOT}/.runtime/proof-micro-fixtures/${backend}-${safe_sector}}}"
+fixture_host="${4:-${fixture_override:-${DEVNET_ROOT}/.runtime/proof-micro-fixtures/${backend}-${safe_sector}-minimal-unseal}}"
 parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
 if [[ "${backend}" == "stacked" ]]; then
   parameter_cache_host="${run_dir}/stacked-proof-parameter-cache"
@@ -170,7 +170,7 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
     fi
     devnet_die "proof microbench fixture preparation failed with exit code ${status}; see ${fixture_stderr_log}"
   fi
-  jq -e '.fixture.backend != null and (.fixture.unpadded_bytes | tonumber) > 0' "${fixture_summary_json}" >/dev/null ||
+  jq -e '.fixture.backend != null and .fixture.fixture_kind == "minimal-unseal" and (.fixture.unpadded_bytes | tonumber) > 0' "${fixture_summary_json}" >/dev/null ||
     devnet_die "proof microbench fixture summary is invalid; see ${fixture_summary_json}"
   summary_md="${run_dir}/summary.md"
   {
@@ -190,12 +190,14 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
         "| Field | Value |",
         "| --- | --- |",
         "| Mode | `" + .mode + "` |",
+        "| Fixture kind | `" + (.fixture.fixture_kind // "unknown") + "` |",
         "| Backend | `" + .fixture.backend + "` |",
         "| Sector size | `" + (.fixture.sector_size_label | tostring) + "` / " + bytes(.fixture.sector_size_bytes) + " |",
         "| Fixture host directory | `" + $fixtureHost + "` |",
         "| Manifest | `" + .manifest_path + "` |",
         "| Sealed sector | `" + .fixture.sealed_path + "` |",
         "| Seal cache | `" + .fixture.cache_dir + "` |",
+        "| Proof cache artifacts | `" + ((.fixture.proof_cache_artifacts // []) | join(", ")) + "` |",
         "| Unpadded bytes | " + bytes(.fixture.unpadded_bytes) + " |",
         "",
         "| Phase | Wall | CPU | Max RSS |",
@@ -223,6 +225,9 @@ if [[ "${mode}" == "unseal-only" ]]; then
       devnet_die "proof microbench fixture preparation failed with exit code ${status}; see ${fixture_stderr_log}"
     fi
   else
+    if ! jq -e '.fixture_kind == "minimal-unseal"' "${fixture_host}/fixture.json" >/dev/null; then
+      devnet_die "existing fixture at ${fixture_host} is not a minimal-unseal fixture; choose an empty fixture directory or recreate it with just bench-proof-micro-prepare-fixture"
+    fi
     devnet_progress "bench-proof-micro: reusing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
   fi
 
@@ -235,7 +240,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
       --sector-size "${sector_size}" \
       --work-dir /bench-fixture \
       --unseal-only \
-      "${range_args[@]}" \
+      ${range_args[@]+"${range_args[@]}"} \
     > "${summary_json}" 2> "${stderr_log}"; then
     :
   else
@@ -269,6 +274,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
         "| Field | Value |",
         "| --- | --- |",
         "| Mode | `" + .mode + "` |",
+        "| Fixture kind | `" + (.fixture_kind // "unknown") + "` |",
         "| Backend | `" + .backend + "` |",
         "| Sector size | `" + (.sector_size_label | tostring) + "` / " + bytes(.sector_size_bytes) + " |",
         "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
@@ -278,6 +284,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
         "| Fixture manifest | `" + .fixture_manifest_path + "` |",
         "| Sealed sector | `" + .sealed_path + "` |",
         "| Seal cache | `" + .cache_dir + "` |",
+        "| Proof cache artifacts | `" + ((.proof_cache_artifacts // []) | join(", ")) + "` |",
         "| Parent cache | `" + (.parent_cache // $parentCacheHost) + "` |",
         "| Parent cache window nodes | `" + ((.parent_cache_window_nodes // $parentCacheWindowNodes) | tostring) + "` |",
         "| Range offset | " + bytes(.range_offset) + " |",
