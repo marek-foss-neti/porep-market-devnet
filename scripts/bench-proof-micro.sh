@@ -7,6 +7,11 @@ devnet_require_command jq
 
 backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}}")"
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
+mode="${3:-full}"
+case "${mode}" in
+  full|prepare-fixture|unseal-only) ;;
+  *) devnet_die "invalid proof microbench mode: ${mode}; expected full, prepare-fixture, or unseal-only" ;;
+esac
 
 normalize_microbench_bool() {
   local value
@@ -51,24 +56,45 @@ docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 safe_sector="$(printf '%s' "${sector_size}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
-run_dir="${DEVNET_ROOT}/.runtime/runs/${timestamp}-bench-proof-micro-${backend}-${safe_sector}"
+run_name="bench-proof-micro-${backend}-${safe_sector}"
+if [[ "${mode}" != "full" ]]; then
+  run_name="${run_name}-${mode}"
+fi
+run_dir="${DEVNET_ROOT}/.runtime/runs/${timestamp}-${run_name}"
 devnet_require_safe_write_path "${DEVNET_ROOT}/.runtime/runs" directory
 devnet_require_safe_write_path "${run_dir}" directory
 mkdir -p "${run_dir}"
 
 summary_json="${run_dir}/summary.json"
+fixture_summary_json="${run_dir}/fixture-summary.json"
 prewarm_summary_json="${run_dir}/param-prewarm.json"
+fixture_stderr_log="${run_dir}/fixture.stderr.log"
 prewarm_stderr_log="${run_dir}/param-prewarm.stderr.log"
 stderr_log="${run_dir}/stderr.log"
 work_dir="${run_dir}/work"
+if [[ "${backend}" == "zigzag" ]]; then
+  fixture_override="${BENCH_ZIGZAG_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
+  parent_cache_override="${BENCH_ZIGZAG_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
+else
+  fixture_override="${BENCH_STACKED_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
+  parent_cache_override="${BENCH_STACKED_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
+fi
+fixture_host="${4:-${fixture_override:-${DEVNET_ROOT}/.runtime/proof-micro-fixtures/${backend}-${safe_sector}}}"
 parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
 if [[ "${backend}" == "stacked" ]]; then
   parameter_cache_host="${run_dir}/stacked-proof-parameter-cache"
 fi
+if [[ -n "${BENCH_PROOF_PARAMETERS_DIR:-}" ]]; then
+  parameter_cache_host="${BENCH_PROOF_PARAMETERS_DIR}"
+fi
 if [[ -n "${BENCH_PARENT_CACHE_WINDOW_NODES:-}" ]]; then
   DEVNET_PARENT_CACHE_WINDOW_NODES="${BENCH_PARENT_CACHE_WINDOW_NODES}"
 fi
-parent_cache_host="$(devnet_parent_cache_dir_for_backend "${backend}")"
+if [[ -n "${parent_cache_override}" ]]; then
+  parent_cache_host="${parent_cache_override}"
+else
+  parent_cache_host="$(devnet_parent_cache_dir_for_backend "${backend}")"
+fi
 parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
 parent_cache_kind="${backend}"
 if [[ "${backend}" == "zigzag" ]]; then
@@ -76,7 +102,9 @@ if [[ "${backend}" == "zigzag" ]]; then
 elif [[ "${backend}" == "stacked" ]]; then
   parent_cache_kind="Stacked"
 fi
-devnet_require_safe_write_path "${parent_cache_host}" directory
+if [[ "${parent_cache_host}" == "${DEVNET_ROOT}/"* ]]; then
+  devnet_require_safe_write_path "${parent_cache_host}" directory
+fi
 mkdir -p "${parent_cache_host}"
 docker_parent_cache_args=(
   -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents"
@@ -87,6 +115,43 @@ docker_parent_cache_args=(
 )
 mkdir -p "${work_dir}"
 mkdir -p "${parameter_cache_host}"
+mkdir -p "${fixture_host}"
+
+docker_common_args=(
+  --user "$(id -u):$(id -g)"
+  -e "FIL_PROOFS_PARAMETER_CACHE=/var/tmp/filecoin-proof-parameters"
+  -e "FIL_PROOFS_USE_ZIGZAG=$(devnet_fil_proofs_use_zigzag "${backend}")"
+  -e "FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
+  -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars"
+  -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}"
+  -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw"
+  -v "${run_dir}:/bench-run:rw"
+  "${docker_parent_cache_args[@]}"
+)
+
+run_prepare_fixture() {
+  local output_json="$1"
+  local output_stderr="$2"
+  devnet_progress "bench-proof-micro: preparing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
+  docker run --rm \
+    "${docker_common_args[@]}" \
+    -v "${fixture_host}:/bench-fixture:rw" \
+    "${image}" \
+    porep-proof-microbench \
+      --backend "${backend}" \
+      --sector-size "${sector_size}" \
+      --work-dir /bench-fixture \
+      --prepare-fixture \
+    > "${output_json}" 2> "${output_stderr}"
+}
+
+range_args=()
+if [[ -n "${BENCH_UNSEAL_RANGE_OFFSET:-}" ]]; then
+  range_args+=(--range-offset "${BENCH_UNSEAL_RANGE_OFFSET}")
+fi
+if [[ -n "${BENCH_UNSEAL_RANGE_SIZE:-}" ]]; then
+  range_args+=(--range-size "${BENCH_UNSEAL_RANGE_SIZE}")
+fi
 
 devnet_progress "bench-proof-micro: backend=${backend} sector_size=${sector_size} image=${image}"
 if [[ "${backend}" == "stacked" ]]; then
@@ -94,17 +159,149 @@ if [[ "${backend}" == "stacked" ]]; then
   devnet_progress "bench-proof-micro: Stacked SDR replication=${stacked_sdr_replication_mode} FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
 fi
 devnet_progress "bench-proof-micro: using persistent ${parent_cache_kind} parent cache at ${parent_cache_host} window_nodes=${parent_cache_window_nodes}"
+
+if [[ "${mode}" == "prepare-fixture" ]]; then
+  if run_prepare_fixture "${fixture_summary_json}" "${fixture_stderr_log}"; then
+    :
+  else
+    status=$?
+    if [[ -s "${fixture_stderr_log}" ]]; then
+      tail -40 "${fixture_stderr_log}" >&2
+    fi
+    devnet_die "proof microbench fixture preparation failed with exit code ${status}; see ${fixture_stderr_log}"
+  fi
+  jq -e '.fixture.backend != null and (.fixture.unpadded_bytes | tonumber) > 0' "${fixture_summary_json}" >/dev/null ||
+    devnet_die "proof microbench fixture summary is invalid; see ${fixture_summary_json}"
+  summary_md="${run_dir}/summary.md"
+  {
+    printf '# Proof microbenchmark fixture\n\n'
+    jq -r \
+      --arg fixtureHost "${fixture_host}" '
+      def ms($value): ($value | tostring) + " ms";
+      def bytes($raw):
+        ($raw | tonumber? // null) as $bytes
+        | if $bytes == null then ""
+          elif $bytes < 1024 then (($bytes|round|tostring) + " B")
+          elif $bytes < 1048576 then (((($bytes / 1024) * 10 | round) / 10 | tostring) + " KiB")
+          elif $bytes < 1073741824 then (((($bytes / 1048576) * 10 | round) / 10 | tostring) + " MiB")
+          else (((($bytes / 1073741824) * 10 | round) / 10 | tostring) + " GiB")
+          end;
+      [
+        "| Field | Value |",
+        "| --- | --- |",
+        "| Mode | `" + .mode + "` |",
+        "| Backend | `" + .fixture.backend + "` |",
+        "| Sector size | `" + (.fixture.sector_size_label | tostring) + "` / " + bytes(.fixture.sector_size_bytes) + " |",
+        "| Fixture host directory | `" + $fixtureHost + "` |",
+        "| Manifest | `" + .manifest_path + "` |",
+        "| Sealed sector | `" + .fixture.sealed_path + "` |",
+        "| Seal cache | `" + .fixture.cache_dir + "` |",
+        "| Unpadded bytes | " + bytes(.fixture.unpadded_bytes) + " |",
+        "",
+        "| Phase | Wall | CPU | Max RSS |",
+        "| --- | ---: | ---: | ---: |"
+      ][],
+      (.phases[] | "| `" + .name + "` | " + ms(.wall_ms) + " | " + ms(.cpu_ms) + " | " + bytes(.max_rss_bytes) + " |"),
+      "",
+      "Full machine-readable summary: [`fixture-summary.json`](./fixture-summary.json)."
+    ' "${fixture_summary_json}"
+  } > "${summary_md}"
+  printf 'proof microbenchmark fixture: %s\n' "${summary_md}"
+  exit 0
+fi
+
+if [[ "${mode}" == "unseal-only" ]]; then
+  if [[ ! -f "${fixture_host}/fixture.json" ]]; then
+    devnet_progress "bench-proof-micro: fixture is missing; preparing it outside the measured unseal phase"
+    if run_prepare_fixture "${fixture_summary_json}" "${fixture_stderr_log}"; then
+      :
+    else
+      status=$?
+      if [[ -s "${fixture_stderr_log}" ]]; then
+        tail -40 "${fixture_stderr_log}" >&2
+      fi
+      devnet_die "proof microbench fixture preparation failed with exit code ${status}; see ${fixture_stderr_log}"
+    fi
+  else
+    devnet_progress "bench-proof-micro: reusing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
+  fi
+
+  if docker run --rm \
+    "${docker_common_args[@]}" \
+    -v "${fixture_host}:/bench-fixture:rw" \
+    "${image}" \
+    porep-proof-microbench \
+      --backend "${backend}" \
+      --sector-size "${sector_size}" \
+      --work-dir /bench-fixture \
+      --unseal-only \
+      "${range_args[@]}" \
+    > "${summary_json}" 2> "${stderr_log}"; then
+    :
+  else
+    status=$?
+    if [[ -s "${stderr_log}" ]]; then
+      tail -40 "${stderr_log}" >&2
+    fi
+    devnet_die "proof microbench unseal-only failed with exit code ${status}; see ${stderr_log}"
+  fi
+
+  jq -e '.proof_parameter_cache_skipped == true and .raw_unseal_bytes_match == true' "${summary_json}" >/dev/null ||
+    devnet_die "proof microbench unseal-only correctness failed; see ${summary_json}"
+
+  summary_md="${run_dir}/summary.md"
+  {
+    printf '# Proof raw unseal/retrieval microbenchmark\n\n'
+    jq -r \
+      --arg fixtureHost "${fixture_host}" \
+      --arg parentCacheHost "${parent_cache_host}" \
+      --arg parentCacheWindowNodes "${parent_cache_window_nodes}" '
+      def ms($value): ($value | tostring) + " ms";
+      def bytes($raw):
+        ($raw | tonumber? // null) as $bytes
+        | if $bytes == null then ""
+          elif $bytes < 1024 then (($bytes|round|tostring) + " B")
+          elif $bytes < 1048576 then (((($bytes / 1024) * 10 | round) / 10 | tostring) + " KiB")
+          elif $bytes < 1073741824 then (((($bytes / 1048576) * 10 | round) / 10 | tostring) + " MiB")
+          else (((($bytes / 1073741824) * 10 | round) / 10 | tostring) + " GiB")
+          end;
+      [
+        "| Field | Value |",
+        "| --- | --- |",
+        "| Mode | `" + .mode + "` |",
+        "| Backend | `" + .backend + "` |",
+        "| Sector size | `" + (.sector_size_label | tostring) + "` / " + bytes(.sector_size_bytes) + " |",
+        "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
+        "| Unseal path | `" + .unseal_path + "` |",
+        "| Proof parameter cache skipped | `" + (.proof_parameter_cache_skipped | tostring) + "` |",
+        "| Fixture host directory | `" + $fixtureHost + "` |",
+        "| Fixture manifest | `" + .fixture_manifest_path + "` |",
+        "| Sealed sector | `" + .sealed_path + "` |",
+        "| Seal cache | `" + .cache_dir + "` |",
+        "| Parent cache | `" + (.parent_cache // $parentCacheHost) + "` |",
+        "| Parent cache window nodes | `" + ((.parent_cache_window_nodes // $parentCacheWindowNodes) | tostring) + "` |",
+        "| Range offset | " + bytes(.range_offset) + " |",
+        "| Range size | " + bytes(.range_size) + " |",
+        "| Unsealed bytes | " + bytes(.unsealed_bytes) + " |",
+        "| Raw unseal bytes match | `" + (.raw_unseal_bytes_match | tostring) + "` |",
+        "| Mismatch at | `" + ((.mismatch_at // "none") | tostring) + "` |",
+        "| Throughput | `" + ((.throughput_mib_per_s // 0) | tostring) + " MiB/s` |",
+        "",
+        "| Phase | Wall | CPU | Max RSS |",
+        "| --- | ---: | ---: | ---: |"
+      ][],
+      (.phases[] | "| `" + .name + "` | " + ms(.wall_ms) + " | " + ms(.cpu_ms) + " | " + bytes(.max_rss_bytes) + " |"),
+      "",
+      "Full machine-readable summary: [`summary.json`](./summary.json)."
+    ' "${summary_json}"
+  } > "${summary_md}"
+  printf 'proof raw unseal/retrieval microbenchmark: %s\n' "${summary_md}"
+  exit 0
+fi
+
 devnet_progress "bench-proof-micro: prewarming ${backend} PoRep params for ${sector_size} outside measured phases"
 docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -e "FIL_PROOFS_PARAMETER_CACHE=/var/tmp/filecoin-proof-parameters" \
-  -e "FIL_PROOFS_USE_ZIGZAG=$(devnet_fil_proofs_use_zigzag "${backend}")" \
-  -e "FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}" \
-  -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars" \
-  -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
-  -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
-  -v "${run_dir}:/bench-run:rw" \
-  "${docker_parent_cache_args[@]}" \
+  "${docker_common_args[@]}" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -132,15 +329,7 @@ else
 fi
 
 if docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  -e "FIL_PROOFS_PARAMETER_CACHE=/var/tmp/filecoin-proof-parameters" \
-  -e "FIL_PROOFS_USE_ZIGZAG=$(devnet_fil_proofs_use_zigzag "${backend}")" \
-  -e "FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}" \
-  -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars" \
-  -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}" \
-  -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw" \
-  -v "${run_dir}:/bench-run:rw" \
-  "${docker_parent_cache_args[@]}" \
+  "${docker_common_args[@]}" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \

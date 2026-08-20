@@ -55,6 +55,63 @@ ZigZag microbench runs continue to use `.cache/proof-parameters/`, because
 these devnet-specific ZigZag parameters need to be available to the ZigZag
 runtime verifier.
 
+For raw unseal/retrieval experiments, use the fixture mode instead of the full
+proof microbench:
+
+```bash
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-prepare-fixture zigzag 32gib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal zigzag 32gib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal-backends 32gib
+```
+
+`prepare-fixture` creates a deterministic full-sector piece, seals it, and
+writes `fixture.json`, the sealed sector, and the seal cache under
+`.runtime/proof-micro-fixtures/<backend>-<sector>/`. It stops after
+pre-commit phase 2 and never calls Groth parameter generation, prove, or verify.
+`unseal-only` then loads that fixture and measures only the raw range recovery
+phase. If the fixture is missing, the script prepares it first and still keeps
+fixture preparation outside the measured unseal phase.
+
+In this direct Rust microbench, "retrieval" means recovering an unpadded byte
+range from the sealed sector without Curio scheduling, HTTP serving, piece park,
+or chain state. The default range is the full unpadded sector. Use
+`BENCH_UNSEAL_RANGE_OFFSET` and `BENCH_UNSEAL_RANGE_SIZE` for smaller range
+tests:
+
+```bash
+BENCH_UNSEAL_RANGE_SIZE=1048576 just bench-proof-micro-unseal-backends 8mib
+```
+
+The unseal-only path intentionally skips the proof-parameter cache and does not
+read or create `.meta`, `.params`, or `.vk` files. ZigZag uses
+`zigzag_unseal_range` over a copy-on-write mmap of the sealed sector. Stacked
+/ SDR uses Filecoin proofs' `get_unsealed_range_mapped`, which is the mapped
+raw unseal helper used by the Stacked path. Both functions unseal the sealed
+sector and write the requested unpadded range to a verification sink that checks
+the deterministic bytes without writing another large output file.
+
+Large fixtures and parent caches can live outside the repository by passing
+host paths:
+
+```bash
+BENCH_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-prewarm-debug-32gib/parent-cache \
+BENCH_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-unseal-fixture-32gib \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+just bench-proof-micro-unseal zigzag 32gib
+```
+
+For `bench-proof-micro-unseal-backends`, prefer backend-specific paths so the
+two backends cannot accidentally share a fixture or parent-cache directory:
+
+```bash
+BENCH_ZIGZAG_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-prewarm-debug-32gib/parent-cache \
+BENCH_ZIGZAG_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-unseal-fixture-32gib \
+BENCH_STACKED_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/stacked-prewarm-debug-32gib/parent-cache \
+BENCH_STACKED_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/stacked-unseal-fixture-32gib \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+just bench-proof-micro-unseal-backends 32gib
+```
+
 Both backends use persistent parent-cache directories under `.cache/`, mounted
 as `FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents`. Stacked/SDR uses its
 existing windowed parent cache. ZigZag uses the restore-zigzag parent table with

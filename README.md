@@ -99,6 +99,38 @@ ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
 
+For raw unseal/retrieval comparison without Groth parameter generation, use the
+fixture mode:
+
+```sh
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-prepare-fixture zigzag 32gib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal zigzag 32gib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-unseal-backends 32gib
+```
+
+This creates or reuses `.runtime/proof-micro-fixtures/<backend>-<sector>/` and
+measures only raw range recovery from the sealed sector. It skips
+`.meta/.params/.vk` entirely. For large remote runs, keep big cache/fixture data
+outside the repo:
+
+```sh
+BENCH_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-prewarm-debug-32gib/parent-cache \
+BENCH_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-unseal-fixture-32gib \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+just bench-proof-micro-unseal zigzag 32gib
+```
+
+For one command that compares both backends, use backend-specific host paths:
+
+```sh
+BENCH_ZIGZAG_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-prewarm-debug-32gib/parent-cache \
+BENCH_ZIGZAG_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/zigzag-unseal-fixture-32gib \
+BENCH_STACKED_PARENT_CACHE_DIR=/mnt/ironwolf1/marek/filecoin/stacked-prewarm-debug-32gib/parent-cache \
+BENCH_STACKED_MICRO_FIXTURE_DIR=/mnt/ironwolf1/marek/filecoin/stacked-unseal-fixture-32gib \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+just bench-proof-micro-unseal-backends 32gib
+```
+
 The first full devnet run for `512mib` or `32gib` can also make Lotus fetch
 large production proof parameters before Curio creates its market config. The
 lifecycle wait is longer for these selectors and prints proof-cache heartbeats;

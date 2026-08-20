@@ -129,6 +129,7 @@ const resetScriptPath = join(repositoryRoot, "scripts", "devnet-reset.sh");
 const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
 const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
+const benchProofMicroScriptPath = join(repositoryRoot, "scripts", "bench-proof-micro.sh");
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
 const rustFilProofsSourceCommit = "7996df427bb3d497677b3b5f8db58c65d6e6ab4b";
 const derivedImageServices = [
@@ -270,6 +271,11 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS/);
   assert.match(filecoinFfiMicrobenchOverride, /parameter_cache_identifier/);
   assert.match(filecoinFfiMicrobenchOverride, /verifying_key_rewritten/);
+  assert.match(filecoinFfiMicrobenchOverride, /--prepare-fixture/);
+  assert.match(filecoinFfiMicrobenchOverride, /--unseal-only/);
+  assert.match(filecoinFfiMicrobenchOverride, /proof_parameter_cache_skipped/);
+  assert.match(filecoinFfiMicrobenchOverride, /zigzag_unseal_range/);
+  assert.match(filecoinFfiMicrobenchOverride, /get_unsealed_range_mapped/);
   assert.match(filecoinFfiCargoTomlOverride, /fvm-4\.8\.2-zigzag/);
   assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_USE_ZIGZAG/);
   assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
@@ -610,14 +616,29 @@ test("FireHorse upgrade epoch gets a large-sector startup buffer and remains ove
 });
 
 test("proof backend benchmark runner performs fresh isolated comparisons and aggregates evidence", async () => {
-  const [justfile, script] = await Promise.all([
+  const [justfile, script, microScript] = await Promise.all([
     readFile(join(repositoryRoot, "justfile"), "utf8"),
     readFile(benchProofBackendsScriptPath, "utf8"),
+    readFile(benchProofMicroScriptPath, "utf8"),
   ]);
 
   assert.match(justfile, /bench-proof-backends sector_size='8mib':\n\s+@bash scripts\/bench-proof-backends\.sh '\{\{sector_size\}\}'/);
   assert.match(justfile, /bench-proof-micro backend='stacked' sector_size='8mib':\n\s+@bash scripts\/bench-proof-micro\.sh '\{\{backend\}\}' '\{\{sector_size\}\}'/);
+  assert.match(justfile, /bench-proof-micro-prepare-fixture backend='stacked' sector_size='8mib' fixture='':/);
+  assert.match(justfile, /bench-proof-micro-unseal backend='stacked' sector_size='8mib' fixture='':/);
   assert.match(justfile, /bench-proof-micro-backends sector_size='8mib':/);
+  assert.match(justfile, /bench-proof-micro-unseal-backends sector_size='8mib':/);
+  assert.match(microScript, /prepare-fixture\|unseal-only/);
+  assert.match(microScript, /BENCH_MICRO_FIXTURE_DIR/);
+  assert.match(microScript, /BENCH_PARENT_CACHE_DIR/);
+  assert.match(microScript, /BENCH_ZIGZAG_MICRO_FIXTURE_DIR/);
+  assert.match(microScript, /BENCH_STACKED_MICRO_FIXTURE_DIR/);
+  assert.match(microScript, /BENCH_ZIGZAG_PARENT_CACHE_DIR/);
+  assert.match(microScript, /BENCH_STACKED_PARENT_CACHE_DIR/);
+  assert.match(microScript, /BENCH_UNSEAL_RANGE_SIZE/);
+  assert.match(microScript, /proof_parameter_cache_skipped == true/);
+  assert.match(microScript, /--unseal-only/);
+  assert.match(microScript, /--prepare-fixture/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);

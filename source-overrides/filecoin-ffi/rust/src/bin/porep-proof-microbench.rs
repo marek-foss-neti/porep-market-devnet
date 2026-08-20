@@ -1,9 +1,9 @@
-use std::fs::{self, File};
-use std::io::{Cursor, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Cursor, Read, Write};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use filecoin_proofs_api::seal;
 use filecoin_proofs_api::{
     PaddedBytesAmount as ApiPaddedBytesAmount, RegisteredSealProof, SectorId as ApiSectorId,
@@ -11,13 +11,12 @@ use filecoin_proofs_api::{
 };
 use filecoin_proofs_zigzag as zigzag;
 use filecoin_proofs_zigzag::with_shape;
+use memmap2::MmapOptions;
 use rand::rngs::OsRng;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use storage_proofs_core_zigzag::{
-    api_version::ApiVersion as ZigZagApiVersion,
-    compound_proof::CompoundProof,
-    merkle::MerkleTreeTrait,
-    parameter_cache::CacheableParameters,
+    api_version::ApiVersion as ZigZagApiVersion, compound_proof::CompoundProof,
+    merkle::MerkleTreeTrait, parameter_cache::CacheableParameters,
     sector::SectorId as ZigZagSectorId,
 };
 use storage_proofs_porep_zigzag::{
@@ -37,7 +36,15 @@ const SECTOR_SIZE_512_MIB: u64 = 512 * 1024 * 1024;
 const SECTOR_SIZE_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_LOCAL_SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Full,
+    PrewarmOnly,
+    PrepareFixture,
+    UnsealOnly,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Backend {
     Stacked,
@@ -66,6 +73,61 @@ struct BenchmarkSummary {
     unsealed_bytes: usize,
     verify_seal: bool,
     raw_unseal_bytes_match: bool,
+    phases: Vec<PhaseMetric>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FixtureManifest {
+    schema_version: u8,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    sealed_path: String,
+    cache_dir: String,
+    prover_id: String,
+    sector_id: u64,
+    ticket: String,
+    comm_d: String,
+    comm_r: String,
+    comm_r_star: Option<String>,
+    unpadded_bytes: u64,
+    deterministic_pattern: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FixtureSummary {
+    schema_version: u8,
+    mode: &'static str,
+    manifest_path: String,
+    fixture: FixtureManifest,
+    phases: Vec<PhaseMetric>,
+}
+
+#[derive(Debug, Serialize)]
+struct UnsealOnlySummary {
+    schema_version: u8,
+    mode: &'static str,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    fixture_manifest_path: String,
+    sealed_path: String,
+    cache_dir: String,
+    proof_parameter_cache: String,
+    proof_parameter_cache_skipped: bool,
+    parent_cache: String,
+    parent_cache_window_nodes: u32,
+    unseal_path: &'static str,
+    range_offset: u64,
+    range_size: u64,
+    unsealed_bytes: u64,
+    raw_unseal_bytes_match: bool,
+    mismatch_at: Option<u64>,
+    throughput_mib_per_s: Option<f64>,
     phases: Vec<PhaseMetric>,
 }
 
@@ -106,17 +168,27 @@ fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1).collect())?;
     fs::create_dir_all(&args.work_dir).context("create work directory")?;
 
-    if args.prewarm_only {
-        let summary = prewarm_params(&args)?;
-        println!("{}", serde_json::to_string_pretty(&summary)?);
-        return Ok(());
-    }
-
-    let summary = match args.backend {
-        Backend::Stacked => run_stacked(&args)?,
-        Backend::ZigZag => run_zigzag(&args)?,
+    match args.mode {
+        Mode::PrewarmOnly => {
+            let summary = prewarm_params(&args)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Mode::PrepareFixture => {
+            let summary = prepare_fixture(&args)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Mode::UnsealOnly => {
+            let summary = run_unseal_only(&args)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Mode::Full => {
+            let summary = match args.backend {
+                Backend::Stacked => run_stacked(&args)?,
+                Backend::ZigZag => run_zigzag(&args)?,
+            };
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
     };
-    println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(())
 }
 
@@ -125,7 +197,9 @@ struct Args {
     sector_size_label: String,
     sector_size_bytes: u64,
     work_dir: PathBuf,
-    prewarm_only: bool,
+    mode: Mode,
+    range_offset: u64,
+    range_size: Option<u64>,
 }
 
 impl Args {
@@ -133,7 +207,10 @@ impl Args {
         let mut backend = None;
         let mut sector_size = None;
         let mut work_dir = None;
-        let mut prewarm_only = false;
+        let mut mode = Mode::Full;
+        let mut explicit_mode = false;
+        let mut range_offset = 0;
+        let mut range_size = None;
         let mut iter = raw.into_iter();
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -141,15 +218,40 @@ impl Args {
                     backend = Some(parse_backend(&required_arg(&mut iter, "--backend")?)?)
                 }
                 "--sector-size" => {
-                    sector_size =
-                        Some(parse_sector_size(&required_arg(&mut iter, "--sector-size")?)?)
+                    sector_size = Some(parse_sector_size(&required_arg(
+                        &mut iter,
+                        "--sector-size",
+                    )?)?)
                 }
                 "--work-dir" => {
                     work_dir = Some(PathBuf::from(required_arg(&mut iter, "--work-dir")?))
                 }
-                "--prewarm-only" => prewarm_only = true,
+                "--fixture-dir" => {
+                    work_dir = Some(PathBuf::from(required_arg(&mut iter, "--fixture-dir")?))
+                }
+                "--prewarm-only" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::PrewarmOnly)?;
+                }
+                "--prepare-fixture" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::PrepareFixture)?;
+                }
+                "--unseal-only" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::UnsealOnly)?;
+                }
+                "--range-offset" => {
+                    range_offset = parse_u64_arg(
+                        &required_arg(&mut iter, "--range-offset")?,
+                        "--range-offset",
+                    )?;
+                }
+                "--range-size" => {
+                    range_size = Some(parse_u64_arg(
+                        &required_arg(&mut iter, "--range-size")?,
+                        "--range-size",
+                    )?);
+                }
                 "--help" | "-h" => {
-                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--prewarm-only]");
+                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
                     std::process::exit(0);
                 }
                 _ => bail!("unknown argument: {arg}"),
@@ -178,7 +280,9 @@ impl Args {
             sector_size_label,
             sector_size_bytes,
             work_dir,
-            prewarm_only,
+            mode,
+            range_offset,
+            range_size,
         })
     }
 }
@@ -195,7 +299,23 @@ fn large_sector_microbench_enabled() -> bool {
 }
 
 fn required_arg(iter: &mut impl Iterator<Item = String>, name: &str) -> Result<String> {
-    iter.next().with_context(|| format!("{name} requires a value"))
+    iter.next()
+        .with_context(|| format!("{name} requires a value"))
+}
+
+fn set_mode_once(mode: &mut Mode, explicit: &mut bool, value: Mode) -> Result<()> {
+    if *explicit {
+        bail!("only one mode flag can be used");
+    }
+    *mode = value;
+    *explicit = true;
+    Ok(())
+}
+
+fn parse_u64_arg(value: &str, name: &str) -> Result<u64> {
+    value
+        .parse::<u64>()
+        .with_context(|| format!("{name} must be a non-negative integer"))
 }
 
 fn parse_backend(value: &str) -> Result<Backend> {
@@ -292,7 +412,11 @@ fn prewarm_stacked_params(
         registered_proof.as_v1_config().porep_id,
         ZigZagApiVersion::V1_1_0,
     );
-    with_shape!(args.sector_size_bytes, prewarm_stacked_params_for_shape, porep_config)
+    with_shape!(
+        args.sector_size_bytes,
+        prewarm_stacked_params_for_shape,
+        porep_config
+    )
 }
 
 fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
@@ -308,20 +432,16 @@ fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
         .graph
         .parent_cache()
         .context("prepare Stacked parent cache")?;
-    let cache_identifier = <StackedCompound<
-        Tree,
-        zigzag::constants::DefaultPieceHasher,
-    > as CacheableParameters<
-        StackedCircuit<Tree, zigzag::constants::DefaultPieceHasher>,
-        _,
-    >>::cache_identifier(&public_params);
-    let metadata_path =
-        storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
-            &cache_identifier,
-        );
-    let params_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(
+    let cache_identifier =
+        <StackedCompound<Tree, zigzag::constants::DefaultPieceHasher> as CacheableParameters<
+            StackedCircuit<Tree, zigzag::constants::DefaultPieceHasher>,
+            _,
+        >>::cache_identifier(&public_params);
+    let metadata_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
         &cache_identifier,
     );
+    let params_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(&cache_identifier);
     let verifying_key_path =
         storage_proofs_core_zigzag::parameter_cache::parameter_cache_verifying_key_path(
             &cache_identifier,
@@ -364,22 +484,18 @@ fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
                 verifying_key_path.display()
             )
         })?;
-        groth_params
-            .vk
-            .write(&mut file)
-            .with_context(|| {
-                format!(
-                    "write repaired Stacked verifying key {}",
-                    verifying_key_path.display()
-                )
-            })?;
-        file.flush()
-            .with_context(|| {
-                format!(
-                    "flush repaired Stacked verifying key {}",
-                    verifying_key_path.display()
-                )
-            })?;
+        groth_params.vk.write(&mut file).with_context(|| {
+            format!(
+                "write repaired Stacked verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        file.flush().with_context(|| {
+            format!(
+                "flush repaired Stacked verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
         true
     };
     Ok(ParamPrewarmResult {
@@ -415,13 +531,11 @@ fn prewarm_zigzag_params(
         ZigZagCircuit<zigzag::constants::ZigZagTree, zigzag::constants::DefaultPieceHasher>,
         _,
     >>::cache_identifier(&public_params);
-    let metadata_path =
-        storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
-            &cache_identifier,
-        );
-    let params_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(
+    let metadata_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
         &cache_identifier,
     );
+    let params_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(&cache_identifier);
     let verifying_key_path =
         storage_proofs_core_zigzag::parameter_cache::parameter_cache_verifying_key_path(
             &cache_identifier,
@@ -463,22 +577,18 @@ fn prewarm_zigzag_params(
                 verifying_key_path.display()
             )
         })?;
-        groth_params
-            .vk
-            .write(&mut file)
-            .with_context(|| {
-                format!(
-                    "write repaired ZigZag verifying key {}",
-                    verifying_key_path.display()
-                )
-            })?;
-        file.flush()
-            .with_context(|| {
-                format!(
-                    "flush repaired ZigZag verifying key {}",
-                    verifying_key_path.display()
-                )
-            })?;
+        groth_params.vk.write(&mut file).with_context(|| {
+            format!(
+                "write repaired ZigZag verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        file.flush().with_context(|| {
+            format!(
+                "flush repaired ZigZag verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
         true
     };
     Ok(ParamPrewarmResult {
@@ -491,6 +601,279 @@ fn prewarm_zigzag_params(
     })
 }
 
+fn prepare_fixture(args: &Args) -> Result<FixtureSummary> {
+    let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let mut phases = Vec::new();
+    let fixture = match args.backend {
+        Backend::Stacked => prepare_stacked_fixture(args, registered_proof, &mut phases)?,
+        Backend::ZigZag => prepare_zigzag_fixture(args, registered_proof, &mut phases)?,
+    };
+    let manifest_path = fixture_manifest_path(args);
+    let mut manifest = File::create(&manifest_path)
+        .with_context(|| format!("create fixture manifest {}", manifest_path.display()))?;
+    serde_json::to_writer_pretty(&mut manifest, &fixture)
+        .with_context(|| format!("write fixture manifest {}", manifest_path.display()))?;
+    manifest
+        .flush()
+        .with_context(|| format!("flush fixture manifest {}", manifest_path.display()))?;
+
+    Ok(FixtureSummary {
+        schema_version: 1,
+        mode: "prepare-fixture",
+        manifest_path: manifest_path.display().to_string(),
+        fixture,
+        phases,
+    })
+}
+
+fn prepare_stacked_fixture(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    phases: &mut Vec<PhaseMetric>,
+) -> Result<FixtureManifest> {
+    let cache_dir = args.work_dir.join("seal-cache");
+    fs::create_dir_all(&cache_dir).context("create Stacked fixture seal cache")?;
+    let staged_path = args.work_dir.join("staged.dat");
+    let sealed_path = args.work_dir.join("sealed.dat");
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+
+    let piece_info = measure(phases, "prepare_fixture_write_and_preprocess", || {
+        let mut staged = File::create(&staged_path).context("create Stacked staged sector")?;
+        let (piece_info, _written) = seal::write_and_preprocess(
+            registered_proof,
+            DeterministicReader::new(0, raw_len),
+            &mut staged,
+            ApiUnpaddedBytesAmount(raw_len),
+        )?;
+        staged.flush().context("flush Stacked staged sector")?;
+        Ok(piece_info)
+    })?;
+    let piece_infos = vec![piece_info];
+    File::create(&sealed_path).context("create Stacked sealed sector")?;
+
+    let sector_id = ApiSectorId::from(0);
+    let phase1_out = measure(phases, "prepare_fixture_pre_commit_phase1", || {
+        seal::seal_pre_commit_phase1(
+            registered_proof,
+            &cache_dir,
+            &staged_path,
+            &sealed_path,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            &piece_infos,
+        )
+    })?;
+    let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
+        seal::seal_pre_commit_phase2(phase1_out, &cache_dir, &sealed_path)
+    })?;
+
+    fixture_manifest(
+        args,
+        registered_proof,
+        &sealed_path,
+        &cache_dir,
+        0,
+        pre_commit.comm_d,
+        pre_commit.comm_r,
+        None,
+        raw_len,
+    )
+}
+
+fn prepare_zigzag_fixture(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    phases: &mut Vec<PhaseMetric>,
+) -> Result<FixtureManifest> {
+    let cache_dir = args.work_dir.join("zigzag-cache");
+    fs::create_dir_all(&cache_dir).context("create ZigZag fixture cache")?;
+    let sealed_path = args.work_dir.join("zigzag-sealed.dat");
+    let porep_config = zigzag_porep_config(args, registered_proof);
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+
+    let piece_info = measure(phases, "prepare_fixture_add_piece", || {
+        let mut sealed = File::create(&sealed_path).context("create ZigZag fixture sector")?;
+        let (piece_info, _written) = zigzag::add_piece(
+            DeterministicReader::new(0, raw_len),
+            &mut sealed,
+            zigzag::UnpaddedBytesAmount(raw_len),
+            &[],
+        )?;
+        sealed.flush().context("flush ZigZag fixture sector")?;
+        Ok(piece_info)
+    })?;
+    let piece_infos = vec![piece_info];
+
+    let sector_id = ZigZagSectorId::from(0);
+    let phase1_out = measure(phases, "prepare_fixture_pre_commit_phase1", || {
+        let sealed = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&sealed_path)
+            .with_context(|| format!("open ZigZag fixture sector {}", sealed_path.display()))?;
+        let mut data = unsafe {
+            MmapOptions::new()
+                .map_mut(&sealed)
+                .with_context(|| format!("mmap ZigZag fixture sector {}", sealed_path.display()))?
+        };
+        let (phase1_out, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::constants::ZigZagTree>(
+            &porep_config,
+            &cache_dir,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            &mut data[..],
+            &piece_infos,
+        )?;
+        drop(state);
+        data.flush()
+            .with_context(|| format!("flush sealed ZigZag fixture {}", sealed_path.display()))?;
+        Ok(phase1_out)
+    })?;
+
+    let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
+        zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)
+    })?;
+
+    fixture_manifest(
+        args,
+        registered_proof,
+        &sealed_path,
+        &cache_dir,
+        0,
+        pre_commit.comm_d,
+        pre_commit.comm_r,
+        Some(pre_commit.comm_r_star),
+        raw_len,
+    )
+}
+
+fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
+    let manifest_path = fixture_manifest_path(args);
+    let manifest = read_fixture_manifest(&manifest_path)?;
+    ensure_fixture_matches_args(args, &manifest)?;
+
+    let range_offset = args.range_offset;
+    ensure!(
+        range_offset <= manifest.unpadded_bytes,
+        "range offset {} exceeds fixture unpadded bytes {}",
+        range_offset,
+        manifest.unpadded_bytes
+    );
+    let range_size = args
+        .range_size
+        .unwrap_or_else(|| manifest.unpadded_bytes - range_offset);
+    ensure!(
+        range_offset
+            .checked_add(range_size)
+            .is_some_and(|end| end <= manifest.unpadded_bytes),
+        "range {}..{} exceeds fixture unpadded bytes {}",
+        range_offset,
+        range_offset.saturating_add(range_size),
+        manifest.unpadded_bytes
+    );
+
+    let registered_proof = registered_proof_for_sector_size(manifest.sector_size_bytes)?;
+    let prover_id = commitment_from_hex(&manifest.prover_id)?;
+    let ticket = commitment_from_hex(&manifest.ticket)?;
+    let comm_d = commitment_from_hex(&manifest.comm_d)?;
+    let sector_id = manifest.sector_id;
+    let sealed_path = manifest.sealed_path.clone();
+    let cache_dir = manifest.cache_dir.clone();
+    let mut phases = Vec::new();
+    let mut verifier = DeterministicVerifySink::new(range_offset);
+
+    let unsealed_bytes = match manifest.backend {
+        Backend::Stacked => {
+            let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                seal::get_unsealed_range_mapped(
+                    registered_proof,
+                    PathBuf::from(cache_dir.as_str()),
+                    PathBuf::from(sealed_path.as_str()),
+                    &mut verifier,
+                    prover_id,
+                    ApiSectorId::from(sector_id),
+                    comm_d,
+                    ticket,
+                    ApiUnpaddedByteIndex(range_offset),
+                    ApiUnpaddedBytesAmount(range_size),
+                )
+            })?;
+            amount.0
+        }
+        Backend::ZigZag => {
+            let porep_config = zigzag::PoRepConfig::new_groth16(
+                manifest.sector_size_bytes,
+                registered_proof.as_v1_config().porep_id,
+                ZigZagApiVersion::V1_2_0,
+            );
+            let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                let sealed = OpenOptions::new()
+                    .read(true)
+                    .open(&sealed_path)
+                    .with_context(|| format!("open ZigZag sealed fixture {}", sealed_path))?;
+                let mut data = unsafe {
+                    MmapOptions::new().map_copy(&sealed).with_context(|| {
+                        format!("copy-mmap ZigZag sealed fixture {}", sealed_path)
+                    })?
+                };
+                zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
+                    &porep_config,
+                    prover_id,
+                    ZigZagSectorId::from(sector_id),
+                    ticket,
+                    comm_d,
+                    &mut data[..],
+                    &mut verifier,
+                    zigzag::UnpaddedByteIndex(range_offset),
+                    zigzag::UnpaddedBytesAmount(range_size),
+                )
+            })?;
+            amount.0
+        }
+    };
+
+    let unseal_phase = phases
+        .iter()
+        .find(|phase| phase.name == "raw_unseal_retrieval");
+    let throughput_mib_per_s = unseal_phase
+        .filter(|phase| phase.wall_ms > 0)
+        .map(|phase| (unsealed_bytes as f64 / 1_048_576.0) / (phase.wall_ms as f64 / 1000.0));
+    let raw_unseal_bytes_match = verifier.matches_expected(range_size);
+    let backend = manifest.backend;
+    let unseal_path = match backend {
+        Backend::Stacked => "Stacked get_unsealed_range_mapped",
+        Backend::ZigZag => "ZigZag zigzag_unseal_range",
+    };
+    let parent_cache_window_nodes = parent_cache_window_nodes(backend);
+
+    Ok(UnsealOnlySummary {
+        schema_version: 1,
+        mode: "unseal-only",
+        backend,
+        sector_size_label: manifest.sector_size_label,
+        sector_size_bytes: manifest.sector_size_bytes,
+        registered_seal_proof: manifest.registered_seal_proof,
+        registered_seal_proof_id: manifest.registered_seal_proof_id,
+        fixture_manifest_path: manifest_path.display().to_string(),
+        sealed_path,
+        cache_dir,
+        proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        proof_parameter_cache_skipped: true,
+        parent_cache: parent_cache_dir().display().to_string(),
+        parent_cache_window_nodes,
+        unseal_path,
+        range_offset,
+        range_size,
+        unsealed_bytes,
+        raw_unseal_bytes_match,
+        mismatch_at: verifier.mismatch_at,
+        throughput_mib_per_s,
+        phases,
+    })
+}
+
 fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
     let cache_dir = args.work_dir.join("seal-cache");
@@ -498,9 +881,9 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
     let staged_path = args.work_dir.join("staged.dat");
     let sealed_path = args.work_dir.join("sealed.dat");
 
-    let raw = deterministic_bytes(usize::from(ApiUnpaddedBytesAmount::from(ApiPaddedBytesAmount(
-        args.sector_size_bytes,
-    ))));
+    let raw = deterministic_bytes(usize::from(ApiUnpaddedBytesAmount::from(
+        ApiPaddedBytesAmount(args.sector_size_bytes),
+    )));
     let mut staged = File::create(&staged_path).context("create staged sector")?;
     let (piece_info, _written) = seal::write_and_preprocess(
         registered_proof,
@@ -701,10 +1084,7 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     })
 }
 
-fn zigzag_porep_config(
-    args: &Args,
-    registered_proof: RegisteredSealProof,
-) -> zigzag::PoRepConfig {
+fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zigzag::PoRepConfig {
     zigzag::PoRepConfig::new_groth16(
         args.sector_size_bytes,
         registered_proof.as_v1_config().porep_id,
@@ -712,7 +1092,11 @@ fn zigzag_porep_config(
     )
 }
 
-fn measure<T>(phases: &mut Vec<PhaseMetric>, name: &'static str, action: impl FnOnce() -> Result<T>) -> Result<T> {
+fn measure<T>(
+    phases: &mut Vec<PhaseMetric>,
+    name: &'static str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let cpu_before = process_cpu_ms();
     let started = Instant::now();
     let result = action();
@@ -739,11 +1123,180 @@ fn registered_proof_for_sector_size(sector_size: u64) -> Result<RegisteredSealPr
 
 fn deterministic_bytes(len: usize) -> Vec<u8> {
     (0..len)
-        .map(|index| {
-            let value = index as u64;
-            (value.wrapping_mul(31).wrapping_add(value >> 3).wrapping_add(17) & 0xff) as u8
-        })
+        .map(|index| deterministic_byte(index as u64))
         .collect()
+}
+
+fn deterministic_byte(index: u64) -> u8 {
+    (index
+        .wrapping_mul(31)
+        .wrapping_add(index >> 3)
+        .wrapping_add(17)
+        & 0xff) as u8
+}
+
+struct DeterministicReader {
+    position: u64,
+    remaining: u64,
+}
+
+impl DeterministicReader {
+    fn new(offset: u64, len: u64) -> Self {
+        Self {
+            position: offset,
+            remaining: len,
+        }
+    }
+}
+
+impl Read for DeterministicReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+        let n = buf.len().min(self.remaining as usize);
+        for (index, byte) in buf[..n].iter_mut().enumerate() {
+            *byte = deterministic_byte(self.position + index as u64);
+        }
+        self.position += n as u64;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+struct DeterministicVerifySink {
+    offset: u64,
+    written: u64,
+    mismatch_at: Option<u64>,
+}
+
+impl DeterministicVerifySink {
+    fn new(offset: u64) -> Self {
+        Self {
+            offset,
+            written: 0,
+            mismatch_at: None,
+        }
+    }
+
+    fn matches_expected(&self, expected_len: u64) -> bool {
+        self.written == expected_len && self.mismatch_at.is_none()
+    }
+}
+
+impl Write for DeterministicVerifySink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.mismatch_at.is_none() {
+            for (index, actual) in buf.iter().enumerate() {
+                let position = self.offset + self.written + index as u64;
+                if *actual != deterministic_byte(position) {
+                    self.mismatch_at = Some(position);
+                    break;
+                }
+            }
+        }
+        self.written += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn fixture_manifest_path(args: &Args) -> PathBuf {
+    args.work_dir.join("fixture.json")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture_manifest(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    sealed_path: &PathBuf,
+    cache_dir: &PathBuf,
+    sector_id: u64,
+    comm_d: [u8; 32],
+    comm_r: [u8; 32],
+    comm_r_star: Option<[u8; 32]>,
+    unpadded_bytes: u64,
+) -> Result<FixtureManifest> {
+    Ok(FixtureManifest {
+        schema_version: 1,
+        backend: args.backend,
+        sector_size_label: args.sector_size_label.clone(),
+        sector_size_bytes: args.sector_size_bytes,
+        registered_seal_proof: format!("{registered_proof:?}"),
+        registered_seal_proof_id: registered_proof as i32,
+        sealed_path: sealed_path.display().to_string(),
+        cache_dir: cache_dir.display().to_string(),
+        prover_id: hex::encode(PROVER_ID),
+        sector_id,
+        ticket: hex::encode(TICKET),
+        comm_d: hex::encode(comm_d),
+        comm_r: hex::encode(comm_r),
+        comm_r_star: comm_r_star.map(hex::encode),
+        unpadded_bytes,
+        deterministic_pattern: "byte(i)=(i*31+(i>>3)+17)&0xff".to_string(),
+    })
+}
+
+fn read_fixture_manifest(path: &PathBuf) -> Result<FixtureManifest> {
+    let file =
+        File::open(path).with_context(|| format!("open fixture manifest {}", path.display()))?;
+    serde_json::from_reader(file)
+        .with_context(|| format!("read fixture manifest {}", path.display()))
+}
+
+fn ensure_fixture_matches_args(args: &Args, manifest: &FixtureManifest) -> Result<()> {
+    ensure!(
+        manifest.schema_version == 1,
+        "unsupported fixture schema version {}",
+        manifest.schema_version
+    );
+    ensure!(
+        manifest.backend == args.backend,
+        "fixture backend {:?} does not match requested backend {:?}",
+        manifest.backend,
+        args.backend
+    );
+    ensure!(
+        manifest.sector_size_bytes == args.sector_size_bytes,
+        "fixture sector size {} does not match requested sector size {}",
+        manifest.sector_size_bytes,
+        args.sector_size_bytes
+    );
+    ensure!(
+        manifest.deterministic_pattern == "byte(i)=(i*31+(i>>3)+17)&0xff",
+        "unsupported fixture deterministic pattern {}",
+        manifest.deterministic_pattern
+    );
+    ensure!(
+        PathBuf::from(&manifest.sealed_path).is_file(),
+        "fixture sealed sector is missing: {}",
+        manifest.sealed_path
+    );
+    ensure!(
+        PathBuf::from(&manifest.cache_dir).is_dir(),
+        "fixture seal cache is missing: {}",
+        manifest.cache_dir
+    );
+    Ok(())
+}
+
+fn commitment_from_hex(value: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(value).with_context(|| format!("decode commitment hex {value}"))?;
+    ensure!(
+        bytes.len() == 32,
+        "commitment hex must decode to 32 bytes, got {}",
+        bytes.len()
+    );
+    let mut commitment = [0u8; 32];
+    commitment.copy_from_slice(&bytes);
+    Ok(commitment)
+}
+
+fn unpadded_bytes_for_sector_size(sector_size: u64) -> u64 {
+    ApiUnpaddedBytesAmount::from(ApiPaddedBytesAmount(sector_size)).0
 }
 
 fn proof_parameter_cache_dir() -> PathBuf {

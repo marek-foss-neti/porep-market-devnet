@@ -61,9 +61,19 @@ bench-retrieval mode='both' deployment='active':
 bench-proof-micro backend='stacked' sector_size='8mib':
     @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}'
 
+bench-proof-micro-prepare-fixture backend='stacked' sector_size='8mib' fixture='':
+    @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}' prepare-fixture '{{fixture}}'
+
+bench-proof-micro-unseal backend='stacked' sector_size='8mib' fixture='':
+    @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}' unseal-only '{{fixture}}'
+
 bench-proof-micro-backends sector_size='8mib':
     @bash scripts/bench-proof-micro.sh zigzag '{{sector_size}}'
     @bash scripts/bench-proof-micro.sh stacked '{{sector_size}}'
+
+bench-proof-micro-unseal-backends sector_size='8mib':
+    @bash scripts/bench-proof-micro.sh zigzag '{{sector_size}}' unseal-only
+    @bash scripts/bench-proof-micro.sh stacked '{{sector_size}}' unseal-only
 
 test-scenario name deployment='active' timeout_ms='7200000':
     @bash scripts/devnet-use-deployment.sh '{{deployment}}' latest
