@@ -35,6 +35,7 @@ const SECTOR_SIZE_8_MIB: u64 = 8 * 1024 * 1024;
 const SECTOR_SIZE_512_MIB: u64 = 512 * 1024 * 1024;
 const SECTOR_SIZE_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_LOCAL_SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
+const MICROBENCH_LAYERS_ENV: &str = "POREP_PROOF_MICROBENCH_LAYERS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -67,6 +68,7 @@ struct BenchmarkSummary {
     sector_size_bytes: u64,
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
+    porep_layers: usize,
     work_dir: String,
     proof_parameter_cache: String,
     proof_len: usize,
@@ -145,6 +147,7 @@ struct ParamPrewarmSummary {
     sector_size_bytes: u64,
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
+    porep_layers: usize,
     proof_parameter_cache: String,
     parent_cache: String,
     parent_cache_window_nodes: u32,
@@ -172,6 +175,7 @@ struct ParamPrewarmResult {
 
 fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1).collect())?;
+    configure_microbench_layers(&args)?;
     fs::create_dir_all(&args.work_dir).context("create work directory")?;
 
     match args.mode {
@@ -304,6 +308,44 @@ fn large_sector_microbench_enabled() -> bool {
         .unwrap_or(false)
 }
 
+fn configure_microbench_layers(args: &Args) -> Result<()> {
+    let raw_layers = std::env::var(MICROBENCH_LAYERS_ENV).unwrap_or_default();
+    let raw_layers = raw_layers.trim();
+    if raw_layers.is_empty() {
+        return Ok(());
+    }
+
+    let layers = raw_layers
+        .parse::<usize>()
+        .with_context(|| format!("{MICROBENCH_LAYERS_ENV} must be an integer"))?;
+    ensure!(
+        matches!(layers, 2 | 11),
+        "{MICROBENCH_LAYERS_ENV} supports only 2 or 11 layers in this microbench"
+    );
+
+    let mut layers_by_sector = zigzag::constants::LAYERS.write().expect("LAYERS poisoned");
+    let previous_layers = layers_by_sector.insert(args.sector_size_bytes, layers);
+    eprintln!(
+        "using PoRep microbench layer override: sector_size={} previous_layers={} effective_layers={} env={}",
+        args.sector_size_label,
+        previous_layers
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        layers,
+        MICROBENCH_LAYERS_ENV,
+    );
+    Ok(())
+}
+
+fn current_porep_layers(sector_size: u64) -> Result<usize> {
+    zigzag::constants::LAYERS
+        .read()
+        .expect("LAYERS poisoned")
+        .get(&sector_size)
+        .copied()
+        .with_context(|| format!("unknown PoRep layer count for sector size {sector_size}"))
+}
+
 fn required_arg(iter: &mut impl Iterator<Item = String>, name: &str) -> Result<String> {
     iter.next()
         .with_context(|| format!("{name} requires a value"))
@@ -366,10 +408,12 @@ fn default_work_dir() -> PathBuf {
 
 fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
     eprintln!(
-        "prewarming {:?} PoRep parameters for {} in {}",
+        "prewarming {:?} PoRep parameters for {} with {} layers in {}",
         args.backend,
         args.sector_size_label,
+        porep_layers,
         proof_parameter_cache_dir().display()
     );
     let cpu_before = process_cpu_ms();
@@ -385,6 +429,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         sector_size_bytes: args.sector_size_bytes,
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         parent_cache: parent_cache_dir().display().to_string(),
         parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
@@ -403,8 +448,8 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         max_rss_bytes: max_rss_bytes(),
     };
     eprintln!(
-        "prewarmed {:?} PoRep parameters for {} in {} ms",
-        args.backend, args.sector_size_label, summary.wall_ms
+        "prewarmed {:?} PoRep parameters for {} with {} layers in {} ms",
+        args.backend, args.sector_size_label, summary.porep_layers, summary.wall_ms
     );
     Ok(summary)
 }
@@ -935,6 +980,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
 
 fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
     let cache_dir = args.work_dir.join("seal-cache");
     fs::create_dir_all(&cache_dir).context("create seal cache")?;
     let staged_path = args.work_dir.join("staged.dat");
@@ -1028,6 +1074,7 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         sector_size_bytes: args.sector_size_bytes,
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: proof.len(),
@@ -1040,6 +1087,7 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
 
 fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
     let cache_dir = args.work_dir.join("zigzag-cache");
     fs::create_dir_all(&cache_dir).context("create ZigZag cache")?;
     let sealed_path = args.work_dir.join("zigzag-sealed.dat");
@@ -1133,6 +1181,7 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         sector_size_bytes: args.sector_size_bytes,
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: commit.proof.len(),

@@ -42,6 +42,13 @@ Use that opt-in only on a machine with enough memory, disk, proof parameters, an
 time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
+The full `512mib` proof microbench is an experiment that runs both ZigZag and
+Stacked with 11 PoRep layers instead of the default small-sector value of 2.
+The wrapper sets `POREP_PROOF_MICROBENCH_LAYERS=11` for `full` `512mib` runs
+only, including both the prewarm container and the measured container. This does
+not affect devnet sealing or existing `unseal-only` fixtures. Set
+`BENCH_PROOF_MICRO_LAYERS=2` to run the old 512MiB control case.
+
 Each run first executes `porep-proof-microbench --prewarm-only` in a separate
 container to generate or load the exact PoRep Groth parameters and backend
 parent cache for the selected backend and sector size. The prewarm output is

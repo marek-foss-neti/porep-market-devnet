@@ -7,10 +7,20 @@ devnet_require_command jq
 
 backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}}")"
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
+sector_size="$(devnet_normalize_sector_size "${sector_size}")"
 mode="${3:-full}"
 case "${mode}" in
   full|prepare-fixture|unseal-only) ;;
   *) devnet_die "invalid proof microbench mode: ${mode}; expected full, prepare-fixture, or unseal-only" ;;
+esac
+
+microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
+if [[ -z "${microbench_layers}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
+  microbench_layers="11"
+fi
+case "${microbench_layers}" in
+  ""|2|11) ;;
+  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected 2 or 11" ;;
 esac
 
 normalize_microbench_bool() {
@@ -125,6 +135,7 @@ docker_common_args=(
   -e "FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
   -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars"
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}"
+  -e "POREP_PROOF_MICROBENCH_LAYERS=${microbench_layers}"
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw"
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
@@ -322,6 +333,9 @@ if [[ -n "${BENCH_UNSEAL_RANGE_SIZE:-}" ]]; then
 fi
 
 devnet_progress "bench-proof-micro: backend=${backend} sector_size=${sector_size} image=${image}"
+if [[ -n "${microbench_layers}" ]]; then
+  devnet_progress "bench-proof-micro: PoRep layers override=${microbench_layers}"
+fi
 if [[ "${backend}" == "stacked" ]]; then
   devnet_progress "bench-proof-micro: using isolated Stacked parameter cache at ${parameter_cache_host}"
   devnet_progress "bench-proof-micro: Stacked SDR replication=${stacked_sdr_replication_mode} FIL_PROOFS_USE_MULTICORE_SDR=${stacked_multicore_sdr_requested}"
@@ -547,6 +561,7 @@ summary_md="${run_dir}/summary.md"
       "| Backend | `" + .backend + "` |",
       "| Sector size | `" + (.sector_size_label | tostring) + "` / " + bytes(.sector_size_bytes) + " |",
       "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
+      "| PoRep layers | `" + (.porep_layers | tostring) + "` |",
       "| Stacked SDR replication | `" + $stackedSdrReplicationMode + "` |",
       "| FIL_PROOFS_USE_MULTICORE_SDR | `" + $filProofsUseMulticoreSdr + "` |",
       "| Proof length | `" + (.proof_len | tostring) + "` bytes |",
