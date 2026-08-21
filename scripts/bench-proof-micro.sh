@@ -71,6 +71,7 @@ prewarm_summary_json="${run_dir}/param-prewarm.json"
 fixture_stderr_log="${run_dir}/fixture.stderr.log"
 prewarm_stderr_log="${run_dir}/param-prewarm.stderr.log"
 stderr_log="${run_dir}/stderr.log"
+unseal_cidfile="${run_dir}/unseal.cid"
 work_dir="${run_dir}/work"
 if [[ "${backend}" == "zigzag" ]]; then
   fixture_override="${BENCH_ZIGZAG_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
@@ -129,9 +130,121 @@ docker_common_args=(
   "${docker_parent_cache_args[@]}"
 )
 
+bench_fixture_size_label() {
+  local fixture_dir="$1"
+  local kib
+  kib="$(du -sk "${fixture_dir}" 2>/dev/null | awk 'NR == 1 {print $1}')"
+  if [[ -z "${kib}" ]]; then
+    printf 'unavailable\n'
+  else
+    devnet_format_bytes "$((kib * 1024))"
+  fi
+}
+
+bench_file_size_label() {
+  local path="$1"
+  local bytes
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf 'missing\n'
+    return 0
+  fi
+  bytes="$(wc -c < "${path}" 2>/dev/null | tr -d '[:space:]')"
+  if [[ "${bytes}" =~ ^[0-9]+$ ]]; then
+    devnet_format_bytes "${bytes}"
+  else
+    printf 'unavailable\n'
+  fi
+}
+
+bench_container_status_label() {
+  local cidfile="$1"
+  local cid status exit_code oom
+  if [[ ! -f "${cidfile}" || -L "${cidfile}" ]]; then
+    printf 'container=pending\n'
+    return 0
+  fi
+  IFS= read -r cid < "${cidfile}" || true
+  if [[ -z "${cid}" ]]; then
+    printf 'container=pending\n'
+    return 0
+  fi
+  status="$(docker inspect --format '{{.State.Status}}' "${cid}" 2>/dev/null || true)"
+  if [[ -z "${status}" ]]; then
+    printf 'container=gone\n'
+    return 0
+  fi
+  exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${cid}" 2>/dev/null || true)"
+  oom="$(docker inspect --format '{{.State.OOMKilled}}' "${cid}" 2>/dev/null || true)"
+  printf 'container=%s exit=%s oom=%s\n' "${status}" "${exit_code:-unknown}" "${oom:-unknown}"
+}
+
+bench_unseal_range_label() {
+  local manifest="$1"
+  local offset="${BENCH_UNSEAL_RANGE_OFFSET:-0}"
+  local size="${BENCH_UNSEAL_RANGE_SIZE:-}"
+  local unpadded
+  if [[ -z "${size}" ]]; then
+    unpadded="$(jq -r '.unpadded_bytes // empty' "${manifest}" 2>/dev/null || true)"
+    if [[ "${offset}" =~ ^[0-9]+$ && "${unpadded}" =~ ^[0-9]+$ && "${unpadded}" -ge "${offset}" ]]; then
+      size="$((unpadded - offset))"
+    fi
+  fi
+  if [[ "${offset}" =~ ^[0-9]+$ && "${size}" =~ ^[0-9]+$ ]]; then
+    printf '%s at offset %s\n' "$(devnet_format_bytes "${size}")" "$(devnet_format_bytes "${offset}")"
+  else
+    printf 'unknown\n'
+  fi
+}
+
+bench_start_fixture_progress() {
+  local result_variable="$1"
+  local label="$2"
+  local stderr_log="$3"
+  local fixture_dir="$4"
+  printf -v "${result_variable}" ''
+  devnet_progress_enabled || return 0
+  (
+    interval="$(devnet_progress_interval_seconds)"
+    started="${SECONDS}"
+    while :; do
+      sleep "${interval}"
+      elapsed="$((SECONDS - started))"
+      message="${label}: still running after $(devnet_format_duration_seconds "${elapsed}"); fixture=$(bench_fixture_size_label "${fixture_dir}")"
+      last_line="$(devnet_last_nonempty_line "${stderr_log}")"
+      [[ -z "${last_line}" ]] || message="${message}; last=${last_line}"
+      devnet_progress "${message}"
+    done
+  ) >/dev/null &
+  printf -v "${result_variable}" '%s' "$!"
+}
+
+bench_start_unseal_progress() {
+  local result_variable="$1"
+  local label="$2"
+  local stderr_log="$3"
+  local summary_log="$4"
+  local cidfile="$5"
+  printf -v "${result_variable}" ''
+  devnet_progress_enabled || return 0
+  (
+    interval="$(devnet_progress_interval_seconds)"
+    started="${SECONDS}"
+    while :; do
+      sleep "${interval}"
+      elapsed="$((SECONDS - started))"
+      message="${label}: still running after $(devnet_format_duration_seconds "${elapsed}"); $(bench_container_status_label "${cidfile}"); summary=$(bench_file_size_label "${summary_log}")"
+      last_line="$(devnet_last_nonempty_line "${stderr_log}")"
+      [[ -z "${last_line}" ]] || message="${message}; last=${last_line}"
+      devnet_progress "${message}"
+    done
+  ) >/dev/null &
+  printf -v "${result_variable}" '%s' "$!"
+}
+
 run_prepare_fixture() {
   local output_json="$1"
   local output_stderr="$2"
+  local fixture_pid fixture_progress_pid status
   devnet_progress "bench-proof-micro: preparing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
   docker run --rm \
     "${docker_common_args[@]}" \
@@ -142,7 +255,62 @@ run_prepare_fixture() {
       --sector-size "${sector_size}" \
       --work-dir /bench-fixture \
       --prepare-fixture \
-    > "${output_json}" 2> "${output_stderr}"
+    > "${output_json}" 2> "${output_stderr}" &
+  fixture_pid="$!"
+  fixture_progress_pid=""
+  bench_start_fixture_progress \
+    fixture_progress_pid \
+    "bench-proof-micro: ${backend} ${sector_size} unseal fixture preparation" \
+    "${output_stderr}" \
+    "${fixture_host}"
+  if wait "${fixture_pid}"; then
+    devnet_stop_prewarm_progress "${fixture_progress_pid}"
+    devnet_progress "bench-proof-micro: ${backend} ${sector_size} unseal fixture preparation complete; summary=${output_json}"
+    return 0
+  else
+    status=$?
+    devnet_stop_prewarm_progress "${fixture_progress_pid}"
+    return "${status}"
+  fi
+}
+
+run_unseal_only_benchmark() {
+  local status unseal_pid unseal_progress_pid range_label
+  range_label="$(bench_unseal_range_label "${fixture_host}/fixture.json")"
+  rm -f -- "${unseal_cidfile}"
+  devnet_progress "bench-proof-micro: starting measured ${backend} ${sector_size} unseal-only benchmark; range=${range_label}; fixture=${fixture_host}; summary=${summary_json}"
+  if [[ "${backend}" == "zigzag" ]]; then
+    devnet_progress "bench-proof-micro: ZigZag unseal-only decodes the full sealed sector before writing the requested range"
+  fi
+  docker run --rm \
+    --cidfile "${unseal_cidfile}" \
+    "${docker_common_args[@]}" \
+    -v "${fixture_host}:/bench-fixture:rw" \
+    "${image}" \
+    porep-proof-microbench \
+      --backend "${backend}" \
+      --sector-size "${sector_size}" \
+      --work-dir /bench-fixture \
+      --unseal-only \
+      ${range_args[@]+"${range_args[@]}"} \
+    > "${summary_json}" 2> "${stderr_log}" &
+  unseal_pid="$!"
+  unseal_progress_pid=""
+  bench_start_unseal_progress \
+    unseal_progress_pid \
+    "bench-proof-micro: ${backend} ${sector_size} measured unseal-only" \
+    "${stderr_log}" \
+    "${summary_json}" \
+    "${unseal_cidfile}"
+  if wait "${unseal_pid}"; then
+    devnet_stop_prewarm_progress "${unseal_progress_pid}"
+    devnet_progress "bench-proof-micro: ${backend} ${sector_size} measured unseal-only complete; summary=${summary_json}"
+    return 0
+  else
+    status=$?
+    devnet_stop_prewarm_progress "${unseal_progress_pid}"
+    return "${status}"
+  fi
 }
 
 range_args=()
@@ -231,17 +399,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
     devnet_progress "bench-proof-micro: reusing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
   fi
 
-  if docker run --rm \
-    "${docker_common_args[@]}" \
-    -v "${fixture_host}:/bench-fixture:rw" \
-    "${image}" \
-    porep-proof-microbench \
-      --backend "${backend}" \
-      --sector-size "${sector_size}" \
-      --work-dir /bench-fixture \
-      --unseal-only \
-      ${range_args[@]+"${range_args[@]}"} \
-    > "${summary_json}" 2> "${stderr_log}"; then
+  if run_unseal_only_benchmark; then
     :
   else
     status=$?

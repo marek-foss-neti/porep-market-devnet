@@ -129,6 +129,16 @@ runs.
 During long prewarms the lifecycle scripts print a heartbeat every
 `DEVNET_PROGRESS_INTERVAL_SECONDS` seconds with elapsed time, proof-parameter
 cache size, the newest cache file, and the latest prewarm log line.
+Fixture preparation uses the same interval and reports elapsed time, fixture
+directory size, and the latest fixture log line. For ZigZag `minimal-unseal`
+fixtures this includes `encoding layer X/Y`, which is useful for large sectors
+where the encoded sector is rewritten in place and no per-layer tree files grow
+on disk.
+`unseal-only` runs also report a heartbeat while the measured Docker container is
+still running, including elapsed time, container status, summary output size, and
+the latest microbench stderr line. For ZigZag this line explicitly calls out that
+the current implementation decodes the full sealed sector before writing the
+requested byte range.
 
 The prewarm also records the exact parameter cache identifier and validates that
 the cached verifying key matches the Groth params file for that identifier. If a

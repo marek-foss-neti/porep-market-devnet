@@ -643,6 +643,10 @@ fn prepare_stacked_fixture(
     let sealed_path = args.work_dir.join("sealed.dat");
     let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
 
+    eprintln!(
+        "preparing Stacked minimal unseal fixture: write/preprocess sector_size={} raw_bytes={}",
+        args.sector_size_label, raw_len
+    );
     let piece_info = measure(phases, "prepare_fixture_write_and_preprocess", || {
         let mut staged = File::create(&staged_path).context("create Stacked staged sector")?;
         let (piece_info, _written) = seal::write_and_preprocess(
@@ -658,6 +662,7 @@ fn prepare_stacked_fixture(
     File::create(&sealed_path).context("create Stacked sealed sector")?;
 
     let sector_id = ApiSectorId::from(0);
+    eprintln!("preparing Stacked minimal unseal fixture: pre_commit_phase1");
     let phase1_out = measure(phases, "prepare_fixture_pre_commit_phase1", || {
         seal::seal_pre_commit_phase1(
             registered_proof,
@@ -670,9 +675,11 @@ fn prepare_stacked_fixture(
             &piece_infos,
         )
     })?;
+    eprintln!("preparing Stacked minimal unseal fixture: pre_commit_phase2");
     let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
         seal::seal_pre_commit_phase2(phase1_out, &cache_dir, &sealed_path)
     })?;
+    eprintln!("preparing Stacked minimal unseal fixture: removing unused staged sector");
     fs::remove_file(&staged_path).with_context(|| {
         format!(
             "remove unused Stacked staged sector {}",
@@ -705,6 +712,10 @@ fn prepare_zigzag_fixture(
     let porep_config = zigzag_porep_config(args, registered_proof);
     let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
 
+    eprintln!(
+        "preparing ZigZag minimal unseal fixture: add_piece sector_size={} raw_bytes={}",
+        args.sector_size_label, raw_len
+    );
     let piece_info = measure(phases, "prepare_fixture_add_piece", || {
         let mut sealed = File::create(&sealed_path).context("create ZigZag fixture sector")?;
         let (piece_info, _written) = zigzag::add_piece(
@@ -742,11 +753,25 @@ fn prepare_zigzag_fixture(
             zigzag::constants::ZigZagTree,
         >(&porep_config)?;
         let mut graph = public_params.graph.clone();
-        for layer in 0..public_params.layer_challenges.layers() {
+        let layers = public_params.layer_challenges.layers();
+        for layer in 0..layers {
+            let layer_started = Instant::now();
+            eprintln!(
+                "preparing ZigZag minimal unseal fixture: encoding layer {}/{}",
+                layer + 1,
+                layers
+            );
             zigzag_encode(&graph, &replica_id, &mut data[..])
                 .with_context(|| format!("encode ZigZag fixture layer {layer}"))?;
+            eprintln!(
+                "preparing ZigZag minimal unseal fixture: finished layer {}/{} wall_ms={}",
+                layer + 1,
+                layers,
+                layer_started.elapsed().as_millis()
+            );
             graph = graph.zigzag();
         }
+        eprintln!("preparing ZigZag minimal unseal fixture: flushing encoded sector");
         data.flush()
             .with_context(|| format!("flush sealed ZigZag fixture {}", sealed_path.display()))?;
         Ok(())
@@ -804,6 +829,10 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
     let unsealed_bytes = match manifest.backend {
         Backend::Stacked => {
             let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                eprintln!(
+                    "running Stacked raw unseal/retrieval: get_unsealed_range_mapped sector_size={} range_offset={} range_size={}",
+                    manifest.sector_size_label, range_offset, range_size
+                );
                 seal::get_unsealed_range_mapped(
                     registered_proof,
                     PathBuf::from(cache_dir.as_str()),
@@ -826,15 +855,26 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
                 ZigZagApiVersion::V1_2_0,
             );
             let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: opening sealed sector sector_size={} range_offset={} range_size={}",
+                    manifest.sector_size_label, range_offset, range_size
+                );
                 let sealed = OpenOptions::new()
                     .read(true)
                     .open(&sealed_path)
                     .with_context(|| format!("open ZigZag sealed fixture {}", sealed_path))?;
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: copy-mmap sealed sector {}",
+                    sealed_path
+                );
                 let mut data = unsafe {
                     MmapOptions::new().map_copy(&sealed).with_context(|| {
                         format!("copy-mmap ZigZag sealed fixture {}", sealed_path)
                     })?
                 };
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: decoding full sealed sector before writing requested range"
+                );
                 zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
                     &porep_config,
                     prover_id,
