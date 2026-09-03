@@ -14,6 +14,32 @@ pinned managed sources from `versions.lock.yaml`, including
 `marek-foss-neti/rust-fil-proofs` at the `restore-zigzag` commit. A separate
 `../rust-fil-proofs` checkout is not required for normal testing.
 
+## Bare VPS
+
+On a fresh VPS, first place this repo on the local NVMe filesystem. If
+you are logged in as root, run the `apt-get` commands directly:
+
+```sh
+apt-get update
+apt-get install -y git ca-certificates
+git clone --branch test-zigzag --single-branch https://github.com/marek-foss-neti/porep-market-devnet.git
+cd porep-market-devnet
+BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1 bash scripts/bootstrap.sh
+```
+
+`scripts/bootstrap.sh` installs the VPS host tools, pinned Node/npm, `just`,
+Docker Engine, Docker Compose, and Buildx, then reports CPU, RAM, Docker root,
+and free space against the recommended 32GiB microbench floor. If Docker should
+store images on a specific NVMe mount, set `BOOTSTRAP_DOCKER_DATA_ROOT` before
+bootstrap.
+
+After bootstrap:
+
+```sh
+just build
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 32gib
+```
+
 ## Canonical Run
 
 ```sh

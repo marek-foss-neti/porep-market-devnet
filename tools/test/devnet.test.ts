@@ -121,6 +121,7 @@ const curioUnsealSdrOverridePath = join(
   "task_unseal_sdr.go",
 );
 const commonScriptPath = join(repositoryRoot, "scripts", "devnet-common.sh");
+const bootstrapScriptPath = join(repositoryRoot, "scripts", "bootstrap.sh");
 const runtimeLockPath = join(repositoryRoot, "versions.lock.yaml");
 const composePath = join(repositoryRoot, "docker", "compose.curio-devnet.yaml");
 const upScriptPath = join(repositoryRoot, "scripts", "devnet-up.sh");
@@ -492,6 +493,38 @@ test("public status command is bounded and reports a stopped project precisely",
   assert.match(statusScript, /Filecoin\.StateMinerInfo/);
   assert.match(statusScript, /ControlAddresses/);
   assert.match(statusScript, /127\.0\.0\.1:22310\/health/);
+});
+
+test("bootstrap provisions a bare Debian host for proof microbenchmarks", async () => {
+  const [bootstrapScript, staticChecks] = await Promise.all([
+    readFile(bootstrapScriptPath, "utf8"),
+    readFile(join(repositoryRoot, "scripts", "static-checks.sh"), "utf8"),
+  ]);
+
+  assert.match(bootstrapScript, /BOOTSTRAP_INSTALL_SYSTEM_DEPS:-auto/);
+  assert.match(bootstrapScript, /is_debian_linux\(\)/);
+  assert.match(bootstrapScript, /apt-get install -y --no-install-recommends/);
+  assert.match(bootstrapScript, /https:\/\/nodejs\.org\/dist\/v\$\{version\}\/SHASUMS256\.txt/);
+  assert.match(bootstrapScript, /sha256sum -c/);
+  assert.match(bootstrapScript, /npm install -g "npm@\$\{expected_npm\}"/);
+  assert.match(bootstrapScript, /https:\/\/download\.docker\.com\/linux\/debian\/gpg/);
+  assert.match(bootstrapScript, /URIs: https:\/\/download\.docker\.com\/linux\/debian/);
+  assert.match(bootstrapScript, /docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin/);
+  assert.match(bootstrapScript, /docker buildx inspect --bootstrap/);
+  assert.match(bootstrapScript, /docker compose version/);
+  assert.match(bootstrapScript, /BOOTSTRAP_DOCKER_DATA_ROOT/);
+  assert.match(bootstrapScript, /BOOTSTRAP_DOCKER_LOG_DRIVER:-local/);
+  assert.match(bootstrapScript, /usermod -aG docker/);
+  assert.match(bootstrapScript, /setfacl -m "u:\$\{current_user\}:rw" \/var\/run\/docker\.sock/);
+  assert.match(bootstrapScript, /BOOTSTRAP_REQUIRE_32GIB_MICROBENCH/);
+  assert.match(bootstrapScript, /BOOTSTRAP_MICROBENCH32_MIN_CPUS:-32/);
+  assert.match(bootstrapScript, /BOOTSTRAP_MICROBENCH32_MIN_MEMORY_BYTES:-193273528320/);
+  assert.match(bootstrapScript, /BOOTSTRAP_MICROBENCH32_MIN_REPO_FREE_BYTES:-2199023255552/);
+  assert.match(bootstrapScript, /report_host_preflight/);
+  assert.match(bootstrapScript, /repo_free/);
+  assert.match(bootstrapScript, /docker_root_free/);
+  assert.match(staticChecks, /scripts\/bootstrap\.sh/);
+  assert.match(staticChecks, /bash -n scripts\/bootstrap\.sh/);
 });
 
 test("lifecycle progress output is throttled and fixture-safe", async () => {

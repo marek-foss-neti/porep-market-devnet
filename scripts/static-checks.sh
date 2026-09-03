@@ -10,6 +10,7 @@ if [[ -f versions.lock.yaml ]]; then
     docker/curio/Dockerfile
     docker/piece-server/Dockerfile
     docker/indexer/Dockerfile
+    scripts/bootstrap.sh
     scripts/devnet-common.sh
     scripts/devnet-build.sh
     scripts/devnet-up.sh
@@ -47,7 +48,7 @@ if [[ -f versions.lock.yaml ]]; then
     }
   done
 
-  bash -n scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh
+  bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh
   rg -q '^build:' justfile
   if rg -n -i \
     '(latest|@master|@main|foundryup|nodesource|git[[:space:]]+clone|git[[:space:]]+submodule[[:space:]]+update)' \
