@@ -19,8 +19,8 @@ if [[ -z "${microbench_layers}" && "${mode}" == "full" && "${sector_size}" == "5
   microbench_layers="11"
 fi
 case "${microbench_layers}" in
-  ""|2|11) ;;
-  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected 2 or 11" ;;
+  ""|2|11|15|19|22|25) ;;
+  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 15, 19, 22, 25" ;;
 esac
 
 normalize_microbench_bool() {

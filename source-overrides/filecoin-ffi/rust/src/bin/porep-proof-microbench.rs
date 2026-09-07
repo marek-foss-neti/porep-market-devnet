@@ -319,8 +319,8 @@ fn configure_microbench_layers(args: &Args) -> Result<()> {
         .parse::<usize>()
         .with_context(|| format!("{MICROBENCH_LAYERS_ENV} must be an integer"))?;
     ensure!(
-        matches!(layers, 2 | 11),
-        "{MICROBENCH_LAYERS_ENV} supports only 2 or 11 layers in this microbench"
+        matches!(layers, 2 | 11 | 15 | 19 | 22 | 25),
+        "{MICROBENCH_LAYERS_ENV} supports only 2, 11, 15, 19, 22, or 25 layers in this microbench"
     );
 
     let mut layers_by_sector = zigzag::constants::LAYERS.write().expect("LAYERS poisoned");

@@ -47,7 +47,13 @@ Stacked with 11 PoRep layers instead of the default small-sector value of 2.
 The wrapper sets `POREP_PROOF_MICROBENCH_LAYERS=11` for `full` `512mib` runs
 only, including both the prewarm container and the measured container. This does
 not affect devnet sealing or existing `unseal-only` fixtures. Set
-`BENCH_PROOF_MICRO_LAYERS=2` to run the old 512MiB control case.
+`BENCH_PROOF_MICRO_LAYERS=2` to run the old 512MiB control case. Layer override
+experiments are limited to `2`, `11`, `15`, `19`, `22`, and `25`.
+
+```bash
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 BENCH_PROOF_MICRO_LAYERS=15 just bench-proof-micro zigzag 32gib
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 BENCH_PROOF_MICRO_LAYERS=22 just bench-proof-micro zigzag 32gib
+```
 
 Each run first executes `porep-proof-microbench --prewarm-only` in a separate
 container to generate or load the exact PoRep Groth parameters and backend

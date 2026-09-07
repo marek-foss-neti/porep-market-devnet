@@ -271,6 +271,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiMicrobenchOverride, /seal_pre_commit_phase1/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_LAYERS/);
+  assert.match(filecoinFfiMicrobenchOverride, /matches!\(layers, 2 \| 11 \| 15 \| 19 \| 22 \| 25\)/);
   assert.match(filecoinFfiMicrobenchOverride, /current_porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /parameter_cache_identifier/);
@@ -687,6 +688,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(microScript, /BENCH_STACKED_PARENT_CACHE_DIR/);
   assert.match(microScript, /BENCH_UNSEAL_RANGE_SIZE/);
   assert.match(microScript, /BENCH_PROOF_MICRO_LAYERS/);
+  assert.match(microScript, /""\|2\|11\|15\|19\|22\|25/);
   assert.match(microScript, /mode\}" == "full" && "\$\{sector_size\}" == "512mib"/);
   assert.match(microScript, /POREP_PROOF_MICROBENCH_LAYERS=\$\{microbench_layers\}/);
   assert.match(microScript, /PoRep layers override=\$\{microbench_layers\}/);
