@@ -9,6 +9,7 @@ bootstrap_docker_data_root="${BOOTSTRAP_DOCKER_DATA_ROOT:-}"
 bootstrap_docker_log_driver="${BOOTSTRAP_DOCKER_LOG_DRIVER:-local}"
 bootstrap_configure_docker_group="${BOOTSTRAP_CONFIGURE_DOCKER_GROUP:-1}"
 bootstrap_docker_socket_acl="${BOOTSTRAP_DOCKER_SOCKET_ACL:-1}"
+bootstrap_progress_interval_seconds="${BOOTSTRAP_PROGRESS_INTERVAL_SECONDS:-15}"
 bootstrap_require_microbench32="${BOOTSTRAP_REQUIRE_32GIB_MICROBENCH:-0}"
 bootstrap_microbench32_min_cpus="${BOOTSTRAP_MICROBENCH32_MIN_CPUS:-32}"
 bootstrap_microbench32_min_memory_bytes="${BOOTSTRAP_MICROBENCH32_MIN_MEMORY_BYTES:-193273528320}"
@@ -423,6 +424,209 @@ run_with_timeout() {
   node "$repository_root/scripts/run-with-timeout.mjs" --timeout-ms "$timeout_ms" -- "$@"
 }
 
+progress_interval_seconds() {
+  local interval="${bootstrap_progress_interval_seconds}"
+  if [[ ! "${interval}" =~ ^[0-9]+$ ]] || ((interval < 1)); then
+    interval=15
+  fi
+  printf '%s\n' "${interval}"
+}
+
+format_duration_seconds() {
+  local total_seconds="$1"
+  local hours=$((total_seconds / 3600))
+  local minutes=$(((total_seconds % 3600) / 60))
+  local seconds=$((total_seconds % 60))
+
+  if ((hours > 0)); then
+    printf '%dh %dm %ds' "${hours}" "${minutes}" "${seconds}"
+  elif ((minutes > 0)); then
+    printf '%dm %ds' "${minutes}" "${seconds}"
+  else
+    printf '%ds' "${seconds}"
+  fi
+}
+
+relative_to_repository() {
+  local path="$1"
+  case "${path}" in
+    "${repository_root}"/*)
+      printf '%s\n' "${path#"${repository_root}/"}"
+      ;;
+    *)
+      printf '%s\n' "${path}"
+      ;;
+  esac
+}
+
+bootstrap_log_path() {
+  local label="$1"
+  local safe_label timestamp
+
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  safe_label="$(printf '%s' "${label}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-' | sed 's/^-//; s/-$//')"
+  if [[ -z "${safe_label}" ]]; then
+    safe_label="step"
+  fi
+
+  mkdir -p "${repository_root}/.runtime/devnet/logs"
+  printf '%s/bootstrap-%s-%s.log\n' "${repository_root}/.runtime/devnet/logs" "${timestamp}" "${safe_label}"
+}
+
+last_nonempty_line() {
+  local path="$1"
+
+  if [[ ! -s "${path}" ]]; then
+    return 1
+  fi
+
+  awk 'NF { line = $0 } END { if (line != "") print line }' "${path}" 2>/dev/null | tail -n 1
+}
+
+bootstrap_sources_cache_label() {
+  local cache_dir="${repository_root}/.cache/sources"
+  local checkout_count="0"
+  local cache_kib="0"
+  local cache_bytes="0"
+
+  if [[ -d "${cache_dir}" ]]; then
+    checkout_count="$(find "${cache_dir}" -mindepth 2 -maxdepth 2 -type d -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+    cache_kib="$(du -sk "${cache_dir}" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+    if [[ "${cache_kib}" =~ ^[0-9]+$ ]]; then
+      cache_bytes=$((cache_kib * 1024))
+    fi
+  fi
+
+  printf 'sources=%s checkouts, %s' "${checkout_count}" "$(format_bytes "${cache_bytes}")"
+}
+
+bootstrap_directory_size_label() {
+  local label="$1"
+  local path="$2"
+  local size_kib="0"
+  local size_bytes="0"
+
+  if [[ -d "${path}" ]]; then
+    size_kib="$(du -sk "${path}" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+    if [[ "${size_kib}" =~ ^[0-9]+$ ]]; then
+      size_bytes=$((size_kib * 1024))
+    fi
+  fi
+
+  printf '%s=%s' "${label}" "$(format_bytes "${size_bytes}")"
+}
+
+start_command_progress() {
+  local result_variable="$1"
+  local label="$2"
+  local log_path="$3"
+  local include_sources="${4:-0}"
+  local interval
+
+  interval="$(progress_interval_seconds)"
+  (
+    local started="${SECONDS}"
+    local elapsed message last_line
+
+    while :; do
+      sleep "${interval}"
+      elapsed=$((SECONDS - started))
+      message="${label}: still running after $(format_duration_seconds "${elapsed}"); log=$(relative_to_repository "${log_path}")"
+
+      if [[ "${include_sources}" == "1" ]]; then
+        message="${message}; $(bootstrap_sources_cache_label)"
+      fi
+
+      if [[ "${label}" == "npm ci tools" ]]; then
+        message="${message}; $(bootstrap_directory_size_label "tools/node_modules" "${repository_root}/tools/node_modules")"
+      elif [[ "${label}" == "npm ci e2e" ]]; then
+        message="${message}; $(bootstrap_directory_size_label "e2e/node_modules" "${repository_root}/e2e/node_modules")"
+      fi
+
+      last_line="$(last_nonempty_line "${log_path}" || true)"
+      if [[ -n "${last_line}" ]]; then
+        message="${message}; last=${last_line}"
+      fi
+
+      progress "${message}"
+    done
+  ) &
+
+  printf -v "${result_variable}" '%s' "$!"
+}
+
+stop_command_progress() {
+  local progress_pid="$1"
+
+  if [[ -n "${progress_pid}" ]] && kill -0 "${progress_pid}" >/dev/null 2>&1; then
+    kill "${progress_pid}" >/dev/null 2>&1 || true
+    wait "${progress_pid}" >/dev/null 2>&1 || true
+  fi
+}
+
+print_command_failure_tail() {
+  local log_path="$1"
+
+  if [[ -s "${log_path}" ]]; then
+    printf '%s\n' "last bootstrap log lines from $(relative_to_repository "${log_path}"):" >&2
+    tail -n 40 "${log_path}" >&2 || true
+  fi
+}
+
+run_with_timeout_logged() {
+  local label="$1"
+  local timeout_ms="$2"
+  local include_sources="${3:-0}"
+  shift 3
+
+  local log_path progress_pid status
+  progress_pid=""
+  status=0
+  log_path="$(bootstrap_log_path "${label}")"
+
+  progress "${label}: starting; log=$(relative_to_repository "${log_path}")"
+  start_command_progress progress_pid "${label}" "${log_path}" "${include_sources}"
+  run_with_timeout "${timeout_ms}" "$@" >"${log_path}" 2>&1 || status=$?
+  stop_command_progress "${progress_pid}"
+
+  if ((status != 0)); then
+    print_command_failure_tail "${log_path}"
+    die "${label} failed with exit code ${status}; see $(relative_to_repository "${log_path}")"
+  fi
+
+  progress "${label}: complete; log=$(relative_to_repository "${log_path}")"
+}
+
+capture_with_timeout_logged() {
+  local output_variable="$1"
+  local label="$2"
+  local timeout_ms="$3"
+  local include_sources="${4:-0}"
+  shift 4
+
+  local log_path stdout_path progress_pid status output
+  progress_pid=""
+  status=0
+  log_path="$(bootstrap_log_path "${label}")"
+  stdout_path="${log_path}.stdout"
+
+  progress "${label}: starting; log=$(relative_to_repository "${log_path}")"
+  start_command_progress progress_pid "${label}" "${log_path}" "${include_sources}"
+  run_with_timeout "${timeout_ms}" "$@" >"${stdout_path}" 2>"${log_path}" || status=$?
+  stop_command_progress "${progress_pid}"
+
+  if ((status != 0)); then
+    print_command_failure_tail "${log_path}"
+    rm -f "${stdout_path}"
+    die "${label} failed with exit code ${status}; see $(relative_to_repository "${log_path}")"
+  fi
+
+  output="$(cat "${stdout_path}")"
+  rm -f "${stdout_path}"
+  printf -v "${output_variable}" '%s' "${output}"
+  progress "${label}: complete; log=$(relative_to_repository "${log_path}")"
+}
+
 format_bytes() {
   local bytes="${1:-0}"
   awk -v bytes="${bytes}" 'BEGIN {
@@ -507,13 +711,13 @@ main() {
   fi
 
   progress "installing Node packages"
-  run_with_timeout 600000 npm ci --prefix "$repository_root/tools" >/dev/null
-  run_with_timeout 600000 npm ci --prefix "$repository_root/e2e" >/dev/null
+  run_with_timeout_logged "npm ci tools" 600000 0 npm ci --prefix "$repository_root/tools"
+  run_with_timeout_logged "npm ci e2e" 600000 0 npm ci --prefix "$repository_root/e2e"
 
   progress "verifying lockfile and fetching managed sources"
-  run_with_timeout 60000 npm --prefix "$repository_root/tools" run cli -- lock verify >/dev/null
-  run_with_timeout 1200000 npm --prefix "$repository_root/tools" run cli -- sources fetch >/dev/null
-  verified_sources="$(run_with_timeout 300000 npm --prefix "$repository_root/tools" run cli -- sources verify)"
+  run_with_timeout_logged "lock verify" 60000 0 npm --prefix "$repository_root/tools" run cli -- lock verify
+  run_with_timeout_logged "managed sources fetch" 1200000 1 npm --prefix "$repository_root/tools" run cli -- sources fetch
+  capture_with_timeout_logged verified_sources "managed sources verify" 300000 1 npm --prefix "$repository_root/tools" run cli -- sources verify
 
   while IFS=$'\t' read -r name managed_path expected_commit actual_commit _; do
     if [[ -n "$actual_commit" ]]; then

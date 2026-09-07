@@ -514,6 +514,7 @@ test("bootstrap provisions a bare Debian host for proof microbenchmarks", async 
   assert.match(bootstrapScript, /docker compose version/);
   assert.match(bootstrapScript, /BOOTSTRAP_DOCKER_DATA_ROOT/);
   assert.match(bootstrapScript, /BOOTSTRAP_DOCKER_LOG_DRIVER:-local/);
+  assert.match(bootstrapScript, /BOOTSTRAP_PROGRESS_INTERVAL_SECONDS:-15/);
   assert.match(bootstrapScript, /usermod -aG docker/);
   assert.match(bootstrapScript, /setfacl -m "u:\$\{current_user\}:rw" \/var\/run\/docker\.sock/);
   assert.match(bootstrapScript, /BOOTSTRAP_REQUIRE_32GIB_MICROBENCH/);
@@ -523,6 +524,13 @@ test("bootstrap provisions a bare Debian host for proof microbenchmarks", async 
   assert.match(bootstrapScript, /report_host_preflight/);
   assert.match(bootstrapScript, /repo_free/);
   assert.match(bootstrapScript, /docker_root_free/);
+  assert.match(bootstrapScript, /\.runtime\/devnet\/logs/);
+  assert.match(bootstrapScript, /run_with_timeout_logged "npm ci tools"/);
+  assert.match(bootstrapScript, /run_with_timeout_logged "managed sources fetch" 1200000 1/);
+  assert.match(bootstrapScript, /capture_with_timeout_logged verified_sources "managed sources verify"/);
+  assert.match(bootstrapScript, /bootstrap_sources_cache_label/);
+  assert.match(bootstrapScript, /bootstrap_directory_size_label/);
+  assert.match(bootstrapScript, /last_nonempty_line/);
   assert.match(staticChecks, /scripts\/bootstrap\.sh/);
   assert.match(staticChecks, /bash -n scripts\/bootstrap\.sh/);
 });

@@ -33,6 +33,45 @@ and free space against the recommended 32GiB microbench floor. If Docker should
 store images on a specific NVMe mount, set `BOOTSTRAP_DOCKER_DATA_ROOT` before
 bootstrap.
 
+Long bootstrap steps print a heartbeat every 15 seconds and write command logs
+under `.runtime/devnet/logs/`. To make the terminal chattier while provisioning
+a paid VPS, lower the interval, for example:
+
+```sh
+BOOTSTRAP_PROGRESS_INTERVAL_SECONDS=5 BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1 bash scripts/bootstrap.sh
+```
+
+If the VPS has two local NVMe disks and the root filesystem is already on LVM,
+the fastest way to make the full 32GiB microbench comfortable is to add the
+empty second NVMe disk to the root volume group. First inspect the layout:
+
+```sh
+lsblk -o NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS,MODEL
+pvs
+vgs
+lvs
+wipefs -n /dev/nvme1n1
+```
+
+Only continue if the second disk is disposable and `wipefs -n /dev/nvme1n1`
+does not show data you need to keep. The following commands destroy metadata on
+`/dev/nvme1n1`, add it to the existing `vgroot` volume group, extend the root
+logical volume, and grow the ext4 filesystem:
+
+```sh
+pvcreate /dev/nvme1n1
+vgextend vgroot /dev/nvme1n1
+lvextend -l +100%FREE /dev/vgroot/lvroot
+resize2fs /dev/vgroot/lvroot
+df -hT /
+```
+
+After this, `/`, the repository, `.cache`, `.runtime`, and Docker's default
+`/var/lib/docker` root all share the larger NVMe-backed filesystem. If the
+machine is not using LVM, mount the second NVMe separately and set
+`BOOTSTRAP_DOCKER_DATA_ROOT` to a directory on that mount instead of extending
+`/`.
+
 After bootstrap:
 
 ```sh
