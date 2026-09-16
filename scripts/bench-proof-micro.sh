@@ -4,6 +4,7 @@ source "$(cd -L "$(dirname "${BASH_SOURCE[0]}")" && pwd -L)/devnet-common.sh"
 
 devnet_require_command docker
 devnet_require_command jq
+devnet_require_command node
 
 backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}}")"
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
@@ -22,6 +23,12 @@ case "${microbench_layers}" in
   ""|2|11|15|19|22|25) ;;
   *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 15, 19, 22, 25" ;;
 esac
+
+telemetry_interval_ms="${BENCH_TELEMETRY_INTERVAL_MS:-500}"
+[[ "${telemetry_interval_ms}" =~ ^[0-9]+$ ]] ||
+  devnet_die "BENCH_TELEMETRY_INTERVAL_MS must be an integer"
+((telemetry_interval_ms >= 100 && telemetry_interval_ms <= 60000)) ||
+  devnet_die "BENCH_TELEMETRY_INTERVAL_MS must be between 100 and 60000"
 
 normalize_microbench_bool() {
   local value
@@ -78,10 +85,19 @@ mkdir -p "${run_dir}"
 summary_json="${run_dir}/summary.json"
 fixture_summary_json="${run_dir}/fixture-summary.json"
 prewarm_summary_json="${run_dir}/param-prewarm.json"
+telemetry_ndjson="${run_dir}/telemetry.ndjson"
+telemetry_summary_json="${run_dir}/telemetry-summary.json"
+prewarm_telemetry_ndjson="${run_dir}/param-prewarm-telemetry.ndjson"
+prewarm_telemetry_summary_json="${run_dir}/param-prewarm-telemetry-summary.json"
+fixture_telemetry_ndjson="${run_dir}/fixture-telemetry.ndjson"
+fixture_telemetry_summary_json="${run_dir}/fixture-telemetry-summary.json"
+provenance_json="${run_dir}/provenance.json"
+report_json="${run_dir}/report.json"
 fixture_stderr_log="${run_dir}/fixture.stderr.log"
 prewarm_stderr_log="${run_dir}/param-prewarm.stderr.log"
 stderr_log="${run_dir}/stderr.log"
 unseal_cidfile="${run_dir}/unseal.cid"
+measured_cidfile="${run_dir}/container.cid"
 work_dir="${run_dir}/work"
 if [[ "${backend}" == "zigzag" ]]; then
   fixture_override="${BENCH_ZIGZAG_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
@@ -136,10 +152,147 @@ docker_common_args=(
   -e "FIL_PROOFS_ZIGZAG_SIDECAR_DIR=/tmp/filecoin-zigzag-proof-sidecars"
   -e "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-0}"
   -e "POREP_PROOF_MICROBENCH_LAYERS=${microbench_layers}"
+  -e "POREP_PROOF_MICROBENCH_TELEMETRY_INTERVAL_MS=${telemetry_interval_ms}"
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw"
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+
+bench_epoch_ms() {
+  node -e 'process.stdout.write(String(Date.now()))'
+}
+
+bench_finalize_telemetry() {
+  local raw="$1"
+  local output="$2"
+  [[ -f "${raw}" && ! -L "${raw}" && -s "${raw}" ]] ||
+    devnet_die "microbenchmark telemetry is missing or empty: ${raw}"
+  node "${DEVNET_ROOT}/scripts/summarize-proof-micro-telemetry.mjs" "${raw}" "${output}"
+  jq -e '
+    .schema_version == 1
+    and (.sample_count | type == "number" and . > 0)
+    and (.overall.cgroup.kernel_memory_peak_bytes | type == "number")
+    and (.overall.disk.sampled_total_allocated_peak_bytes | type == "number")
+  ' "${output}" >/dev/null || devnet_die "microbenchmark telemetry summary is invalid: ${output}"
+}
+
+bench_write_provenance() {
+  local measured_mode="$1"
+  local started_ms="$2"
+  local finished_ms="$3"
+  local telemetry_summary="$4"
+  local benchmark_summary="$5"
+  node "${DEVNET_ROOT}/scripts/write-proof-micro-provenance.mjs" \
+    "${provenance_json}" \
+    "${DEVNET_ROOT}" \
+    "${image_manifest}" \
+    "${image}" \
+    "${measured_mode}" \
+    "${backend}" \
+    "${sector_size}" \
+    "${microbench_layers}" \
+    "${started_ms}" \
+    "${finished_ms}" \
+    "${telemetry_summary}" \
+    "${benchmark_summary}"
+  jq -e '
+    .schema_version == 1
+    and (.invocation.outer_wall_ms | type == "number" and . >= 0)
+    and (.build.image.id | type == "string" and startswith("sha256:"))
+    and (.instrumentation.telemetry_summary_sha256 | type == "string" and length == 64)
+  ' "${provenance_json}" >/dev/null || devnet_die "microbenchmark provenance is invalid: ${provenance_json}"
+}
+
+bench_compose_report() {
+  local measured_mode="$1"
+  local benchmark_summary="$2"
+  local telemetry_summary="$3"
+  local prewarm_summary="$4"
+  local prewarm_telemetry_summary="$5"
+  node "${DEVNET_ROOT}/scripts/compose-proof-micro-report.mjs" \
+    "${report_json}" \
+    "${measured_mode}" \
+    "${benchmark_summary}" \
+    "${telemetry_summary}" \
+    "${provenance_json}" \
+    "${prewarm_summary}" \
+    "${prewarm_telemetry_summary}"
+  jq -e '
+    .schema_version == 1
+    and (.telemetry.schema_version == 1)
+    and (.provenance.schema_version == 1)
+    and (if .mode == "full" then
+      (.benchmark.porep_partitions | type == "number" and . >= 1)
+      and (.benchmark.challenges_per_layer_per_partition | type == "number" and . >= 1)
+    else true end)
+    and (.derived.cgroup_memory_peak_bytes | type == "number")
+    and (.telemetry.overall.cgroup.cpuset_cpus_effective | type == "string" and length > 0)
+    and (.telemetry.overall.cgroup.cpu_period_usec | type == "number" and . > 0)
+  ' "${report_json}" >/dev/null || devnet_die "microbenchmark report is invalid: ${report_json}"
+}
+
+bench_append_telemetry_markdown() {
+  local report="$1"
+  local markdown="$2"
+  jq -r '
+    def bytes($raw):
+      ($raw | tonumber? // null) as $bytes
+      | if $bytes == null then "unavailable"
+        elif $bytes < 1024 then (($bytes|round|tostring) + " B")
+        elif $bytes < 1048576 then (((($bytes / 1024) * 10 | round) / 10 | tostring) + " KiB")
+        elif $bytes < 1073741824 then (((($bytes / 1048576) * 100 | round) / 100 | tostring) + " MiB")
+        else (((($bytes / 1073741824) * 1000 | round) / 1000 | tostring) + " GiB")
+        end;
+    def limit($bytes; $unlimited): if $unlimited then "unlimited" else bytes($bytes) end;
+    [
+      "",
+      "## Container and disk telemetry",
+      "",
+      "| Metric | Value |",
+      "| --- | ---: |",
+      "| Outer measured-container wall | " + (.derived.outer_wall_ms | tostring) + " ms |",
+      "| Unattributed outer wall | " + (.derived.unattributed_outer_wall_ms | tostring) + " ms |",
+      "| Cgroup kernel memory peak | " + bytes(.derived.cgroup_memory_peak_bytes) + " |",
+      "| Sampled cgroup memory.current peak | " + bytes(.telemetry.overall.cgroup.sampled_memory_current_peak_bytes) + " |",
+      "| Sampled process RSS peak | " + bytes(.derived.sampled_process_rss_peak_bytes) + " |",
+      "| Sampled process anonymous RSS peak | " + bytes(.derived.sampled_process_anon_peak_bytes) + " |",
+      "| Sampled process file-backed RSS peak | " + bytes(.derived.sampled_process_file_peak_bytes) + " |",
+      "| Cgroup memory.max | " + limit(.telemetry.overall.cgroup.memory_max_bytes; .telemetry.overall.cgroup.memory_max_unlimited) + " |",
+      "| Sampled swap peak | " + bytes(.derived.swap_peak_bytes) + " |",
+      "| Cgroup swap.max | " + limit(.telemetry.overall.cgroup.swap_max_bytes; .telemetry.overall.cgroup.swap_max_unlimited) + " |",
+      "| Sampled allocated disk peak, all listed paths | " + bytes(.derived.sampled_disk_allocated_peak_bytes) + " |",
+      "| Effective CPU set | `" + (.telemetry.overall.cgroup.cpuset_cpus_effective // "unavailable") + "` |",
+      "| Cgroup CPU quota / period | "
+        + (if .telemetry.overall.cgroup.cpu_quota_unlimited then "unlimited"
+           else ((.telemetry.overall.cgroup.cpu_quota_usec // "unavailable") | tostring) end)
+        + " / " + ((.telemetry.overall.cgroup.cpu_period_usec // "unavailable") | tostring) + " us |",
+      "| Cgroup CPU quota cores | " + ((.derived.cpu_quota_cores // "unlimited") | tostring) + " |",
+      "| Cgroup CPU throttled | " + ((.derived.cpu_throttled_usec // "unavailable") | tostring) + " us |",
+      "| OOM / OOM-kill delta | " + ((.derived.oom_delta // 0) | tostring) + " / " + ((.derived.oom_kill_delta // 0) | tostring) + " |",
+      "| Sampling | " + (.telemetry.sample_count | tostring) + " samples at " + (.telemetry.sampling_interval_ms | tostring) + " ms; maximum observed gap " + (.telemetry.maximum_observed_sample_gap_ms | tostring) + " ms |",
+      "",
+      "Per-phase cgroup and disk values below are sampled maxima. The cgroup kernel memory peak above is the exact container-wide `memory.peak` value.",
+      "",
+      "| Phase | Samples | Process RSS peak | Cgroup current peak | Allocated disk peak |",
+      "| --- | ---: | ---: | ---: | ---: |"
+    ][],
+    (.telemetry.phases[] |
+      "| `" + .phase + "` | " + (.sample_count | tostring)
+      + " | " + bytes(.process_peak.rss_bytes)
+      + " | " + bytes(.cgroup.sampled_memory_current_peak_bytes)
+      + " | " + bytes(.disk.sampled_total_allocated_peak_bytes) + " |"),
+    "",
+    "| Disk path | Apparent peak | Allocated peak |",
+    "| --- | ---: | ---: |",
+    (.telemetry.overall.disk.path_peaks[] |
+      "| `" + .label + "` (`" + .path + "`) | " + bytes(.peak_apparent_bytes)
+      + " | " + bytes(.peak_allocated_bytes) + " |"),
+    "",
+    "Machine-readable combined report: [`report.json`](./report.json).",
+    "Raw telemetry: [`telemetry.ndjson`](./telemetry.ndjson); aggregate: [`telemetry-summary.json`](./telemetry-summary.json).",
+    "Run provenance: [`provenance.json`](./provenance.json)."
+  ' "${report}" >> "${markdown}"
+}
 
 bench_fixture_size_label() {
   local fixture_dir="$1"
@@ -255,10 +408,16 @@ bench_start_unseal_progress() {
 run_prepare_fixture() {
   local output_json="$1"
   local output_stderr="$2"
+  local telemetry_container_path="$3"
+  local cidfile="$4"
   local fixture_pid fixture_progress_pid status
+  rm -f -- "${cidfile}"
   devnet_progress "bench-proof-micro: preparing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
+  measured_started_ms="$(bench_epoch_ms)"
   docker run --rm \
+    --cidfile "${cidfile}" \
     "${docker_common_args[@]}" \
+    -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=${telemetry_container_path}" \
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
     porep-proof-microbench \
@@ -275,11 +434,13 @@ run_prepare_fixture() {
     "${output_stderr}" \
     "${fixture_host}"
   if wait "${fixture_pid}"; then
+    measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${fixture_progress_pid}"
     devnet_progress "bench-proof-micro: ${backend} ${sector_size} unseal fixture preparation complete; summary=${output_json}"
     return 0
   else
     status=$?
+    measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${fixture_progress_pid}"
     return "${status}"
   fi
@@ -293,9 +454,11 @@ run_unseal_only_benchmark() {
   if [[ "${backend}" == "zigzag" ]]; then
     devnet_progress "bench-proof-micro: ZigZag unseal-only decodes the full sealed sector before writing the requested range"
   fi
+  measured_started_ms="$(bench_epoch_ms)"
   docker run --rm \
     --cidfile "${unseal_cidfile}" \
     "${docker_common_args[@]}" \
+    -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
     porep-proof-microbench \
@@ -314,11 +477,13 @@ run_unseal_only_benchmark() {
     "${summary_json}" \
     "${unseal_cidfile}"
   if wait "${unseal_pid}"; then
+    measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${unseal_progress_pid}"
     devnet_progress "bench-proof-micro: ${backend} ${sector_size} measured unseal-only complete; summary=${summary_json}"
     return 0
   else
     status=$?
+    measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${unseal_progress_pid}"
     return "${status}"
   fi
@@ -343,7 +508,11 @@ fi
 devnet_progress "bench-proof-micro: using persistent ${parent_cache_kind} parent cache at ${parent_cache_host} window_nodes=${parent_cache_window_nodes}"
 
 if [[ "${mode}" == "prepare-fixture" ]]; then
-  if run_prepare_fixture "${fixture_summary_json}" "${fixture_stderr_log}"; then
+  if run_prepare_fixture \
+    "${fixture_summary_json}" \
+    "${fixture_stderr_log}" \
+    "/bench-run/telemetry.ndjson" \
+    "${measured_cidfile}"; then
     :
   else
     status=$?
@@ -354,6 +523,19 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
   fi
   jq -e '.fixture.backend != null and .fixture.fixture_kind == "minimal-unseal" and (.fixture.unpadded_bytes | tonumber) > 0' "${fixture_summary_json}" >/dev/null ||
     devnet_die "proof microbench fixture summary is invalid; see ${fixture_summary_json}"
+  bench_finalize_telemetry "${telemetry_ndjson}" "${telemetry_summary_json}"
+  bench_write_provenance \
+    "prepare-fixture" \
+    "${measured_started_ms}" \
+    "${measured_finished_ms}" \
+    "${telemetry_summary_json}" \
+    "${fixture_summary_json}"
+  bench_compose_report \
+    "prepare-fixture" \
+    "${fixture_summary_json}" \
+    "${telemetry_summary_json}" \
+    "-" \
+    "-"
   summary_md="${run_dir}/summary.md"
   {
     printf '# Proof microbenchmark fixture\n\n'
@@ -390,6 +572,7 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
       "Full machine-readable summary: [`fixture-summary.json`](./fixture-summary.json)."
     ' "${fixture_summary_json}"
   } > "${summary_md}"
+  bench_append_telemetry_markdown "${report_json}" "${summary_md}"
   printf 'proof microbenchmark fixture: %s\n' "${summary_md}"
   exit 0
 fi
@@ -397,7 +580,12 @@ fi
 if [[ "${mode}" == "unseal-only" ]]; then
   if [[ ! -f "${fixture_host}/fixture.json" ]]; then
     devnet_progress "bench-proof-micro: fixture is missing; preparing it outside the measured unseal phase"
-    if run_prepare_fixture "${fixture_summary_json}" "${fixture_stderr_log}"; then
+    if run_prepare_fixture \
+      "${fixture_summary_json}" \
+      "${fixture_stderr_log}" \
+      "/bench-run/fixture-telemetry.ndjson" \
+      "${measured_cidfile}"; then
+      bench_finalize_telemetry "${fixture_telemetry_ndjson}" "${fixture_telemetry_summary_json}"
       :
     else
       status=$?
@@ -425,6 +613,19 @@ if [[ "${mode}" == "unseal-only" ]]; then
 
   jq -e '.proof_parameter_cache_skipped == true and .raw_unseal_bytes_match == true' "${summary_json}" >/dev/null ||
     devnet_die "proof microbench unseal-only correctness failed; see ${summary_json}"
+  bench_finalize_telemetry "${telemetry_ndjson}" "${telemetry_summary_json}"
+  bench_write_provenance \
+    "unseal-only" \
+    "${measured_started_ms}" \
+    "${measured_finished_ms}" \
+    "${telemetry_summary_json}" \
+    "${summary_json}"
+  bench_compose_report \
+    "unseal-only" \
+    "${summary_json}" \
+    "${telemetry_summary_json}" \
+    "-" \
+    "-"
 
   summary_md="${run_dir}/summary.md"
   {
@@ -474,6 +675,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
       "Full machine-readable summary: [`summary.json`](./summary.json)."
     ' "${summary_json}"
   } > "${summary_md}"
+  bench_append_telemetry_markdown "${report_json}" "${summary_md}"
   printf 'proof raw unseal/retrieval microbenchmark: %s\n' "${summary_md}"
   exit 0
 fi
@@ -481,6 +683,7 @@ fi
 devnet_progress "bench-proof-micro: prewarming ${backend} PoRep params for ${sector_size} outside measured phases"
 docker run --rm \
   "${docker_common_args[@]}" \
+  -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/param-prewarm-telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
@@ -506,18 +709,25 @@ else
   fi
   devnet_die "proof microbench parameter prewarm failed with exit code ${status}; see ${prewarm_stderr_log}"
 fi
+bench_finalize_telemetry "${prewarm_telemetry_ndjson}" "${prewarm_telemetry_summary_json}"
 
+rm -f -- "${measured_cidfile}"
+measured_started_ms="$(bench_epoch_ms)"
 if docker run --rm \
+  --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
+  -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \
     --backend "${backend}" \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/work \
   > "${summary_json}" 2> "${stderr_log}"; then
+  measured_finished_ms="$(bench_epoch_ms)"
   :
 else
   status=$?
+  measured_finished_ms="$(bench_epoch_ms)"
   if [[ -s "${stderr_log}" ]]; then
     tail -40 "${stderr_log}" >&2
   fi
@@ -536,6 +746,19 @@ fi
 
 jq -e '.verify_seal == true and .raw_unseal_bytes_match == true' "${summary_json}" >/dev/null ||
   devnet_die "proof microbench correctness failed; see ${summary_json}"
+bench_finalize_telemetry "${telemetry_ndjson}" "${telemetry_summary_json}"
+bench_write_provenance \
+  "full" \
+  "${measured_started_ms}" \
+  "${measured_finished_ms}" \
+  "${telemetry_summary_json}" \
+  "${summary_json}"
+bench_compose_report \
+  "full" \
+  "${summary_json}" \
+  "${telemetry_summary_json}" \
+  "${prewarm_summary_json}" \
+  "${prewarm_telemetry_summary_json}"
 
 summary_md="${run_dir}/summary.md"
 {
@@ -562,6 +785,9 @@ summary_md="${run_dir}/summary.md"
       "| Sector size | `" + (.sector_size_label | tostring) + "` / " + bytes(.sector_size_bytes) + " |",
       "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
       "| PoRep layers | `" + (.porep_layers | tostring) + "` |",
+      "| PoRep partitions | `" + (.porep_partitions | tostring) + "` |",
+      "| Minimum total challenges | `" + (.minimum_total_challenges | tostring) + "` |",
+      "| Challenges per layer per partition | `" + (.challenges_per_layer_per_partition | tostring) + "` |",
       "| Stacked SDR replication | `" + $stackedSdrReplicationMode + "` |",
       "| FIL_PROOFS_USE_MULTICORE_SDR | `" + $filProofsUseMulticoreSdr + "` |",
       "| Proof length | `" + (.proof_len | tostring) + "` bytes |",
@@ -586,5 +812,7 @@ summary_md="${run_dir}/summary.md"
     "Full machine-readable summary: [`summary.json`](./summary.json)."
   ' "${summary_json}"
 } > "${summary_md}"
+
+bench_append_telemetry_markdown "${report_json}" "${summary_md}"
 
 printf 'proof microbenchmark: %s\n' "${summary_md}"

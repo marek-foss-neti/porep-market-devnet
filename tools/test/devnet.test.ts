@@ -131,6 +131,21 @@ const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
 const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
 const benchProofMicroScriptPath = join(repositoryRoot, "scripts", "bench-proof-micro.sh");
+const composeProofMicroReportScriptPath = join(
+  repositoryRoot,
+  "scripts",
+  "compose-proof-micro-report.mjs",
+);
+const summarizeProofMicroTelemetryScriptPath = join(
+  repositoryRoot,
+  "scripts",
+  "summarize-proof-micro-telemetry.mjs",
+);
+const writeProofMicroProvenanceScriptPath = join(
+  repositoryRoot,
+  "scripts",
+  "write-proof-micro-provenance.mjs",
+);
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
 const rustFilProofsSourceCommit = "7996df427bb3d497677b3b5f8db58c65d6e6ab4b";
 const derivedImageServices = [
@@ -162,6 +177,7 @@ const sourceOverrideInputs = [
   "source-overrides/filecoin-ffi/rust/Cargo.lock",
   "source-overrides/filecoin-ffi/rust/Cargo.toml",
   "source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
+  "source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_telemetry.rs",
   "source-overrides/filecoin-ffi/rust/src/proofs/api.rs",
   "source-overrides/fvm-4.8.2-zigzag/Cargo.toml",
   "source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs",
@@ -667,10 +683,30 @@ test("FireHorse upgrade epoch gets a large-sector startup buffer and remains ove
 });
 
 test("proof backend benchmark runner performs fresh isolated comparisons and aggregates evidence", async () => {
-  const [justfile, script, microScript] = await Promise.all([
+  const [
+    justfile,
+    script,
+    microScript,
+    microbenchSource,
+    telemetrySource,
+    telemetrySummarizer,
+    reportComposer,
+    provenanceWriter,
+  ] = await Promise.all([
     readFile(join(repositoryRoot, "justfile"), "utf8"),
     readFile(benchProofBackendsScriptPath, "utf8"),
     readFile(benchProofMicroScriptPath, "utf8"),
+    readFile(filecoinFfiMicrobenchOverridePath, "utf8"),
+    readFile(
+      join(
+        repositoryRoot,
+        "source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_telemetry.rs",
+      ),
+      "utf8",
+    ),
+    readFile(summarizeProofMicroTelemetryScriptPath, "utf8"),
+    readFile(composeProofMicroReportScriptPath, "utf8"),
+    readFile(writeProofMicroProvenanceScriptPath, "utf8"),
   ]);
 
   assert.match(justfile, /bench-proof-backends sector_size='8mib':\n\s+@bash scripts\/bench-proof-backends\.sh '\{\{sector_size\}\}'/);
@@ -703,6 +739,29 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(microScript, /bench_start_unseal_progress/);
   assert.match(microScript, /--cidfile "\$\{unseal_cidfile\}"/);
   assert.match(microScript, /starting measured \$\{backend\} \$\{sector_size\} unseal-only benchmark/);
+  assert.match(microScript, /BENCH_TELEMETRY_INTERVAL_MS/);
+  assert.match(microScript, /POREP_PROOF_MICROBENCH_TELEMETRY_PATH/);
+  assert.match(microScript, /summarize-proof-micro-telemetry\.mjs/);
+  assert.match(microScript, /write-proof-micro-provenance\.mjs/);
+  assert.match(microScript, /compose-proof-micro-report\.mjs/);
+  assert.match(microScript, /kernel_memory_peak_bytes/);
+  assert.match(microScript, /sampled_total_allocated_peak_bytes/);
+  assert.match(microbenchSource, /TelemetrySession::start/);
+  assert.match(microbenchSource, /PhaseGuard::enter/);
+  assert.match(telemetrySource, /memory\.current/);
+  assert.match(telemetrySource, /memory\.peak/);
+  assert.match(telemetrySource, /memory\.events/);
+  assert.match(telemetrySource, /cpu\.max/);
+  assert.match(telemetrySource, /cpuset\.cpus\.effective/);
+  assert.match(telemetrySource, /RssAnon/);
+  assert.match(telemetrySource, /RssFile/);
+  assert.match(telemetrySource, /metadata\.blocks\(\)\.saturating_mul\(512\)/);
+  assert.match(telemetrySummarizer, /sampled_memory_current_peak_bytes/);
+  assert.match(telemetrySummarizer, /memory_events_delta/);
+  assert.match(reportComposer, /unattributed_outer_wall_ms/);
+  assert.match(provenanceWriter, /tracked_patch_sha256/);
+  assert.match(provenanceWriter, /zigzag_source_overrides_sha256/);
+  assert.match(provenanceWriter, /cargo_features: \["multicore-sdr"\]/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);
@@ -730,6 +789,157 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /dockerTotalMemoryBytes/);
   assert.match(script, /summary\.json/);
   assert.match(script, /Proof backend benchmark comparison/);
+});
+
+test("proof microbenchmark telemetry aggregation preserves peaks, deltas, phases, and report scope", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "proof-micro-telemetry-"));
+  const rawPath = join(fixture, "telemetry.ndjson");
+  const telemetrySummaryPath = join(fixture, "telemetry-summary.json");
+  const benchmarkPath = join(fixture, "summary.json");
+  const provenancePath = join(fixture, "provenance.json");
+  const reportPath = join(fixture, "report.json");
+  const sample = (
+    sequence: number,
+    elapsedMs: number,
+    trigger: string,
+    phase: string,
+    memoryCurrent: number,
+    memoryPeak: number,
+    diskAllocated: number,
+    oom: number,
+  ) => ({
+    schema_version: 1,
+    sequence,
+    pid: 42,
+    sampling_interval_ms: 500,
+    timestamp_unix_ms: 1_000 + elapsedMs,
+    elapsed_ms: elapsedMs,
+    trigger,
+    phase,
+    process: {
+      vm_size_bytes: 1_000,
+      rss_bytes: memoryCurrent - 10,
+      rss_anon_bytes: memoryCurrent - 30,
+      rss_file_bytes: 20,
+      rss_shmem_bytes: 0,
+      vm_swap_bytes: 0,
+      threads: 4,
+      cpu_ms: elapsedMs * 2,
+    },
+    cgroup: {
+      memory_current_bytes: memoryCurrent,
+      memory_peak_bytes: memoryPeak,
+      memory_max_bytes: 1_000,
+      memory_max_unlimited: false,
+      memory_swap_current_bytes: 0,
+      memory_swap_max_bytes: 0,
+      memory_swap_max_unlimited: false,
+      memory_stat: { anon: memoryCurrent - 30, file: 20 },
+      memory_events: { oom, oom_kill: 0 },
+      cpu_quota_usec: 800_000,
+      cpu_period_usec: 100_000,
+      cpu_quota_unlimited: false,
+      cpuset_cpus_effective: "0-7",
+      cpuset_mems_effective: "0",
+      cpu_weight: 100,
+      cpu_stat: { usage_usec: elapsedMs * 2 },
+      io_stat: { rbytes: elapsedMs * 3, wbytes: elapsedMs * 4 },
+      memory_pressure: {
+        some: { avg10: 0, avg60: 0, avg300: 0, total_usec: elapsedMs },
+        full: { avg10: 0, avg60: 0, avg300: 0, total_usec: 0 },
+      },
+      io_pressure: {
+        some: { avg10: 0, avg60: 0, avg300: 0, total_usec: elapsedMs * 2 },
+        full: { avg10: 0, avg60: 0, avg300: 0, total_usec: 0 },
+      },
+    },
+    disk: {
+      paths: [
+        {
+          label: "work",
+          path: "/bench-run/work",
+          exists: true,
+          apparent_bytes: diskAllocated + 5,
+          allocated_bytes: diskAllocated,
+          error: null,
+        },
+      ],
+      total_apparent_bytes: diskAllocated + 5,
+      total_allocated_bytes: diskAllocated,
+    },
+    warnings: [],
+  });
+
+  try {
+    const samples = [
+      sample(0, 0, "session_start", "unattributed", 100, 100, 10, 0),
+      sample(1, 100, "phase_start", "pre_commit_phase1", 200, 200, 20, 0),
+      sample(2, 600, "phase_end", "pre_commit_phase1", 150, 220, 25, 1),
+      sample(3, 650, "session_end", "finalize", 120, 220, 25, 1),
+    ];
+    await writeFile(rawPath, `${samples.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+    const summarized = spawnSync(
+      process.execPath,
+      [summarizeProofMicroTelemetryScriptPath, rawPath, telemetrySummaryPath],
+      { encoding: "utf8" },
+    );
+    assert.equal(summarized.status, 0, summarized.stderr);
+    const telemetry = JSON.parse(await readFile(telemetrySummaryPath, "utf8"));
+    assert.equal(telemetry.sample_count, 4);
+    assert.equal(telemetry.maximum_observed_sample_gap_ms, 500);
+    assert.equal(telemetry.overall.cgroup.kernel_memory_peak_bytes, 220);
+    assert.equal(telemetry.overall.cgroup.memory_events_delta.oom, 1);
+    assert.equal(telemetry.overall.cgroup.cpu_quota_usec, 800_000);
+    assert.equal(telemetry.overall.cgroup.cpu_period_usec, 100_000);
+    assert.equal(telemetry.overall.cgroup.cpuset_cpus_effective, "0-7");
+    assert.equal(telemetry.overall.cgroup.io_stat_delta.wbytes, 2_600);
+    assert.equal(telemetry.overall.disk.sampled_total_allocated_peak_bytes, 25);
+    assert.equal(
+      telemetry.phases.find((phase: { phase: string }) => phase.phase === "pre_commit_phase1")
+        .cgroup.sampled_memory_current_peak_bytes,
+      200,
+    );
+
+    await writeFile(
+      benchmarkPath,
+      `${JSON.stringify({
+        phases: [
+          { name: "pre_commit_phase1", wall_ms: 500 },
+          { name: "verify", wall_ms: 10 },
+          { name: "raw_unseal", wall_ms: 50 },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    await writeFile(
+      provenancePath,
+      `${JSON.stringify({ schema_version: 1, invocation: { outer_wall_ms: 600 } })}\n`,
+      "utf8",
+    );
+    const composed = spawnSync(
+      process.execPath,
+      [
+        composeProofMicroReportScriptPath,
+        reportPath,
+        "full",
+        benchmarkPath,
+        telemetrySummaryPath,
+        provenancePath,
+        "-",
+        "-",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(composed.status, 0, composed.stderr);
+    const report = JSON.parse(await readFile(reportPath, "utf8"));
+    assert.equal(report.derived.measured_phase_wall_ms, 560);
+    assert.equal(report.derived.sealing_wall_ms, 510);
+    assert.equal(report.derived.unattributed_outer_wall_ms, 40);
+    assert.equal(report.derived.cgroup_memory_peak_bytes, 220);
+    assert.equal(report.derived.cpu_quota_cores, 8);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 test("mismatched generated Stacked proof parameters are quarantined before devnet startup", async () => {

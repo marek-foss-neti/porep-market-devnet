@@ -929,6 +929,7 @@ source-overrides/curio/tasks/unseal/task_unseal_sdr.go
 source-overrides/filecoin-ffi/rust/Cargo.lock
 source-overrides/filecoin-ffi/rust/Cargo.toml
 source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
+source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_telemetry.rs
 source-overrides/filecoin-ffi/rust/src/proofs/api.rs
 source-overrides/fvm-4.8.2-zigzag/Cargo.toml
 source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs

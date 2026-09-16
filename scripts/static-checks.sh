@@ -22,6 +22,9 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/devnet-test-upgrade.sh
     scripts/bench-proof-backends.sh
     scripts/bench-proof-micro.sh
+    scripts/compose-proof-micro-report.mjs
+    scripts/summarize-proof-micro-telemetry.mjs
+    scripts/write-proof-micro-provenance.mjs
     docker/compose.curio-devnet.yaml
     source-overrides/curio/scripts/makefiles/10-deps.mk
     source-overrides/curio/cmd/sptool/toolbox_deal_client.go
@@ -33,6 +36,7 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/filecoin-ffi/rust/Cargo.lock
     source-overrides/filecoin-ffi/rust/Cargo.toml
     source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
+    source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_telemetry.rs
     source-overrides/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/fvm-4.8.2-zigzag/Cargo.toml
     source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs

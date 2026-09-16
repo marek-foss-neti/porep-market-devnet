@@ -27,6 +27,10 @@ use storage_proofs_porep_zigzag::{
     },
 };
 
+#[path = "support/porep_microbench_telemetry.rs"]
+mod microbench_telemetry;
+use microbench_telemetry::{PhaseGuard, TelemetrySession};
+
 const PROVER_ID: [u8; 32] = [4u8; 32];
 const TICKET: [u8; 32] = [7u8; 32];
 const SEED: [u8; 32] = [0xffu8; 32];
@@ -69,6 +73,9 @@ struct BenchmarkSummary {
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
     porep_layers: usize,
+    porep_partitions: usize,
+    minimum_total_challenges: usize,
+    challenges_per_layer_per_partition: usize,
     work_dir: String,
     proof_parameter_cache: String,
     proof_len: usize,
@@ -148,6 +155,9 @@ struct ParamPrewarmSummary {
     registered_seal_proof: String,
     registered_seal_proof_id: i32,
     porep_layers: usize,
+    porep_partitions: usize,
+    minimum_total_challenges: usize,
+    challenges_per_layer_per_partition: usize,
     proof_parameter_cache: String,
     parent_cache: String,
     parent_cache_window_nodes: u32,
@@ -178,27 +188,37 @@ fn main() -> Result<()> {
     configure_microbench_layers(&args)?;
     fs::create_dir_all(&args.work_dir).context("create work directory")?;
 
-    match args.mode {
+    let telemetry = TelemetrySession::start(
+        &args.work_dir,
+        &proof_parameter_cache_dir(),
+        &parent_cache_dir(),
+    )?;
+
+    let output = match args.mode {
         Mode::PrewarmOnly => {
             let summary = prewarm_params(&args)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            serde_json::to_string_pretty(&summary)?
         }
         Mode::PrepareFixture => {
             let summary = prepare_fixture(&args)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            serde_json::to_string_pretty(&summary)?
         }
         Mode::UnsealOnly => {
             let summary = run_unseal_only(&args)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            serde_json::to_string_pretty(&summary)?
         }
         Mode::Full => {
             let summary = match args.backend {
                 Backend::Stacked => run_stacked(&args)?,
                 Backend::ZigZag => run_zigzag(&args)?,
             };
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            serde_json::to_string_pretty(&summary)?
         }
     };
+    if let Some(telemetry) = telemetry {
+        telemetry.finish()?;
+    }
+    println!("{output}");
     Ok(())
 }
 
@@ -407,8 +427,11 @@ fn default_work_dir() -> PathBuf {
 }
 
 fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
+    let _phase = PhaseGuard::enter("parameter_prewarm");
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
     let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
     eprintln!(
         "prewarming {:?} PoRep parameters for {} with {} layers in {}",
         args.backend,
@@ -430,6 +453,9 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
         porep_layers,
+        porep_partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         parent_cache: parent_cache_dir().display().to_string(),
         parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
@@ -981,6 +1007,8 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
 fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
     let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
     let cache_dir = args.work_dir.join("seal-cache");
     fs::create_dir_all(&cache_dir).context("create seal cache")?;
     let staged_path = args.work_dir.join("staged.dat");
@@ -1075,6 +1103,9 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
         porep_layers,
+        porep_partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: proof.len(),
@@ -1088,6 +1119,8 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
 fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
     let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
     let cache_dir = args.work_dir.join("zigzag-cache");
     fs::create_dir_all(&cache_dir).context("create ZigZag cache")?;
     let sealed_path = args.work_dir.join("zigzag-sealed.dat");
@@ -1182,6 +1215,9 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         registered_seal_proof: format!("{registered_proof:?}"),
         registered_seal_proof_id: registered_proof as i32,
         porep_layers,
+        porep_partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: commit.proof.len(),
@@ -1200,11 +1236,27 @@ fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zi
     )
 }
 
+fn proof_configuration(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+) -> (usize, usize, usize) {
+    let config = zigzag_porep_config(args, registered_proof);
+    let partitions = usize::from(config.partitions);
+    let minimum_total_challenges = config.minimum_challenges();
+    let challenges_per_layer_per_partition = minimum_total_challenges.div_ceil(partitions);
+    (
+        partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
+    )
+}
+
 fn measure<T>(
     phases: &mut Vec<PhaseMetric>,
     name: &'static str,
     action: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    let _phase = PhaseGuard::enter(name);
     let cpu_before = process_cpu_ms();
     let started = Instant::now();
     let result = action();

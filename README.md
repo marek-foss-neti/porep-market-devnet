@@ -217,6 +217,43 @@ Lotus. ZigZag prewarm still uses `.cache/proof-parameters/` because those
 parameters are devnet-specific and must be visible to the ZigZag verifier.
 Both backends use persistent parent-cache directories under `.cache/`, mounted
 as `FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents`.
+
+Every proof microbenchmark process records measurement-only telemetry from its
+own cgroup v2 and `/proc` view. The default interval is 500 ms and can be
+changed within the guarded 100–60000 ms range:
+
+```sh
+BENCH_TELEMETRY_INTERVAL_MS=1000 \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+just bench-proof-micro zigzag 512mib
+```
+
+Samples are also taken synchronously at every phase boundary. The exact
+container-wide RAM peak comes from cgroup `memory.peak`; per-phase
+`memory.current`, process RSS and disk peaks are sampled values. Disk telemetry
+reports both apparent bytes and allocated bytes for the work directory, proof
+parameters, parent cache, and ZigZag sidecars, counting each configured path
+once. The prewarm process has a separate telemetry stream and is not folded
+into the measured sealing process.
+
+Each successful run publishes:
+
+```text
+summary.json                       benchmark-native phase result
+telemetry.ndjson                   raw timestamped samples
+telemetry-summary.json             validated overall and per-phase aggregate
+provenance.json                    worktrees, image, host, Docker and tool identity
+report.json                        canonical combined machine-readable report
+summary.md                         human-readable benchmark and telemetry tables
+param-prewarm-telemetry.ndjson     separate prewarm samples in full mode
+param-prewarm-telemetry-summary.json
+```
+
+The telemetry records anonymous and file-backed RSS, cgroup memory state and
+events, swap, effective CPU set and quota, CPU and I/O counters, memory/I/O
+pressure, disk allocation, and sampling coverage. `provenance.json` stores only a selected non-secret Docker
+and environment inventory. If telemetry or provenance validation fails, the
+runner retains raw evidence but does not publish a successful combined report.
 The canonical `just bench-proof-backends <sector>` runner is stricter: it
 prewarms both backends into the shared devnet proof-parameter cache before the
 fresh measured devnet resets, so Curio and Lotus use the warmed files during
