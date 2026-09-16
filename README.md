@@ -249,15 +249,31 @@ param-prewarm-telemetry.ndjson     separate prewarm samples in full mode
 param-prewarm-telemetry-summary.json
 ```
 
+After a successful full run, the wrapper preserves the reports, records the
+removed-file inventory in `cleanup.json`, and removes backend-specific large
+artifacts. ZigZag retains `work/zigzag-cache/zigzag-aux.json` while removing
+the sealed replica and `*.dat` trees. Stacked/SDR retains the compact
+`work/seal-cache/{p_aux,t_aux}` records while removing staged/sealed replicas,
+seal-cache `*.dat` files, and its run-local proof-parameter cache. Persistent
+parent caches, shared production proof parameters, and reusable unseal fixtures
+are not removed. Successful proof microbench commands also prune unused
+BuildKit cache and retain the command output in `buildkit-prune.log`. For a
+diagnostic run, use `BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1`,
+`BENCH_RETAIN_STACKED_WORK_ARTIFACTS=1`, and/or
+`BENCH_PRUNE_BUILDKIT_AFTER_BENCH=0` to disable the corresponding cleanup.
+
 The telemetry records anonymous and file-backed RSS, cgroup memory state and
 events, swap, effective CPU set and quota, CPU and I/O counters, memory/I/O
 pressure, disk allocation, and sampling coverage. `provenance.json` stores only a selected non-secret Docker
 and environment inventory. If telemetry or provenance validation fails, the
 runner retains raw evidence but does not publish a successful combined report.
 The canonical `just bench-proof-backends <sector>` runner is stricter: it
-prewarms both backends into the shared devnet proof-parameter cache before the
-fresh measured devnet resets, so Curio and Lotus use the warmed files during
-the full seal/unseal/retrieval comparison.
+prewarms both backends before the fresh measured devnet resets. ZigZag uses the
+shared devnet proof-parameter cache. Stacked uses a transient isolated cache,
+which is deleted after its successful prewarm because locally generated Groth
+parameters are not official Filecoin production parameters. The fresh Stacked
+devnet reset prepares official parameters before the measured
+seal/unseal/retrieval scenario starts.
 
 The prewarm records the exact parameter cache id and verifies that the cached
 `.vk` matches the Groth params for that id, rewriting only a stale `.vk` when

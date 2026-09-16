@@ -180,9 +180,43 @@ and parent-cache window size. Proof parameter and parent-cache generation are
 separated from measured phases by `param-prewarm.json`; keep the shared
 `.cache/proof-parameters` and backend parent-cache directories when comparing
 repeated runs.
+
+After a successful full run has validated correctness, telemetry, provenance
+and the combined report, the wrapper removes the generated large artifacts.
+For ZigZag it removes the sealed replica and `*.dat` trees while retaining
+`work/zigzag-cache/zigzag-aux.json`. For Stacked/SDR it removes the staged and
+sealed replicas, seal-cache `*.dat` files, and the run-local isolated proof
+parameter cache while retaining `work/seal-cache/p_aux` and `t_aux`. In both
+cases `cleanup.json` contains the complete pre-removal inventory and reclaimed
+byte counts. Shared production proof parameters, persistent backend parent
+caches, and reusable `minimal-unseal` fixtures are not removed.
+
+Set `BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1` or
+`BENCH_RETAIN_STACKED_WORK_ARTIFACTS=1` only when the corresponding exact run
+artifacts are required for debugging.
+
+Every successful proof microbench invocation also runs
+`docker buildx prune --force` after publishing its reports, removing unused
+BuildKit cache without deleting tagged images. Its output is retained in
+`buildkit-prune.log`. Set `BENCH_PRUNE_BUILDKIT_AFTER_BENCH=0` to retain the
+cache when investigating or optimizing image builds.
+
+On Docker Desktop for macOS, the virtualization process can keep deleted
+bind-mounted benchmark files open after the container exits. The run directory
+is still pruned immediately, but host free space is returned only after Docker
+Desktop releases those descriptors, normally on restart. The benchmark does
+not restart Docker automatically because that would interrupt unrelated
+containers and the devnet.
+
 The canonical `just bench-proof-backends <sector>` runner uses the same
-`--prewarm-only` path for both backends against the shared devnet proof
-parameter cache before it starts any fresh-devnet measurement.
+`--prewarm-only` path for both backends before it starts any fresh-devnet
+measurement. ZigZag prewarms the shared devnet proof-parameter cache because
+those parameters are used by its runtime verifier. Stacked prewarms an isolated
+transient cache because locally generated Groth parameters are not the official
+Filecoin production files; that cache is removed immediately after the
+successful prewarm and recorded in a cleanup manifest. The subsequent fresh
+Stacked devnet reset prepares the official parameters outside the measured
+scenario.
 
 ZigZag proof sidecars used by the Curio/Lotus FFI integration are not part of
 this direct Rust microbench. The microbench verifies with `comm_r_star` in

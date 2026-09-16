@@ -131,6 +131,11 @@ const logsScriptPath = join(repositoryRoot, "scripts", "devnet-logs.sh");
 const statusScriptPath = join(repositoryRoot, "scripts", "devnet-status.sh");
 const benchProofBackendsScriptPath = join(repositoryRoot, "scripts", "bench-proof-backends.sh");
 const benchProofMicroScriptPath = join(repositoryRoot, "scripts", "bench-proof-micro.sh");
+const cleanupProofMicroArtifactsScriptPath = join(
+  repositoryRoot,
+  "scripts",
+  "cleanup-proof-micro-artifacts.mjs",
+);
 const composeProofMicroReportScriptPath = join(
   repositoryRoot,
   "scripts",
@@ -692,6 +697,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
     telemetrySummarizer,
     reportComposer,
     provenanceWriter,
+    cleanupScript,
   ] = await Promise.all([
     readFile(join(repositoryRoot, "justfile"), "utf8"),
     readFile(benchProofBackendsScriptPath, "utf8"),
@@ -707,6 +713,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
     readFile(summarizeProofMicroTelemetryScriptPath, "utf8"),
     readFile(composeProofMicroReportScriptPath, "utf8"),
     readFile(writeProofMicroProvenanceScriptPath, "utf8"),
+    readFile(cleanupProofMicroArtifactsScriptPath, "utf8"),
   ]);
 
   assert.match(justfile, /bench-proof-backends sector_size='8mib':\n\s+@bash scripts\/bench-proof-backends\.sh '\{\{sector_size\}\}'/);
@@ -746,6 +753,19 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(microScript, /compose-proof-micro-report\.mjs/);
   assert.match(microScript, /kernel_memory_peak_bytes/);
   assert.match(microScript, /sampled_total_allocated_peak_bytes/);
+  assert.match(microScript, /BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS/);
+  assert.match(microScript, /BENCH_RETAIN_STACKED_WORK_ARTIFACTS/);
+  assert.match(microScript, /BENCH_PRUNE_BUILDKIT_AFTER_BENCH/);
+  assert.match(microScript, /cleanup-proof-micro-artifacts\.mjs/);
+  assert.match(microScript, /docker buildx prune --force/);
+  assert.match(cleanupScript, /expectedSummaryBackend/);
+  assert.match(cleanupScript, /report\.mode !== "full"/);
+  assert.match(cleanupScript, /zigzag-aux\.json/);
+  assert.match(cleanupScript, /entry\.name\.endsWith\("\.dat"\)/);
+  assert.match(cleanupScript, /zigzag-sealed\.dat/);
+  assert.match(cleanupScript, /stacked-proof-parameter-cache/);
+  assert.match(cleanupScript, /p_aux/);
+  assert.match(cleanupScript, /t_aux/);
   assert.match(microbenchSource, /TelemetrySession::start/);
   assert.match(microbenchSource, /PhaseGuard::enter/);
   assert.match(telemetrySource, /memory\.current/);
@@ -768,7 +788,9 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /porep-proof-microbench/);
   assert.match(script, /--prewarm-only/);
   assert.match(script, /using devnet proof parameter cache/);
-  assert.doesNotMatch(script, /using isolated Stacked microbench parameter cache/);
+  assert.match(script, /using isolated transient proof parameter cache/);
+  assert.match(script, /post-success-stacked-prewarm-parameter-cache-prune/);
+  assert.match(script, /rm -rf -- "\$\{parameter_cache_host\}"/);
   assert.match(script, /devnet_start_prewarm_progress/);
   assert.match(script, /prewarm_zigzag_if_needed/);
   assert.match(script, /zigzag_static_params_ready/);
@@ -789,6 +811,172 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /dockerTotalMemoryBytes/);
   assert.match(script, /summary\.json/);
   assert.match(script, /Proof backend benchmark comparison/);
+});
+
+test("proof microbenchmark cleanup removes only successful ZigZag work artifacts", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "proof-micro-cleanup-"));
+  const workDirectory = join(fixture, "work");
+  const cacheDirectory = join(workDirectory, "zigzag-cache");
+  const prewarmWorkDirectory = join(fixture, "prewarm-work");
+  try {
+    await mkdir(cacheDirectory, { recursive: true });
+    await mkdir(prewarmWorkDirectory);
+    await Promise.all([
+      writeFile(
+        join(fixture, "summary.json"),
+        JSON.stringify({ backend: "zig-zag", verify_seal: true, raw_unseal_bytes_match: true }),
+      ),
+      writeFile(join(fixture, "report.json"), JSON.stringify({ mode: "full" })),
+      writeFile(join(fixture, "telemetry-summary.json"), "{}"),
+      writeFile(join(fixture, "provenance.json"), "{}"),
+      writeFile(
+        join(cacheDirectory, "zigzag-aux.json"),
+        JSON.stringify({
+          comm_d: "d",
+          comm_r: "r",
+          comm_r_star: "r-star",
+          replica_id: "replica",
+          layers: 11,
+        }),
+      ),
+      writeFile(join(cacheDirectory, "tree-d.dat"), "tree"),
+      writeFile(join(cacheDirectory, "tree-r-0.dat"), "replica-tree"),
+      writeFile(join(cacheDirectory, "keep.json"), "{}"),
+      writeFile(join(workDirectory, "zigzag-sealed.dat"), "sealed"),
+    ]);
+
+    const result = spawnSync(
+      process.execPath,
+      [cleanupProofMicroArtifactsScriptPath, fixture, "zigzag"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const cleanup = JSON.parse(await readFile(join(fixture, "cleanup.json"), "utf8"));
+    assert.equal(cleanup.status, "completed");
+    assert.equal(cleanup.removed_files.length, 3);
+    assert.equal(cleanup.removed_logical_bytes, 22);
+    assert.equal(cleanup.retained.path, "work/zigzag-cache/zigzag-aux.json");
+    assert.equal(cleanup.removed_empty_prewarm_work_directory, true);
+    await lstat(join(cacheDirectory, "zigzag-aux.json"));
+    await lstat(join(cacheDirectory, "keep.json"));
+    await assert.rejects(lstat(join(cacheDirectory, "tree-d.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(cacheDirectory, "tree-r-0.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workDirectory, "zigzag-sealed.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(prewarmWorkDirectory), { code: "ENOENT" });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("proof microbenchmark cleanup removes successful Stacked run artifacts", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "proof-micro-stacked-cleanup-"));
+  const workDirectory = join(fixture, "work");
+  const cacheDirectory = join(workDirectory, "seal-cache");
+  const parameterCacheDirectory = join(fixture, "stacked-proof-parameter-cache");
+  const prewarmWorkDirectory = join(fixture, "prewarm-work");
+  try {
+    await mkdir(cacheDirectory, { recursive: true });
+    await mkdir(parameterCacheDirectory);
+    await mkdir(prewarmWorkDirectory);
+    await Promise.all([
+      writeFile(
+        join(fixture, "summary.json"),
+        JSON.stringify({ backend: "stacked", verify_seal: true, raw_unseal_bytes_match: true }),
+      ),
+      writeFile(join(fixture, "report.json"), JSON.stringify({ mode: "full" })),
+      writeFile(join(fixture, "telemetry-summary.json"), "{}"),
+      writeFile(join(fixture, "provenance.json"), "{}"),
+      writeFile(join(cacheDirectory, "p_aux"), "p"),
+      writeFile(join(cacheDirectory, "t_aux"), "t"),
+      writeFile(join(cacheDirectory, "sc-02-data-tree-d.dat"), "tree"),
+      writeFile(join(cacheDirectory, "sc-02-data-tree-r-last.dat"), "replica-tree"),
+      writeFile(join(cacheDirectory, "keep.json"), "{}"),
+      writeFile(join(workDirectory, "staged.dat"), "staged"),
+      writeFile(join(workDirectory, "sealed.dat"), "sealed"),
+      writeFile(join(parameterCacheDirectory, "proof.params"), "params"),
+      writeFile(join(parameterCacheDirectory, "proof.vk"), "vk"),
+      writeFile(join(parameterCacheDirectory, "proof.meta"), "{}"),
+    ]);
+
+    const result = spawnSync(
+      process.execPath,
+      [cleanupProofMicroArtifactsScriptPath, fixture, "stacked"],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const cleanup = JSON.parse(await readFile(join(fixture, "cleanup.json"), "utf8"));
+    assert.equal(cleanup.status, "completed");
+    assert.equal(cleanup.cleanup_kind, "post-success-stacked-work-prune");
+    assert.equal(cleanup.removed_files.length, 7);
+    assert.equal(cleanup.removed_logical_bytes, 38);
+    assert.deepEqual(cleanup.removed_directories, ["stacked-proof-parameter-cache"]);
+    assert.deepEqual(
+      cleanup.retained_files.map((entry: { path: string }) => entry.path),
+      ["work/seal-cache/p_aux", "work/seal-cache/t_aux"],
+    );
+    await lstat(join(cacheDirectory, "p_aux"));
+    await lstat(join(cacheDirectory, "t_aux"));
+    await lstat(join(cacheDirectory, "keep.json"));
+    await assert.rejects(lstat(join(cacheDirectory, "sc-02-data-tree-d.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(cacheDirectory, "sc-02-data-tree-r-last.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workDirectory, "staged.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(join(workDirectory, "sealed.dat")), { code: "ENOENT" });
+    await assert.rejects(lstat(parameterCacheDirectory), { code: "ENOENT" });
+    await assert.rejects(lstat(prewarmWorkDirectory), { code: "ENOENT" });
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
+
+test("proof microbenchmark cleanup refuses backend mismatches and unsuccessful runs", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "proof-micro-cleanup-refusal-"));
+  const workDirectory = join(fixture, "work");
+  const cacheDirectory = join(workDirectory, "zigzag-cache");
+  const treePath = join(cacheDirectory, "tree-d.dat");
+  try {
+    await mkdir(cacheDirectory, { recursive: true });
+    await Promise.all([
+      writeFile(
+        join(fixture, "summary.json"),
+        JSON.stringify({ backend: "zig-zag", verify_seal: false, raw_unseal_bytes_match: true }),
+      ),
+      writeFile(join(fixture, "report.json"), JSON.stringify({ mode: "full" })),
+      writeFile(join(fixture, "telemetry-summary.json"), "{}"),
+      writeFile(join(fixture, "provenance.json"), "{}"),
+      writeFile(
+        join(cacheDirectory, "zigzag-aux.json"),
+        JSON.stringify({
+          comm_d: "d",
+          comm_r: "r",
+          comm_r_star: "r-star",
+          replica_id: "replica",
+          layers: 11,
+        }),
+      ),
+      writeFile(treePath, "tree"),
+      writeFile(join(workDirectory, "zigzag-sealed.dat"), "sealed"),
+    ]);
+
+    const sdrResult = spawnSync(
+      process.execPath,
+      [cleanupProofMicroArtifactsScriptPath, fixture, "stacked"],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(sdrResult.status, 0);
+    assert.match(sdrResult.stderr, /before a successful full stacked benchmark is validated/);
+    await lstat(treePath);
+
+    const failedResult = spawnSync(
+      process.execPath,
+      [cleanupProofMicroArtifactsScriptPath, fixture, "zigzag"],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(failedResult.status, 0);
+    assert.match(failedResult.stderr, /before a successful full zigzag benchmark is validated/);
+    await lstat(treePath);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 test("proof microbenchmark telemetry aggregation preserves peaks, deltas, phases, and report scope", async () => {

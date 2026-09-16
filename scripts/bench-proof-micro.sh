@@ -31,19 +31,23 @@ telemetry_interval_ms="${BENCH_TELEMETRY_INTERVAL_MS:-500}"
   devnet_die "BENCH_TELEMETRY_INTERVAL_MS must be between 100 and 60000"
 
 normalize_microbench_bool() {
-  local value
+  local value label
   value="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  label="${2:-boolean value}"
   case "${value}" in
     1|true|yes|on) printf '1\n' ;;
     0|false|no|off|'') printf '0\n' ;;
-    *) devnet_die "invalid boolean value for Stacked multicore SDR: ${1}; expected 1/0, true/false, yes/no, or on/off" ;;
+    *) devnet_die "invalid boolean value for ${label}: ${1}; expected 1/0, true/false, yes/no, or on/off" ;;
   esac
 }
 
 stacked_multicore_sdr_requested="0"
 if [[ "${backend}" == "stacked" ]]; then
-  stacked_multicore_sdr_requested="$(normalize_microbench_bool "${BENCH_STACKED_USE_MULTICORE_SDR:-${FIL_PROOFS_USE_MULTICORE_SDR:-1}}")"
+  stacked_multicore_sdr_requested="$(normalize_microbench_bool "${BENCH_STACKED_USE_MULTICORE_SDR:-${FIL_PROOFS_USE_MULTICORE_SDR:-1}}" "Stacked multicore SDR")"
 fi
+retain_zigzag_work_artifacts="$(normalize_microbench_bool "${BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS:-0}" "BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS")"
+retain_stacked_work_artifacts="$(normalize_microbench_bool "${BENCH_RETAIN_STACKED_WORK_ARTIFACTS:-0}" "BENCH_RETAIN_STACKED_WORK_ARTIFACTS")"
+prune_buildkit_after_bench="$(normalize_microbench_bool "${BENCH_PRUNE_BUILDKIT_AFTER_BENCH:-1}" "BENCH_PRUNE_BUILDKIT_AFTER_BENCH")"
 stacked_sdr_replication_mode="not-applicable"
 if [[ "${backend}" == "stacked" ]]; then
   if [[ "${stacked_multicore_sdr_requested}" == "1" ]]; then
@@ -229,6 +233,55 @@ bench_compose_report() {
     and (.telemetry.overall.cgroup.cpuset_cpus_effective | type == "string" and length > 0)
     and (.telemetry.overall.cgroup.cpu_period_usec | type == "number" and . > 0)
   ' "${report_json}" >/dev/null || devnet_die "microbenchmark report is invalid: ${report_json}"
+}
+
+bench_cleanup_successful_run() {
+  local cleanup_json buildkit_prune_log removed_allocated_bytes retain_work_artifacts status
+  cleanup_json="${run_dir}/cleanup.json"
+  buildkit_prune_log="${run_dir}/buildkit-prune.log"
+  retain_work_artifacts="${retain_zigzag_work_artifacts}"
+  if [[ "${backend}" == "stacked" ]]; then
+    retain_work_artifacts="${retain_stacked_work_artifacts}"
+  fi
+
+  if [[ "${prune_buildkit_after_bench}" == "1" || ( "${mode}" == "full" && "${retain_work_artifacts}" == "0" ) ]]; then
+    printf '\n## Post-run cleanup\n\n' >> "${summary_md}"
+  fi
+
+  if [[ "${mode}" == "full" ]]; then
+    if [[ "${retain_work_artifacts}" == "1" ]]; then
+      devnet_progress "bench-proof-micro: retaining ${parent_cache_kind} work artifacts by request"
+    else
+      devnet_progress "bench-proof-micro: pruning successful ${parent_cache_kind} run artifacts"
+      node "${DEVNET_ROOT}/scripts/cleanup-proof-micro-artifacts.mjs" "${run_dir}" "${backend}" >/dev/null
+      removed_allocated_bytes="$(jq -r '.removed_allocated_bytes // .removed_logical_bytes' "${cleanup_json}")"
+      devnet_progress "bench-proof-micro: pruned $(devnet_format_bytes "${removed_allocated_bytes}") from the run directory; manifest=${cleanup_json}"
+      if [[ "${backend}" == "zigzag" ]]; then
+        {
+          printf -- '- ZigZag sealed replica and `*.dat` tree artifacts: removed after successful report validation.\n'
+          printf -- '- Retained commitment record: `work/zigzag-cache/zigzag-aux.json`.\n'
+        } >> "${summary_md}"
+      else
+        {
+          printf -- '- Stacked staged/sealed replicas, seal-cache `*.dat` files, and isolated proof parameters: removed after successful report validation.\n'
+          printf -- '- Retained auxiliary records: `work/seal-cache/p_aux` and `work/seal-cache/t_aux`.\n'
+        } >> "${summary_md}"
+      fi
+      printf -- '- Cleanup manifest: [`cleanup.json`](./cleanup.json); reclaimed allocation: %s.\n' "$(devnet_format_bytes "${removed_allocated_bytes}")" >> "${summary_md}"
+    fi
+  fi
+
+  if [[ "${prune_buildkit_after_bench}" == "1" ]]; then
+    devnet_progress "bench-proof-micro: pruning unused BuildKit cache"
+    if docker buildx prune --force > "${buildkit_prune_log}" 2>&1; then
+      devnet_progress "bench-proof-micro: BuildKit cache prune complete; log=${buildkit_prune_log}"
+    else
+      status=$?
+      tail -40 "${buildkit_prune_log}" >&2 || true
+      devnet_die "proof microbench succeeded, but BuildKit cache cleanup failed with exit code ${status}; see ${buildkit_prune_log}"
+    fi
+    printf -- '- Unused BuildKit cache: pruned; log: [`buildkit-prune.log`](./buildkit-prune.log).\n' >> "${summary_md}"
+  fi
 }
 
 bench_append_telemetry_markdown() {
@@ -573,6 +626,7 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
     ' "${fixture_summary_json}"
   } > "${summary_md}"
   bench_append_telemetry_markdown "${report_json}" "${summary_md}"
+  bench_cleanup_successful_run
   printf 'proof microbenchmark fixture: %s\n' "${summary_md}"
   exit 0
 fi
@@ -676,6 +730,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
     ' "${summary_json}"
   } > "${summary_md}"
   bench_append_telemetry_markdown "${report_json}" "${summary_md}"
+  bench_cleanup_successful_run
   printf 'proof raw unseal/retrieval microbenchmark: %s\n' "${summary_md}"
   exit 0
 fi
@@ -814,5 +869,6 @@ summary_md="${run_dir}/summary.md"
 } > "${summary_md}"
 
 bench_append_telemetry_markdown "${report_json}" "${summary_md}"
+bench_cleanup_successful_run
 
 printf 'proof microbenchmark: %s\n' "${summary_md}"

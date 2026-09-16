@@ -22,6 +22,7 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/devnet-test-upgrade.sh
     scripts/bench-proof-backends.sh
     scripts/bench-proof-micro.sh
+    scripts/cleanup-proof-micro-artifacts.mjs
     scripts/compose-proof-micro-report.mjs
     scripts/summarize-proof-micro-telemetry.mjs
     scripts/write-proof-micro-provenance.mjs
@@ -53,6 +54,7 @@ if [[ -f versions.lock.yaml ]]; then
   done
 
   bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh
+  node --check scripts/cleanup-proof-micro-artifacts.mjs
   rg -q '^build:' justfile
   if rg -n -i \
     '(latest|@master|@main|foundryup|nodesource|git[[:space:]]+clone|git[[:space:]]+submodule[[:space:]]+update)' \

@@ -33,22 +33,24 @@ latest_run_dir() {
 }
 
 proof_parameter_file_count() {
-  if [[ ! -d "${DEVNET_PROOF_PARAMETERS_DIR}" ]]; then
+  local cache_dir="${1:-${DEVNET_PROOF_PARAMETERS_DIR}}"
+  if [[ ! -d "${cache_dir}" ]]; then
     printf '0\n'
     return 0
   fi
-  find "${DEVNET_PROOF_PARAMETERS_DIR}" \
-    -path "${DEVNET_PROOF_PARAMETERS_DIR}/zigzag-proof-sidecars" -prune -o \
+  find "${cache_dir}" \
+    -path "${cache_dir}/zigzag-proof-sidecars" -prune -o \
     -type f -print | wc -l | tr -d '[:space:]'
 }
 
 proof_parameter_cache_bytes() {
-  if [[ ! -d "${DEVNET_PROOF_PARAMETERS_DIR}" ]]; then
+  local cache_dir="${1:-${DEVNET_PROOF_PARAMETERS_DIR}}"
+  if [[ ! -d "${cache_dir}" ]]; then
     printf '0\n'
     return 0
   fi
-  find "${DEVNET_PROOF_PARAMETERS_DIR}" \
-    -path "${DEVNET_PROOF_PARAMETERS_DIR}/zigzag-proof-sidecars" -prune -o \
+  find "${cache_dir}" \
+    -path "${cache_dir}/zigzag-proof-sidecars" -prune -o \
     -type f -exec sh -c '
       for path do
         stat -f "%z" "$path" 2>/dev/null || stat -c "%s" "$path"
@@ -80,12 +82,20 @@ proof_microbench_image() {
 prewarm_backend_params() {
   local backend="$1"
   local image prewarm_summary prewarm_stderr prewarm_pid prewarm_progress_pid status parameter_cache_host parent_cache_host
+  local parameter_cache_file_count parameter_cache_bytes cleanup_json
   image="$(proof_microbench_image)"
   prewarm_summary="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.json"
   prewarm_stderr="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.stderr.log"
   parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
+  if [[ "${backend}" == "stacked" ]]; then
+    parameter_cache_host="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}-cache"
+    devnet_require_safe_write_path "${parameter_cache_host}" directory
+    mkdir -p "${parameter_cache_host}"
+    devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using isolated transient proof parameter cache at ${parameter_cache_host}"
+  else
+    devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using devnet proof parameter cache at ${parameter_cache_host}"
+  fi
   parent_cache_host="$(devnet_parent_cache_dir_for_backend "${backend}")"
-  devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using devnet proof parameter cache at ${parameter_cache_host}"
   devnet_require_safe_write_path "${parent_cache_host}" directory
   mkdir -p "${parent_cache_host}"
   devnet_progress "bench-proof-backends: ${backend} ${bench_sector_size}: using persistent parent cache at ${parent_cache_host} window_nodes=${parent_cache_window_nodes}"
@@ -131,6 +141,8 @@ prewarm_backend_params() {
 
   jq -e '.schema_version == 1 and (.wall_ms | type == "number")' "${prewarm_summary}" >/dev/null ||
     devnet_die "proof backend parameter prewarm summary is invalid: ${prewarm_summary}"
+  parameter_cache_file_count="$(proof_parameter_file_count "${parameter_cache_host}")"
+  parameter_cache_bytes="$(proof_parameter_cache_bytes "${parameter_cache_host}")"
   jq -nc \
     --arg backend "${backend}" \
     --arg kind "param-prewarm" \
@@ -138,8 +150,8 @@ prewarm_backend_params() {
     --arg runDir "" \
     --arg summaryPath "${prewarm_summary}" \
     --arg reason "exact PoRep params prewarmed via porep-proof-microbench --prewarm-only; summary=${prewarm_summary}" \
-    --argjson proofParameterCacheFileCount "$(proof_parameter_file_count)" \
-    --argjson proofParameterCacheBytes "$(proof_parameter_cache_bytes)" \
+    --argjson proofParameterCacheFileCount "${parameter_cache_file_count}" \
+    --argjson proofParameterCacheBytes "${parameter_cache_bytes}" \
     --slurpfile prewarm "${prewarm_summary}" \
     '{
       backend:$backend,
@@ -159,6 +171,28 @@ prewarm_backend_params() {
       parentCacheWindowNodes:($prewarm[0].parent_cache_window_nodes // ""),
       reason:$reason
     }' >> "${records}"
+
+  if [[ "${backend}" == "stacked" ]]; then
+    cleanup_json="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}-cleanup.json"
+    [[ "${parameter_cache_host}" == "${comparison_dir}/"* && -d "${parameter_cache_host}" && ! -L "${parameter_cache_host}" ]] ||
+      devnet_die "refusing to remove unexpected Stacked prewarm cache path: ${parameter_cache_host}"
+    rm -rf -- "${parameter_cache_host}"
+    jq -n \
+      --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg removedPath "${parameter_cache_host}" \
+      --argjson removedFileCount "${parameter_cache_file_count}" \
+      --argjson removedLogicalBytes "${parameter_cache_bytes}" \
+      '{
+        schemaVersion:1,
+        cleanupKind:"post-success-stacked-prewarm-parameter-cache-prune",
+        status:"completed",
+        completedAt:$completedAt,
+        removedPath:$removedPath,
+        removedFileCount:$removedFileCount,
+        removedLogicalBytes:$removedLogicalBytes
+      }' > "${cleanup_json}"
+    devnet_progress "bench-proof-backends: removed transient Stacked prewarm parameter cache; manifest=${cleanup_json}"
+  fi
 }
 
 zigzag_prewarm_marker() {
