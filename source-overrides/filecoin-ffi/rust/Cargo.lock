@@ -3446,6 +3446,7 @@ dependencies = [
  "ff",
  "filecoin-hashers",
  "fr32",
+ "fs2",
  "generic-array 0.14.7",
  "glob",
  "hex",
