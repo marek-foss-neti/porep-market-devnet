@@ -118,6 +118,7 @@ function selectedEnvironment() {
     "BENCH_STACKED_USE_MULTICORE_SDR",
     "BENCH_TELEMETRY_INTERVAL_MS",
     "BENCH_ZIGZAG_PARENT_CACHE_DIR",
+    "DEVNET_RUST_FIL_PROOFS_SOURCE",
     "FIL_PROOFS_USE_MULTICORE_SDR",
     "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS",
     "RAYON_NUM_THREADS",
@@ -139,7 +140,14 @@ export function buildProvenance({
   benchmarkSummaryPath,
 }) {
   const imageManifest = JSON.parse(readFileSync(imageManifestPath, "utf8"));
-  const siblingRustFilProofs = resolve(repositoryRoot, "..", "rust-fil-proofs");
+  if (!/^[0-9a-f]{40}$/.test(imageManifest.rustFilProofsCommit ?? "")) {
+    fail("image manifest has no valid rust-fil-proofs commit");
+  }
+  const rustFilProofsSource = resolve(
+    repositoryRoot,
+    process.env.DEVNET_RUST_FIL_PROOFS_SOURCE ||
+      `.cache/sources/rust_fil_proofs/${imageManifest.rustFilProofsCommit}`,
+  );
   const runnerPath = resolve(repositoryRoot, "scripts", "bench-proof-micro.sh");
   const telemetrySourcePath = resolve(
     repositoryRoot,
@@ -181,7 +189,8 @@ export function buildProvenance({
     },
     workspaces: {
       porep_market_devnet: gitState(repositoryRoot),
-      rust_fil_proofs: gitState(siblingRustFilProofs),
+      rust_fil_proofs_source_path: rustFilProofsSource,
+      rust_fil_proofs: gitState(rustFilProofsSource),
     },
     build: {
       image_manifest_path: imageManifestPath,

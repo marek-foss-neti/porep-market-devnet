@@ -6,6 +6,14 @@ devnet_require_command jq
 devnet_require_command docker
 devnet_prepare_runtime
 
+# The benchmark runs the built image, not an optional sibling Git checkout.
+image_manifest="${DEVNET_BUILD_DIR}/images.json"
+[[ -f "${image_manifest}" && ! -L "${image_manifest}" ]] ||
+  devnet_die "image manifest is missing; run just build first"
+rust_fil_proofs_commit="$(jq -r '.rustFilProofsCommit // empty' "${image_manifest}")"
+[[ "${rust_fil_proofs_commit}" =~ ^[0-9a-f]{40}$ ]] ||
+  devnet_die "image manifest has no valid rust-fil-proofs commit; run just build"
+
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 baseline_dir="${DEVNET_ROOT}/.runtime/runs/${timestamp}-zigzag-512-baseline"
 devnet_require_safe_write_path "${baseline_dir}" directory
@@ -18,7 +26,7 @@ parent_dir="${baseline_dir}/parent-cache"
 mkdir -p "${parameter_dir}" "${parent_dir}"
 
 git -C "${DEVNET_ROOT}" rev-parse HEAD > "${baseline_dir}/devnet-head.txt"
-git -C "${DEVNET_ROOT}/../rust-fil-proofs" rev-parse HEAD > "${baseline_dir}/rust-fil-proofs-head.txt"
+printf '%s\n' "${rust_fil_proofs_commit}" > "${baseline_dir}/rust-fil-proofs-head.txt"
 uname -a > "${baseline_dir}/uname.txt"
 if command -v lscpu >/dev/null 2>&1; then lscpu > "${baseline_dir}/lscpu.txt"; fi
 if command -v free >/dev/null 2>&1; then free -h > "${baseline_dir}/memory.txt"; fi
@@ -47,6 +55,9 @@ for repetition in 1 2 3; do
   [[ -n "${summary}" && -f "${summary}" ]] || devnet_die "missing zigzag-512 run ${repetition} summary"
   report="$(dirname "${summary}")/report.json"
   [[ -f "${report}" ]] || devnet_die "missing zigzag-512 run ${repetition} report"
+  jq -e --arg commit "${rust_fil_proofs_commit}" \
+    '.provenance.build.manifest.rust_fil_proofs_commit == $commit' "${report}" >/dev/null ||
+    devnet_die "zigzag-512 run ${repetition} used a different rust-fil-proofs build"
   reports+=("${report}")
 done
 
@@ -58,6 +69,7 @@ jq -s \
     command: "just bench-zigzag-512",
     devnet_head: ($devnetHead | rtrimstr("\n")),
     rust_fil_proofs_head: ($rustHead | rtrimstr("\n")),
+    rust_fil_proofs_commit_source: "image manifest",
     cold_cache_policy: "first run starts with an empty profile-specific parameter directory; OS page cache state is not forced",
     completed_runs: length,
     runs: [to_entries[] | {

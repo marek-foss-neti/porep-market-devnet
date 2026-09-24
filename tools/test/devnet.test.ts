@@ -824,6 +824,124 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /Proof backend benchmark comparison/);
 });
 
+test("zigzag-512 baseline records the image revision without a sibling checkout", async () => {
+  const fixture = await createLifecycleFixture();
+  const commit = "a".repeat(40);
+  const imageManifest = join(fixture.root, ".runtime/devnet/build/images.json");
+  try {
+    await cp(join(repositoryRoot, "scripts/bench-zigzag-512.sh"), join(fixture.root, "scripts/bench-zigzag-512.sh"));
+    await mkdir(dirname(imageManifest), { recursive: true });
+    await writeFile(imageManifest, JSON.stringify({ rustFilProofsCommit: commit }));
+    await assert.rejects(lstat(join(fixture.root, "../rust-fil-proofs")), { code: "ENOENT" });
+    await writeFile(join(fixture.stubBin, "git"), `#!/usr/bin/env bash
+[[ "$*" == "-C $DEVNET_TEST_ROOT rev-parse HEAD" ]] || exit 99
+printf '%s\\n' '${"d".repeat(40)}'
+`);
+    await chmod(join(fixture.stubBin, "git"), 0o755);
+    await writeFile(join(fixture.root, "scripts/bench-proof-micro.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
+touch "$run_dir/summary.md"
+jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_dir")" '
+  {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit}}},
+   benchmark: {verify_seal: true, raw_unseal_bytes_match: true, proof_len: 1920,
+     profile: {total_challenge_instances: 1980}}}
+' > "$run_dir/report.json"
+printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
+`);
+    const run = (reportCommit: string) => spawnSync(
+      "bash", [join(fixture.root, "scripts/bench-zigzag-512.sh")], {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
+          DEVNET_TEST_ROOT: fixture.root,
+          DEVNET_TEST_COMMAND_LOG: fixture.commandLog,
+          DEVNET_TEST_REPORT_COMMIT: reportCommit,
+        },
+      },
+    );
+    const result = run(commit);
+    assert.equal(result.status, 0, result.stderr);
+    const baselinePath = result.stdout.match(/^zigzag-512 baseline: (.+)$/m)?.[1];
+    assert.ok(baselinePath);
+    const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+    assert.equal(baseline.rust_fil_proofs_head, commit);
+    assert.equal(baseline.rust_fil_proofs_commit_source, "image manifest");
+    assert.equal(baseline.completed_runs, 3);
+    const mismatch = run("b".repeat(40));
+    assert.notEqual(mismatch.status, 0);
+    assert.match(mismatch.stderr, /used a different rust-fil-proofs build/);
+    await writeFile(imageManifest, "{}");
+    const missingCommit = run(commit);
+    assert.notEqual(missingCommit.status, 0);
+    assert.match(missingCommit.stderr, /image manifest has no valid rust-fil-proofs commit/);
+  } finally {
+    await rm(fixture.fixtureBase, { recursive: true, force: true });
+  }
+});
+
+test("proof provenance uses managed or explicitly configured Rust sources", async () => {
+  const fixture = await createLifecycleFixture();
+  try {
+    const imageManifestPath = join(fixture.root, "images.json");
+    const summaryPath = join(fixture.root, "summary.json");
+    await writeFile(imageManifestPath, JSON.stringify({ rustFilProofsCommit: rustFilProofsSourceCommit }));
+    await writeFile(summaryPath, "{}");
+    for (const name of ["bench-proof-micro.sh", "summarize-proof-micro-telemetry.mjs", "write-proof-micro-provenance.mjs", "compose-proof-micro-report.mjs"]) {
+      await cp(join(repositoryRoot, "scripts", name), join(fixture.root, "scripts", name));
+    }
+    await writeFile(join(fixture.stubBin, "docker"), '#!/usr/bin/env bash\nprintf \'{"Id":"sha256:fixture"}\\n\'\n');
+    await writeFile(join(fixture.stubBin, "just"), '#!/usr/bin/env bash\nprintf \'just fixture\\n\'\n');
+    await chmod(join(fixture.stubBin, "just"), 0o755);
+    const managed = join(fixture.root, ".cache/sources/rust_fil_proofs", rustFilProofsSourceCommit);
+    for (const args of [
+      ["init", "--quiet"],
+      ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "fixture"],
+    ]) {
+      const git = spawnSync("git", args, { cwd: managed, encoding: "utf8" });
+      assert.equal(git.status, 0, git.stderr);
+    }
+    const localHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: managed, encoding: "utf8" }).stdout.trim();
+    const options = {
+      repositoryRoot: fixture.root,
+      imageManifestPath,
+      imageReference: "fixture:latest",
+      mode: "full", backend: "zigzag", sectorSize: "512mib", layers: "",
+      startedUnixMs: "0", finishedUnixMs: "1",
+      telemetrySummaryPath: summaryPath, benchmarkSummaryPath: summaryPath,
+    };
+    const moduleUrl = new URL("../../scripts/write-proof-micro-provenance.mjs", import.meta.url).href;
+    for (const configured of ["", "custom-proof-source", join(fixture.root, "missing-proof-source")]) {
+      const result = spawnSync(process.execPath, [
+        "--input-type=module", "--eval",
+        `import { buildProvenance } from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(buildProvenance(JSON.parse(process.argv[1]))));`,
+        JSON.stringify(options),
+      ], {
+        cwd: fixture.root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
+          DEVNET_RUST_FIL_PROOFS_SOURCE: configured,
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const provenance = JSON.parse(result.stdout);
+      assert.equal(provenance.build.manifest.rust_fil_proofs_commit, rustFilProofsSourceCommit);
+      assert.equal(provenance.workspaces.rust_fil_proofs_source_path, configured ? resolve(fixture.root, configured) : managed);
+      if (configured) {
+        assert.equal(provenance.workspaces.rust_fil_proofs, null);
+      } else {
+        assert.equal(provenance.workspaces.rust_fil_proofs.head, localHead);
+      }
+    }
+  } finally {
+    await rm(fixture.fixtureBase, { recursive: true, force: true });
+  }
+});
+
 test("proof microbenchmark cleanup removes only successful ZigZag work artifacts", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "proof-micro-cleanup-"));
   const workDirectory = join(fixture, "work");

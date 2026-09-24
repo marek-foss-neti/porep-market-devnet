@@ -24,6 +24,14 @@ just build
 just bench-zigzag-512
 ```
 
+No sibling `../rust-fil-proofs` checkout is required. The baseline records the
+Rust commit from `.runtime/devnet/build/images.json`, identifying the code in the
+built image, and checks that all three reports use that commit. Detailed
+provenance records the local source state from
+`.cache/sources/rust_fil_proofs/<image-commit>` or `DEVNET_RUST_FIL_PROOFS_SOURCE`
+when explicitly set. If that checkout is absent, its Git state is `null`; the
+image manifest still supplies the built revision.
+
 The command creates a dedicated parameter and parent-cache directory and runs
 three full seal → prove → verify → unseal cycles. The first parameter prewarm
 starts with an empty directory; later prewarms reuse those files. The runner
