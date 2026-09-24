@@ -105,7 +105,7 @@ RUN cd extern/filecoin-ffi/rust \
          --bin porep-proof-microbench \
          --locked \
          --no-default-features \
-         --features multicore-sdr
+         --features multicore-sdr,zigzag-bench
 
 FROM ${GO_BUILDER_IMAGE} AS lotus-builder
 

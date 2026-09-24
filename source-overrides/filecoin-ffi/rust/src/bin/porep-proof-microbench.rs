@@ -41,6 +41,9 @@ const SECTOR_SIZE_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_LOCAL_SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
 const MICROBENCH_LAYERS_ENV: &str = "POREP_PROOF_MICROBENCH_LAYERS";
 
+#[path = "support/zigzag_512_profile.rs"]
+mod zigzag_512_profile;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
     Full,
@@ -76,6 +79,7 @@ struct BenchmarkSummary {
     porep_partitions: usize,
     minimum_total_challenges: usize,
     challenges_per_layer_per_partition: usize,
+    profile: Option<zigzag_512_profile::EffectiveProfile>,
     work_dir: String,
     proof_parameter_cache: String,
     proof_len: usize,
@@ -158,6 +162,7 @@ struct ParamPrewarmSummary {
     porep_partitions: usize,
     minimum_total_challenges: usize,
     challenges_per_layer_per_partition: usize,
+    profile: Option<zigzag_512_profile::EffectiveProfile>,
     proof_parameter_cache: String,
     parent_cache: String,
     parent_cache_window_nodes: u32,
@@ -230,6 +235,7 @@ struct Args {
     mode: Mode,
     range_offset: u64,
     range_size: Option<u64>,
+    profile: Option<String>,
 }
 
 impl Args {
@@ -241,6 +247,7 @@ impl Args {
         let mut explicit_mode = false;
         let mut range_offset = 0;
         let mut range_size = None;
+        let mut profile = None;
         let mut iter = raw.into_iter();
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -256,6 +263,7 @@ impl Args {
                 "--work-dir" => {
                     work_dir = Some(PathBuf::from(required_arg(&mut iter, "--work-dir")?))
                 }
+                "--profile" => profile = Some(required_arg(&mut iter, "--profile")?),
                 "--fixture-dir" => {
                     work_dir = Some(PathBuf::from(required_arg(&mut iter, "--fixture-dir")?))
                 }
@@ -281,7 +289,7 @@ impl Args {
                     )?);
                 }
                 "--help" | "-h" => {
-                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
+                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
                     std::process::exit(0);
                 }
                 _ => bail!("unknown argument: {arg}"),
@@ -305,6 +313,20 @@ impl Args {
             bail!("ZigZag microbench supports only 2KiB, 8MiB, 512MiB, and 32GiB sectors in this restore-zigzag overlay");
         }
         let work_dir = work_dir.unwrap_or_else(default_work_dir);
+        if let Some(ref name) = profile {
+            ensure!(
+                name == zigzag_512_profile::NAME,
+                "unknown benchmark profile: {name}"
+            );
+            ensure!(
+                backend == Backend::ZigZag && sector_size_bytes == SECTOR_SIZE_512_MIB,
+                "zigzag-512 requires the ZigZag backend and 512mib sector size"
+            );
+            ensure!(
+                matches!(mode, Mode::Full | Mode::PrewarmOnly),
+                "zigzag-512 supports only full and prewarm-only modes"
+            );
+        }
         Ok(Self {
             backend,
             sector_size_label,
@@ -313,6 +335,7 @@ impl Args {
             mode,
             range_offset,
             range_size,
+            profile,
         })
     }
 }
@@ -331,6 +354,13 @@ fn large_sector_microbench_enabled() -> bool {
 fn configure_microbench_layers(args: &Args) -> Result<()> {
     let raw_layers = std::env::var(MICROBENCH_LAYERS_ENV).unwrap_or_default();
     let raw_layers = raw_layers.trim();
+    if args.profile.is_some() {
+        ensure!(
+            raw_layers.is_empty(),
+            "zigzag-512 has fixed layers; remove {MICROBENCH_LAYERS_ENV}"
+        );
+        return Ok(());
+    }
     if raw_layers.is_empty() {
         return Ok(());
     }
@@ -429,7 +459,10 @@ fn default_work_dir() -> PathBuf {
 fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
     let _phase = PhaseGuard::enter("parameter_prewarm");
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
-    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let profile = zigzag_512_profile::effective(args.profile.as_deref(), registered_proof)?;
+    let porep_layers = profile
+        .as_ref()
+        .map_or(current_porep_layers(args.sector_size_bytes)?, |p| p.layers);
     let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
         proof_configuration(args, registered_proof);
     eprintln!(
@@ -445,6 +478,12 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         Backend::Stacked => prewarm_stacked_params(args, registered_proof)?,
         Backend::ZigZag => prewarm_zigzag_params(args, registered_proof)?,
     };
+    if let Some(ref profile) = profile {
+        ensure!(
+            profile.parameter_cache_identifier == prewarm.cache_identifier,
+            "zigzag-512 prewarm cache identifier differs from effective setup"
+        );
+    }
     let summary = ParamPrewarmSummary {
         schema_version: 1,
         backend: args.backend,
@@ -456,6 +495,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         porep_partitions,
         minimum_total_challenges,
         challenges_per_layer_per_partition,
+        profile,
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         parent_cache: parent_cache_dir().display().to_string(),
         parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
@@ -1106,6 +1146,7 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         porep_partitions,
         minimum_total_challenges,
         challenges_per_layer_per_partition,
+        profile: None,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: proof.len(),
@@ -1118,7 +1159,10 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
 
 fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
-    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let profile = zigzag_512_profile::effective(args.profile.as_deref(), registered_proof)?;
+    let porep_layers = profile
+        .as_ref()
+        .map_or(current_porep_layers(args.sector_size_bytes)?, |p| p.layers);
     let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
         proof_configuration(args, registered_proof);
     let cache_dir = args.work_dir.join("zigzag-cache");
@@ -1172,6 +1216,12 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
             Some(SEED),
         )
     })?;
+    if profile.is_some() {
+        ensure!(
+            commit.proof.len() == 10 * 192,
+            "zigzag-512 must prove all ten partitions"
+        );
+    }
 
     let verify = measure(&mut phases, "verify", || {
         zigzag::zigzag_verify_seal::<zigzag::constants::ZigZagTree>(
@@ -1218,6 +1268,7 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         porep_partitions,
         minimum_total_challenges,
         challenges_per_layer_per_partition,
+        profile,
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: commit.proof.len(),
@@ -1229,6 +1280,9 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
 }
 
 fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zigzag::PoRepConfig {
+    if args.profile.is_some() {
+        return zigzag_512_profile::config();
+    }
     zigzag::PoRepConfig::new_groth16(
         args.sector_size_bytes,
         registered_proof.as_v1_config().porep_id,

@@ -10,14 +10,28 @@ backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
 sector_size="$(devnet_normalize_sector_size "${sector_size}")"
 mode="${3:-full}"
+bench_profile="${BENCH_PROOF_MICRO_PROFILE:-}"
+case "${bench_profile}" in
+  ""|zigzag-512) ;;
+  *) devnet_die "unknown proof microbench profile: ${bench_profile}" ;;
+esac
+if [[ "${bench_profile}" == "zigzag-512" ]]; then
+  [[ "${backend}" == "zigzag" && "${sector_size}" == "512mib" && "${mode}" == "full" ]] ||
+    devnet_die "zigzag-512 requires zigzag 512mib full"
+fi
+profile_args=()
+[[ -z "${bench_profile}" ]] || profile_args=(--profile "${bench_profile}")
 case "${mode}" in
   full|prepare-fixture|unseal-only) ;;
   *) devnet_die "invalid proof microbench mode: ${mode}; expected full, prepare-fixture, or unseal-only" ;;
 esac
 
 microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
-if [[ -z "${microbench_layers}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
+if [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
   microbench_layers="11"
+fi
+if [[ -n "${bench_profile}" && -n "${microbench_layers}" ]]; then
+  devnet_die "zigzag-512 has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
 fi
 case "${microbench_layers}" in
   ""|2|11|15|19|22|25) ;;
@@ -78,6 +92,7 @@ docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 safe_sector="$(printf '%s' "${sector_size}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
 run_name="bench-proof-micro-${backend}-${safe_sector}"
+[[ -z "${bench_profile}" ]] || run_name="${run_name}-${bench_profile}"
 if [[ "${mode}" != "full" ]]; then
   run_name="${run_name}-${mode}"
 fi
@@ -745,6 +760,7 @@ docker run --rm \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/prewarm-work \
     --prewarm-only \
+    "${profile_args[@]}" \
   > "${prewarm_summary_json}" 2> "${prewarm_stderr_log}" &
 prewarm_pid="$!"
 prewarm_progress_pid=""
@@ -765,6 +781,20 @@ else
   devnet_die "proof microbench parameter prewarm failed with exit code ${status}; see ${prewarm_stderr_log}"
 fi
 bench_finalize_telemetry "${prewarm_telemetry_ndjson}" "${prewarm_telemetry_summary_json}"
+if [[ "${bench_profile}" == "zigzag-512" ]]; then
+  jq -e '
+    .profile.name == "zigzag-512"
+    and .profile.padded_sector_bytes == 536870912
+    and .profile.nodes == 16777216
+    and .profile.binary_tree_depth == 24
+    and .profile.layers == 11
+    and .profile.partitions == 10
+    and .profile.minimum_challenges == 176
+    and .profile.challenges_per_layer_per_partition == 18
+    and .profile.total_challenge_instances == 1980
+    and .verifying_key_matches_params == true
+  ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-512 prewarm used wrong parameters"
+fi
 
 rm -f -- "${measured_cidfile}"
 measured_started_ms="$(bench_epoch_ms)"
@@ -777,6 +807,7 @@ if docker run --rm \
     --backend "${backend}" \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/work \
+    "${profile_args[@]}" \
   > "${summary_json}" 2> "${stderr_log}"; then
   measured_finished_ms="$(bench_epoch_ms)"
   :
@@ -801,6 +832,17 @@ fi
 
 jq -e '.verify_seal == true and .raw_unseal_bytes_match == true' "${summary_json}" >/dev/null ||
   devnet_die "proof microbench correctness failed; see ${summary_json}"
+if [[ "${bench_profile}" == "zigzag-512" ]]; then
+  jq -e --slurpfile prewarm "${prewarm_summary_json}" '
+    .profile == $prewarm[0].profile
+    and .porep_layers == 11
+    and .porep_partitions == 10
+    and .minimum_total_challenges == 176
+    and .challenges_per_layer_per_partition == 18
+    and .proof_len == 1920
+    and .unsealed_bytes == 532676608
+  ' "${summary_json}" >/dev/null || devnet_die "zigzag-512 seal/prove/verify/unseal parameters differ from prewarm"
+fi
 bench_finalize_telemetry "${telemetry_ndjson}" "${telemetry_summary_json}"
 bench_write_provenance \
   "full" \
@@ -837,6 +879,7 @@ summary_md="${run_dir}/summary.md"
       "| Field | Value |",
       "| --- | --- |",
       "| Backend | `" + .backend + "` |",
+      "| Bench profile | `" + (.profile.name // "default") + "` |",
       "| Sector size | `" + (.sector_size_label | tostring) + "` / " + bytes(.sector_size_bytes) + " |",
       "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
       "| PoRep layers | `" + (.porep_layers | tostring) + "` |",

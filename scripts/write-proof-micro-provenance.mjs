@@ -112,6 +112,7 @@ function selectedEnvironment() {
   const names = [
     "BENCH_PARENT_CACHE_WINDOW_NODES",
     "BENCH_PROOF_MICRO_LAYERS",
+    "BENCH_PROOF_MICRO_PROFILE",
     "BENCH_PROOF_PARAMETERS_DIR",
     "BENCH_STACKED_PARENT_CACHE_DIR",
     "BENCH_STACKED_USE_MULTICORE_SDR",
@@ -203,7 +204,7 @@ export function buildProvenance({
         telemetry_source_override_path: telemetrySourcePath,
         cargo_profile: "release",
         cargo_default_features: false,
-        cargo_features: ["multicore-sdr"],
+        cargo_features: ["multicore-sdr", "zigzag-bench"],
       },
     },
     machine: {

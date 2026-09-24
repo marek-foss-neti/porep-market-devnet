@@ -61,6 +61,9 @@ bench-retrieval mode='both' deployment='active':
 bench-proof-micro backend='stacked' sector_size='8mib':
     @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}'
 
+bench-zigzag-512:
+    @bash scripts/bench-zigzag-512.sh
+
 bench-proof-micro-prepare-fixture backend='stacked' sector_size='8mib' fixture='':
     @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}' prepare-fixture '{{fixture}}'
 

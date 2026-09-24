@@ -68,6 +68,7 @@ storage-proofs-update = { path = "../../rust-fil-proofs/storage-proofs-update" }
 tempfile = "3.19.1"
 
 [features]
+zigzag-bench = ["filecoin-proofs-zigzag/zigzag-bench"]
 default = ["cuda", "multicore-sdr", "fvm"]
 fvm = [
   "fvm2",
