@@ -16,29 +16,33 @@ pinned managed sources from `versions.lock.yaml`, including
 
 ## Bare VPS
 
-On a fresh VPS, first place this repo on the local NVMe filesystem. If
-you are logged in as root, run the `apt-get` commands directly:
+On a fresh Debian or Ubuntu VPS, first place this repo on the local NVMe
+filesystem. Run the script directly for the first bootstrap because `just` may
+not be installed yet. If you are logged in as root, run the `apt-get` commands
+directly:
 
 ```sh
 apt-get update
 apt-get install -y git ca-certificates
 git clone --branch test-zigzag --single-branch https://github.com/marek-foss-neti/porep-market-devnet.git
 cd porep-market-devnet
-BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1 bash scripts/bootstrap.sh
+bash scripts/bootstrap.sh
 ```
 
 `scripts/bootstrap.sh` installs the VPS host tools, pinned Node/npm, `just`,
 Docker Engine, Docker Compose, and Buildx, then reports CPU, RAM, Docker root,
-and free space against the recommended 32GiB microbench floor. If Docker should
-store images on a specific NVMe mount, set `BOOTSTRAP_DOCKER_DATA_ROOT` before
-bootstrap.
+and free space. Subsequent runs can use `just bootstrap`. If Docker should store
+images on a specific NVMe mount, set `BOOTSTRAP_DOCKER_DATA_ROOT` before bootstrap.
+The optional `BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1` gate is for a full 32 GiB
+microbenchmark host; do not enable it for the 512 MiB `zigzag-512` baseline VPS.
+Without that gate, resource warnings against the 32 GiB floor are informational.
 
 Long bootstrap steps print a heartbeat every 15 seconds and write command logs
 under `.runtime/devnet/logs/`. To make the terminal chattier while provisioning
 a paid VPS, lower the interval, for example:
 
 ```sh
-BOOTSTRAP_PROGRESS_INTERVAL_SECONDS=5 BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1 bash scripts/bootstrap.sh
+BOOTSTRAP_PROGRESS_INTERVAL_SECONDS=5 bash scripts/bootstrap.sh
 ```
 
 If the VPS has two local NVMe disks and the root filesystem is already on LVM,

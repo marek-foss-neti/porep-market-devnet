@@ -55,7 +55,7 @@ is_debian_linux() {
   (
     # shellcheck disable=SC1091
     . /etc/os-release
-    [[ "${ID:-}" == debian || " ${ID_LIKE:-} " == *" debian "* ]]
+    [[ "${ID:-}" == debian || "${ID:-}" == ubuntu ]]
   )
 }
 
@@ -265,31 +265,33 @@ ensure_just() {
   progress "$(just --version) is ready"
 }
 
-debian_codename() {
-  if [[ -n "${BOOTSTRAP_DEBIAN_CODENAME:-}" ]]; then
-    printf '%s\n' "${BOOTSTRAP_DEBIAN_CODENAME}"
-    return 0
-  fi
+install_docker_apt_repository() {
+  local tmp sources_file architecture codename distribution
   # shellcheck disable=SC1091
   . /etc/os-release
-  [[ -n "${VERSION_CODENAME:-}" ]] || die "Debian VERSION_CODENAME is missing; set BOOTSTRAP_DEBIAN_CODENAME"
-  printf '%s\n' "${VERSION_CODENAME}"
-}
-
-install_docker_apt_repository() {
-  local tmp sources_file architecture codename
+  case "${ID:-}" in
+    debian)
+      distribution=debian
+      codename="${BOOTSTRAP_DEBIAN_CODENAME:-${VERSION_CODENAME:-}}"
+      ;;
+    ubuntu)
+      distribution=ubuntu
+      codename="${BOOTSTRAP_UBUNTU_CODENAME:-${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}}"
+      ;;
+    *) die "Docker apt installation supports Debian and Ubuntu only" ;;
+  esac
+  [[ -n "${codename}" ]] || die "${distribution} codename is missing from /etc/os-release"
   architecture="$(dpkg --print-architecture)"
-  codename="$(debian_codename)"
   tmp="$(mktemp -d)"
   (
     trap 'rm -rf "${tmp}"' EXIT
-    progress "configuring Docker apt repository for Debian ${codename}/${architecture}"
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o "${tmp}/docker.asc"
+    progress "configuring Docker apt repository for ${distribution} ${codename}/${architecture}"
+    curl -fsSL "https://download.docker.com/linux/${distribution}/gpg" -o "${tmp}/docker.asc"
     run_privileged install -D -m 0644 "${tmp}/docker.asc" /etc/apt/keyrings/docker.asc
     sources_file="${tmp}/docker.sources"
     {
       printf 'Types: deb\n'
-      printf 'URIs: https://download.docker.com/linux/debian\n'
+      printf 'URIs: https://download.docker.com/linux/%s\n' "${distribution}"
       printf 'Suites: %s\n' "${codename}"
       printf 'Components: stable\n'
       printf 'Architectures: %s\n' "${architecture}"
@@ -690,7 +692,7 @@ main() {
   progress "starting bootstrap in ${repository_root}"
 
   if can_install_system_deps; then
-    is_debian_linux || die "automatic system dependency installation is supported only on Debian-like Linux hosts"
+    is_debian_linux || die "automatic system dependency installation is supported only on Debian or Ubuntu Linux hosts"
     install_debian_base_packages
   else
     progress "system dependency installation disabled; checking existing host tools"

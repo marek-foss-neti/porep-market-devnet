@@ -517,7 +517,7 @@ test("public status command is bounded and reports a stopped project precisely",
   assert.match(statusScript, /127\.0\.0\.1:22310\/health/);
 });
 
-test("bootstrap provisions a bare Debian host for proof microbenchmarks", async () => {
+test("bootstrap provisions a bare Debian or Ubuntu host for proof microbenchmarks", async () => {
   const [bootstrapScript, staticChecks] = await Promise.all([
     readFile(bootstrapScriptPath, "utf8"),
     readFile(join(repositoryRoot, "scripts", "static-checks.sh"), "utf8"),
@@ -529,8 +529,11 @@ test("bootstrap provisions a bare Debian host for proof microbenchmarks", async 
   assert.match(bootstrapScript, /https:\/\/nodejs\.org\/dist\/v\$\{version\}\/SHASUMS256\.txt/);
   assert.match(bootstrapScript, /sha256sum -c/);
   assert.match(bootstrapScript, /npm install -g "npm@\$\{expected_npm\}"/);
-  assert.match(bootstrapScript, /https:\/\/download\.docker\.com\/linux\/debian\/gpg/);
-  assert.match(bootstrapScript, /URIs: https:\/\/download\.docker\.com\/linux\/debian/);
+  assert.match(bootstrapScript, /distribution=debian/);
+  assert.match(bootstrapScript, /distribution=ubuntu/);
+  assert.match(bootstrapScript, /UBUNTU_CODENAME/);
+  assert.match(bootstrapScript, /https:\/\/download\.docker\.com\/linux\/\$\{distribution\}\/gpg/);
+  assert.match(bootstrapScript, /URIs: https:\/\/download\.docker\.com\/linux\/%s/);
   assert.match(bootstrapScript, /docker-ce docker-ce-cli containerd\.io docker-buildx-plugin docker-compose-plugin/);
   assert.match(bootstrapScript, /docker buildx inspect --bootstrap/);
   assert.match(bootstrapScript, /docker compose version/);
