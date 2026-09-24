@@ -311,6 +311,11 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiMicrobenchOverride, /decoding full sealed sector before writing requested range/);
   assert.match(filecoinFfiMicrobenchOverride, /get_unsealed_range_mapped/);
   assert.match(filecoinFfiCargoTomlOverride, /fvm-4\.8\.2-zigzag/);
+  assert.match(
+    filecoinFfiCargoTomlOverride,
+    /\[\[bin\]\]\s+name = "porep-proof-microbench"\s+path = "src\/bin\/porep-proof-microbench\.rs"\s+required-features = \["zigzag-bench"\]/,
+  );
+  assert.doesNotMatch(filecoinFfiCargoTomlOverride, /^default = .*"zigzag-bench"/m);
   assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_USE_ZIGZAG/);
   assert.match(fvmZigzagKernelOverride, /FIL_PROOFS_ZIGZAG_SIDECAR_DIR/);
   assert.match(fvmZigzagKernelOverride, /read_zigzag_proof_sidecar/);
@@ -342,6 +347,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(dockerfile, /--bin porep-proof-microbench/);
   assert.match(dockerfile, /COPY --from=curio-builder .*porep-proof-microbench \/usr\/local\/bin\/porep-proof-microbench/);
   assert.match(dockerfile, /--bin porep-proof-microbench[\s\S]*--locked/);
+  assert.match(dockerfile, /--bin porep-proof-microbench[\s\S]*--features multicore-sdr,zigzag-bench/);
   assert.match(dockerfile, /\/var\/tmp\/filecoin-zigzag-proof-sidecars/);
   assert.match(dockerfile, /COPY --from=harness-overlay source-overrides\/fvm-4\.8\.2-zigzag\/ \/opt\/curio\/extern\/fvm-4\.8\.2-zigzag\//);
   assert.doesNotMatch(dockerfile, /git apply/);

@@ -1,9 +1,7 @@
 # ZigZag `zigzag-512` baseline
 
-This is one additional benchmark profile for the first stage of
-`x-files/PROMPT-REPLAN.md`. It runs ZigZag only, using the CPU path. The padded
-sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag
-configuration: 11 layers, 10 partitions, minimum 176 challenges, and 18
+This is one additional baseline benchmark profile. It runs ZigZag only,
+using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag configuration: 11 layers, 10 partitions, minimum 176 challenges, and 18
 challenges per layer in each partition (1,980 instances). The graph has
 16,777,216 nodes and binary tree paths of depth 24. The graph degrees, hashers,
 KDF, API version, PoRep variant, and `porep_id` follow the 32 GiB reference.

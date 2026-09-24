@@ -17,6 +17,12 @@ publish = false
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+# Ordinary Lotus/Curio FFI builds must not compile the benchmark-only profile.
+[[bin]]
+name = "porep-proof-microbench"
+path = "src/bin/porep-proof-microbench.rs"
+required-features = ["zigzag-bench"]
+
 [dependencies]
 bls-signatures = { version = "0.15.0", default-features = false, features = [
   "blst",
