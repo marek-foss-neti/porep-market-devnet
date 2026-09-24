@@ -160,6 +160,7 @@ export function buildProvenance({
     "bin",
     "porep-proof-microbench.rs",
   );
+  const ioSourcePath = resolve(dirname(microbenchSourcePath), "support", "porep_microbench_io.rs");
   const summarizerPath = resolve(repositoryRoot, "scripts", "summarize-proof-micro-telemetry.mjs");
   const provenanceWriterPath = resolve(repositoryRoot, "scripts", "write-proof-micro-provenance.mjs");
   const reportComposerPath = resolve(repositoryRoot, "scripts", "compose-proof-micro-report.mjs");
@@ -201,6 +202,7 @@ export function buildProvenance({
         container_path: "/usr/local/bin/porep-proof-microbench",
         build_workdir: "/opt/curio/extern/filecoin-ffi/rust",
         source_override_path: microbenchSourcePath,
+        io_source_override_path: ioSourcePath,
         telemetry_source_override_path: telemetrySourcePath,
         cargo_profile: "release",
         cargo_default_features: false,
@@ -223,6 +225,7 @@ export function buildProvenance({
     instrumentation: {
       runner_sha256: sha256File(runnerPath),
       microbench_source_sha256: sha256File(microbenchSourcePath),
+      rust_io_sha256: sha256File(ioSourcePath),
       rust_telemetry_sha256: sha256File(telemetrySourcePath),
       telemetry_summarizer_sha256: sha256File(summarizerPath),
       provenance_writer_sha256: sha256File(provenanceWriterPath),

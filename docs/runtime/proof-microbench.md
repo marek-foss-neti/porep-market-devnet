@@ -29,9 +29,9 @@ Each generated `summary.md` records both the Stacked SDR replication mode and
 the effective `FIL_PROOFS_USE_MULTICORE_SDR` value.
 
 By default the microbench is intentionally limited to `2kib` and `8mib` sectors,
-because it performs a complete local seal/prove/verify/unseal cycle and keeps
-the generated user bytes for exact recovery checks. Larger registered sector
-sizes can be enabled explicitly:
+because it performs a complete local seal/prove/verify/unseal cycle, including
+the proof library's circuit and parameter memory requirements. Larger registered
+sector sizes can be enabled explicitly:
 
 ```bash
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro zigzag 512mib
@@ -41,6 +41,29 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 512
 Use that opt-in only on a machine with enough memory, disk, proof parameters, and
 time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
+
+The full runner generates the deterministic input on demand and checks unsealed
+bytes as they are written, without retaining full input/output copies. The check
+is byte-for-byte and requires both the actual and API-reported output lengths to
+match the requested length. ZigZag keeps one mutable sector buffer during
+pre-commit, releases it after persisting the replica and before proving, then
+reads the persisted replica into one buffer for in-place unsealing. This reduces
+runner overhead; it does not change PoRep or its internal allocations.
+
+`raw_unseal` includes the streaming byte check for both backends, as
+`raw_unseal_retrieval` already does in `unseal-only` mode. Older full-run reports
+compared retained buffers after the timed phase, so establish a fresh baseline
+with this runner before evaluating PoRep optimizations. The separate read of the
+ZZ replica remains outside `raw_unseal`, as before. Source hashes in provenance
+include the runner's streaming I/O module.
+
+The streaming I/O correctness tests can also run without proof dependencies:
+
+```bash
+io_test_bin="$(mktemp -d)/microbench-io-tests"
+rustc --edition=2021 --test source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_io.rs -o "$io_test_bin"
+"$io_test_bin"
+```
 
 The full `512mib` proof microbench is an experiment that runs both ZigZag and
 Stacked with 11 PoRep layers instead of the default small-sector value of 2.

@@ -182,7 +182,9 @@ const sourceOverrideInputs = [
   "source-overrides/filecoin-ffi/rust/Cargo.lock",
   "source-overrides/filecoin-ffi/rust/Cargo.toml",
   "source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
+  "source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_io.rs",
   "source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_telemetry.rs",
+  "source-overrides/filecoin-ffi/rust/src/bin/support/zigzag_512_profile.rs",
   "source-overrides/filecoin-ffi/rust/src/proofs/api.rs",
   "source-overrides/fvm-4.8.2-zigzag/Cargo.toml",
   "source-overrides/fvm-4.8.2-zigzag/src/account_actor.rs",
@@ -784,7 +786,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(reportComposer, /unattributed_outer_wall_ms/);
   assert.match(provenanceWriter, /tracked_patch_sha256/);
   assert.match(provenanceWriter, /zigzag_source_overrides_sha256/);
-  assert.match(provenanceWriter, /cargo_features: \["multicore-sdr"\]/);
+  assert.match(provenanceWriter, /cargo_features: \["multicore-sdr", "zigzag-bench"\]/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);

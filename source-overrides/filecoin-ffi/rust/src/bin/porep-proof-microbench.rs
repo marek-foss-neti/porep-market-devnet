@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Cursor, Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +26,10 @@ use storage_proofs_porep_zigzag::{
         encode as zigzag_encode, prepare_parent_table, ZigZagDrgPoRep,
     },
 };
+
+#[path = "support/porep_microbench_io.rs"]
+mod microbench_io;
+use microbench_io::{DeterministicReader, DeterministicVerifySink};
 
 #[path = "support/porep_microbench_telemetry.rs"]
 mod microbench_telemetry;
@@ -1054,15 +1058,13 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
     let staged_path = args.work_dir.join("staged.dat");
     let sealed_path = args.work_dir.join("sealed.dat");
 
-    let raw = deterministic_bytes(usize::from(ApiUnpaddedBytesAmount::from(
-        ApiPaddedBytesAmount(args.sector_size_bytes),
-    )));
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
     let mut staged = File::create(&staged_path).context("create staged sector")?;
     let (piece_info, _written) = seal::write_and_preprocess(
         registered_proof,
-        Cursor::new(&raw),
+        DeterministicReader::new(0, raw_len),
         &mut staged,
-        ApiUnpaddedBytesAmount(raw.len() as u64),
+        ApiUnpaddedBytesAmount(raw_len),
     )?;
     let piece_infos = vec![piece_info];
     drop(staged);
@@ -1119,19 +1121,19 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         )
     })?;
 
-    let mut unsealed = Vec::new();
-    measure(&mut phases, "raw_unseal", || {
+    let mut verifier = DeterministicVerifySink::new(0);
+    let unsealed = measure(&mut phases, "raw_unseal", || {
         seal::get_unsealed_range_mapped(
             registered_proof,
             &cache_dir,
             &sealed_path,
-            &mut unsealed,
+            &mut verifier,
             PROVER_ID,
             sector_id,
             pre_commit.comm_d,
             TICKET,
             ApiUnpaddedByteIndex(0),
-            ApiUnpaddedBytesAmount(raw.len() as u64),
+            ApiUnpaddedBytesAmount(raw_len),
         )
     })?;
 
@@ -1150,9 +1152,9 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: proof.len(),
-        unsealed_bytes: unsealed.len(),
+        unsealed_bytes: usize::try_from(verifier.written).context("unsealed byte count overflow")?,
         verify_seal: verify,
-        raw_unseal_bytes_match: raw == unsealed,
+        raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
         phases,
     })
 }
@@ -1170,14 +1172,15 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     let sealed_path = args.work_dir.join("zigzag-sealed.dat");
 
     let porep_config = zigzag_porep_config(args, registered_proof);
-    let raw = deterministic_bytes(usize::from(zigzag::UnpaddedBytesAmount::from(
-        zigzag::PaddedBytesAmount(args.sector_size_bytes),
-    )));
-    let mut staged = Vec::new();
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+    // This is the mutable sector required by the ZZ API, not a retained copy of raw input.
+    let mut staged = Vec::with_capacity(
+        usize::try_from(args.sector_size_bytes).context("sector size exceeds address space")?,
+    );
     let (piece_info, _written) = zigzag::add_piece(
-        Cursor::new(&raw),
+        DeterministicReader::new(0, raw_len),
         &mut staged,
-        zigzag::UnpaddedBytesAmount(raw.len() as u64),
+        zigzag::UnpaddedBytesAmount(raw_len),
         &[],
     )?;
     let piece_infos = vec![piece_info];
@@ -1198,6 +1201,8 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     })?;
     drop(state);
     fs::write(&sealed_path, &staged).context("write ZigZag sealed sector")?;
+    // Proving reopens its cache; the runner no longer needs this sector buffer.
+    drop(staged);
 
     let pre_commit = measure(&mut phases, "pre_commit_phase2", || {
         zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)
@@ -1237,13 +1242,10 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         )
     })?;
 
-    let mut sealed = Vec::new();
-    File::open(&sealed_path)
-        .context("open ZigZag sealed sector")?
-        .read_to_end(&mut sealed)
-        .context("read ZigZag sealed sector")?;
-    let mut unsealed = Vec::new();
-    measure(&mut phases, "raw_unseal", || {
+    // Check the persisted replica, using one sector buffer for in-place decoding.
+    let mut sealed = fs::read(&sealed_path).context("read ZigZag sealed sector")?;
+    let mut verifier = DeterministicVerifySink::new(0);
+    let unsealed = measure(&mut phases, "raw_unseal", || {
         zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
             &porep_config,
             PROVER_ID,
@@ -1251,9 +1253,9 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
             TICKET,
             pre_commit.comm_d,
             &mut sealed,
-            &mut unsealed,
+            &mut verifier,
             zigzag::UnpaddedByteIndex(0),
-            zigzag::UnpaddedBytesAmount(raw.len() as u64),
+            zigzag::UnpaddedBytesAmount(raw_len),
         )
     })?;
 
@@ -1272,9 +1274,9 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: commit.proof.len(),
-        unsealed_bytes: unsealed.len(),
+        unsealed_bytes: usize::try_from(verifier.written).context("unsealed byte count overflow")?,
         verify_seal: verify,
-        raw_unseal_bytes_match: raw == unsealed,
+        raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
         phases,
     })
 }
@@ -1333,89 +1335,6 @@ fn registered_proof_for_sector_size(sector_size: u64) -> Result<RegisteredSealPr
         34_359_738_368 => RegisteredSealProof::StackedDrg32GiBV1_1,
         _ => bail!("unsupported registered sector size: {sector_size}"),
     })
-}
-
-fn deterministic_bytes(len: usize) -> Vec<u8> {
-    (0..len)
-        .map(|index| deterministic_byte(index as u64))
-        .collect()
-}
-
-fn deterministic_byte(index: u64) -> u8 {
-    (index
-        .wrapping_mul(31)
-        .wrapping_add(index >> 3)
-        .wrapping_add(17)
-        & 0xff) as u8
-}
-
-struct DeterministicReader {
-    position: u64,
-    remaining: u64,
-}
-
-impl DeterministicReader {
-    fn new(offset: u64, len: u64) -> Self {
-        Self {
-            position: offset,
-            remaining: len,
-        }
-    }
-}
-
-impl Read for DeterministicReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.remaining == 0 {
-            return Ok(0);
-        }
-        let n = buf.len().min(self.remaining as usize);
-        for (index, byte) in buf[..n].iter_mut().enumerate() {
-            *byte = deterministic_byte(self.position + index as u64);
-        }
-        self.position += n as u64;
-        self.remaining -= n as u64;
-        Ok(n)
-    }
-}
-
-struct DeterministicVerifySink {
-    offset: u64,
-    written: u64,
-    mismatch_at: Option<u64>,
-}
-
-impl DeterministicVerifySink {
-    fn new(offset: u64) -> Self {
-        Self {
-            offset,
-            written: 0,
-            mismatch_at: None,
-        }
-    }
-
-    fn matches_expected(&self, expected_len: u64) -> bool {
-        self.written == expected_len && self.mismatch_at.is_none()
-    }
-}
-
-impl Write for DeterministicVerifySink {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.mismatch_at.is_none() {
-            for (index, actual) in buf.iter().enumerate() {
-                let position = self.offset + self.written + index as u64;
-                if *actual != deterministic_byte(position) {
-                    self.mismatch_at = Some(position);
-                    break;
-                }
-            }
-        }
-        self.written += buf.len() as u64;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 fn fixture_manifest_path(args: &Args) -> PathBuf {
