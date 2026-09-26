@@ -3433,6 +3433,7 @@ name = "storage-proofs-porep"
 version = "19.1.0"
 dependencies = [
  "anyhow",
+ "bellpepper-core",
  "bellperson",
  "bincode",
  "blake2b_simd",
@@ -3442,6 +3443,7 @@ dependencies = [
  "byteorder",
  "chacha20",
  "crossbeam",
+ "ec-gpu-gen 0.7.1",
  "fdlimit",
  "ff",
  "filecoin-hashers",
@@ -3449,6 +3451,7 @@ dependencies = [
  "fs2",
  "generic-array 0.14.7",
  "glob",
+ "group",
  "hex",
  "hwloc2",
  "lazy_static",
@@ -3460,7 +3463,9 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "num_cpus",
+ "pairing",
  "pretty_assertions",
+ "rand_core",
  "rayon",
  "rustversion",
  "serde",
@@ -3468,6 +3473,7 @@ dependencies = [
  "sha2 0.10.8",
  "sha2raw",
  "storage-proofs-core",
+ "tempfile",
  "yastl",
 ]
 
