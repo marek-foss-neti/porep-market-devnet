@@ -251,6 +251,8 @@ ARG LOTUS_COMMIT
 ARG BLST_COMMIT
 ARG DOCKERFILE_SHA256
 ARG RUST_FIL_PROOFS_COMMIT
+ARG RUST_FIL_PROOFS_SOURCE_SHA256
+ARG RUST_TOOLCHAIN_IMAGE
 ARG ZIGZAG_SOURCE_OVERRIDES_SHA256
 ARG ZIGZAG_RUST_FIL_PROOFS_API_SHA256
 
@@ -260,6 +262,8 @@ LABEL org.opencontainers.image.revision="${CURIO_COMMIT}" \
       io.porep-market.blst.commit="${BLST_COMMIT}" \
       io.porep-market.dockerfile.sha256="${DOCKERFILE_SHA256}" \
       io.porep-market.zigzag.rust-fil-proofs.commit="${RUST_FIL_PROOFS_COMMIT}" \
+      io.porep-market.zigzag.rust-fil-proofs.source-sha256="${RUST_FIL_PROOFS_SOURCE_SHA256}" \
+      io.porep-market.rust-toolchain.image="${RUST_TOOLCHAIN_IMAGE}" \
       io.porep-market.zigzag.source-overrides.sha256="${ZIGZAG_SOURCE_OVERRIDES_SHA256}" \
       io.porep-market.zigzag.rust-fil-proofs.api.sha256="${ZIGZAG_RUST_FIL_PROOFS_API_SHA256}"
 

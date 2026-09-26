@@ -917,6 +917,23 @@ devnet_rust_fil_proofs_source_path() {
   printf '%s\n' "${resolved}"
 }
 
+devnet_rust_fil_proofs_content_sha256() {
+  local source="$1"
+  [[ -d "${source}" && ! -L "${source}" ]] ||
+    devnet_die "rust-fil-proofs source for digest is missing"
+  (
+    cd "${source}"
+    find . -type f \
+      ! -path './.git/*' \
+      ! -path './target/*' \
+      ! -path './.DS_Store' -print |
+      LC_ALL=C sort | while IFS= read -r path; do
+        printf '%s\n' "${path}"
+        shasum -a 256 "${path}" | awk '{print $1}'
+      done
+  ) | shasum -a 256 | awk '{print $1}'
+}
+
 devnet_zigzag_source_override_required_paths() {
   cat <<'EOF'
 source-overrides/curio/cmd/sptool/toolbox_deal_client.go
@@ -966,6 +983,16 @@ devnet_zigzag_source_overrides_sha256() {
   ) | shasum -a 256 | awk '{print $1}'
 }
 
+devnet_zigzag_microbench_overrides_sha256() {
+  local zigzag_lock="${DEVNET_ROOT}/source-overrides/zigzag-bench/Cargo.lock"
+  [[ -f "${zigzag_lock}" && ! -L "${zigzag_lock}" ]] ||
+    devnet_die "dedicated ZigZag benchmark Cargo.lock is missing"
+  {
+    devnet_zigzag_source_overrides_sha256
+    shasum -a 256 "${zigzag_lock}" | awk '{print $1}'
+  } | shasum -a 256 | awk '{print $1}'
+}
+
 devnet_docker_surface_sha256() {
   local path
   {
@@ -985,6 +1012,56 @@ devnet_docker_surface_sha256() {
     printf 'source-overrides\n'
     devnet_zigzag_source_overrides_sha256
   } | shasum -a 256 | awk '{print $1}'
+}
+
+devnet_proof_microbench_manifest_for_backend() {
+  case "$1" in
+    zigzag) printf '%s\n' "${DEVNET_BUILD_DIR}/zigzag-microbench-images.json" ;;
+    stacked) printf '%s\n' "${DEVNET_BUILD_DIR}/images.json" ;;
+    *) devnet_die "unknown proof microbench backend: $1" ;;
+  esac
+}
+
+devnet_proof_microbench_image_for_backend() {
+  local backend="$1"
+  local manifest image curio_commit source_sha source_relative expected_id
+  manifest="$(devnet_proof_microbench_manifest_for_backend "${backend}")"
+  [[ -f "${manifest}" && ! -L "${manifest}" ]] ||
+    devnet_die "proof microbench image manifest is missing for ${backend}: ${manifest}"
+  if [[ "${backend}" == zigzag ]]; then
+    [[ "$(shasum -a 256 "${DEVNET_ROOT}/docker/zigzag-microbench.Dockerfile" | awk '{print $1}')" == "$(jq -r '.dockerfileSha256 // empty' "${manifest}")" ]] ||
+      devnet_die "ZigZag microbench Dockerfile differs from built image"
+    [[ "$(devnet_zigzag_microbench_overrides_sha256)" == "$(jq -r '.zigzagSourceOverridesSha256 // empty' "${manifest}")" ]] ||
+      devnet_die "ZigZag microbench overlays differ from built image"
+    image="$(jq -r '.imageReference // empty' "${manifest}")"
+    [[ "${image}" == "${DEVNET_IMAGE_NAMESPACE}/zigzag-microbench:"* ]] ||
+      devnet_die "ZigZag microbench manifest has invalid image reference"
+  else
+    curio_commit="$(jq -r '.curioCommit // empty' "${manifest}")"
+    [[ "${curio_commit}" =~ ^[0-9a-f]{40}$ ]] ||
+      devnet_die "image manifest has no Curio commit"
+    [[ "$(devnet_docker_surface_sha256)" == "$(jq -r '.dockerfileSha256 // empty' "${manifest}")" ]] ||
+      devnet_die "image manifest is stale for the current Docker/source surface; run just build"
+    [[ "$(devnet_zigzag_source_overrides_sha256)" == "$(jq -r '.zigzagSourceOverridesSha256 // empty' "${manifest}")" ]] ||
+      devnet_die "image manifest is stale for the current ZigZag source overrides; run just build"
+    image="${DEVNET_IMAGE_NAMESPACE}/curio-all-in-one:${curio_commit:0:12}"
+  fi
+  source_sha="$(jq -r '.rustFilProofsSourceSha256 // empty' "${manifest}")"
+  source_relative="$(jq -r '.rustFilProofsSourceRelative // empty' "${manifest}")"
+  [[ "${source_sha}" =~ ^[0-9a-f]{64}$ && -n "${source_relative}" ]] ||
+    devnet_die "image manifest has invalid rust-fil-proofs source provenance"
+  [[ "${source_relative}" != /* && "${source_relative}" != *..* ]] ||
+    devnet_die "image manifest has unsafe rust-fil-proofs source path"
+  [[ "$(devnet_rust_fil_proofs_content_sha256 "${DEVNET_ROOT}/${source_relative}")" == "${source_sha}" ]] ||
+    devnet_die "rust-fil-proofs source differs from the built image; rebuild the selected image"
+  expected_id="$(jq -r --arg image "${image}" '.images[] | select(.reference == $image) | .id' "${manifest}")"
+  [[ "${expected_id}" == sha256:* ]] ||
+    devnet_die "image manifest has no image ID for ${image}"
+  [[ "$(docker image inspect "${image}" --format '{{.Id}}')" == "${expected_id}" ]] ||
+    devnet_die "image ID differs from its manifest: ${image}"
+  docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench >/dev/null 2>&1' ||
+    devnet_die "image ${image} does not contain porep-proof-microbench; rebuild the selected image"
+  printf '%s\n' "${image}"
 }
 
 devnet_rust_fil_proofs_zigzag_api_sha256() {

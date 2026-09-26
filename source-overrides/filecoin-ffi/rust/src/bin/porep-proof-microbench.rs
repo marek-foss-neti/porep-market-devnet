@@ -177,6 +177,7 @@ struct ParamPrewarmSummary {
     parameter_cache_verifying_key_path: String,
     verifying_key_matches_params: bool,
     verifying_key_rewritten: bool,
+    parameter_cache_hit: Option<bool>,
     wall_ms: u128,
     cpu_ms: u128,
     max_rss_bytes: u64,
@@ -190,6 +191,7 @@ struct ParamPrewarmResult {
     verifying_key_path: PathBuf,
     verifying_key_matches_params: bool,
     verifying_key_rewritten: bool,
+    parameter_cache_hit: Option<bool>,
 }
 
 fn main() -> Result<()> {
@@ -513,6 +515,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         parameter_cache_verifying_key_path: prewarm.verifying_key_path.display().to_string(),
         verifying_key_matches_params: prewarm.verifying_key_matches_params,
         verifying_key_rewritten: prewarm.verifying_key_rewritten,
+        parameter_cache_hit: prewarm.parameter_cache_hit,
         wall_ms: started.elapsed().as_millis(),
         cpu_ms: process_cpu_ms().saturating_sub(cpu_before),
         max_rss_bytes: max_rss_bytes(),
@@ -626,9 +629,19 @@ fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
         verifying_key_path,
         verifying_key_matches_params: true,
         verifying_key_rewritten,
+        parameter_cache_hit: None,
     })
 }
 
+#[cfg(not(feature = "zigzag-setup-status"))]
+fn prewarm_zigzag_params(
+    _args: &Args,
+    _registered_proof: RegisteredSealProof,
+) -> Result<ParamPrewarmResult> {
+    bail!("ZigZag parameter prewarm requires the dedicated ZigZag microbench image")
+}
+
+#[cfg(feature = "zigzag-setup-status")]
 fn prewarm_zigzag_params(
     args: &Args,
     registered_proof: RegisteredSealProof,
@@ -674,17 +687,23 @@ fn prewarm_zigzag_params(
         zigzag::constants::DefaultPieceHasher,
     >::get_param_metadata(circuit.clone(), &public_params)
     .context("cache ZigZag parameter metadata")?;
-    let groth_params = ZigZagCompound::<
+    let (groth_params, parameter_cache_hit) = ZigZagCompound::<
         zigzag::constants::ZigZagTree,
         zigzag::constants::DefaultPieceHasher,
-    >::get_groth_params(Some(&mut OsRng), circuit.clone(), &public_params)
+    >::get_groth_params_with_cache_status(Some(&mut OsRng), circuit.clone(), &public_params)
     .context("cache ZigZag Groth params")?;
+    drop(groth_params);
+    let parameter_vk = ZigZagCompound::<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    >::read_parameter_verifying_key(&params_path)
+    .context("read ZigZag parameter verifying key")?;
     let verifying_key = ZigZagCompound::<
         zigzag::constants::ZigZagTree,
         zigzag::constants::DefaultPieceHasher,
     >::get_verifying_key(Some(&mut OsRng), circuit, &public_params)
     .context("cache ZigZag verifying key")?;
-    let verifying_key_matches_params = verifying_key == groth_params.vk;
+    let verifying_key_matches_params = verifying_key == parameter_vk;
     let verifying_key_rewritten = if verifying_key_matches_params {
         false
     } else {
@@ -698,7 +717,7 @@ fn prewarm_zigzag_params(
                 verifying_key_path.display()
             )
         })?;
-        groth_params.vk.write(&mut file).with_context(|| {
+        parameter_vk.write(&mut file).with_context(|| {
             format!(
                 "write repaired ZigZag verifying key {}",
                 verifying_key_path.display()
@@ -719,6 +738,7 @@ fn prewarm_zigzag_params(
         verifying_key_path,
         verifying_key_matches_params: true,
         verifying_key_rewritten,
+        parameter_cache_hit: Some(parameter_cache_hit),
     })
 }
 
@@ -1152,7 +1172,8 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: proof.len(),
-        unsealed_bytes: usize::try_from(verifier.written).context("unsealed byte count overflow")?,
+        unsealed_bytes: usize::try_from(verifier.written)
+            .context("unsealed byte count overflow")?,
         verify_seal: verify,
         raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
         phases,
@@ -1274,7 +1295,8 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         work_dir: args.work_dir.display().to_string(),
         proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
         proof_len: commit.proof.len(),
-        unsealed_bytes: usize::try_from(verifier.written).context("unsealed byte count overflow")?,
+        unsealed_bytes: usize::try_from(verifier.written)
+            .context("unsealed byte count overflow")?,
         verify_seal: verify,
         raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
         phases,

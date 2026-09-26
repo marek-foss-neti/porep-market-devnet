@@ -6,22 +6,31 @@ devnet_require_command jq
 devnet_require_command docker
 devnet_prepare_runtime
 
-# The benchmark runs the built image, not an optional sibling Git checkout.
-image_manifest="${DEVNET_BUILD_DIR}/images.json"
-[[ -f "${image_manifest}" && ! -L "${image_manifest}" ]] ||
-  devnet_die "image manifest is missing; run just build first"
+# Use the same selected image and manifest as bench-proof-micro.sh.
+image_manifest="$(devnet_proof_microbench_manifest_for_backend zigzag)"
+image="$(devnet_proof_microbench_image_for_backend zigzag)"
+image_id="$(docker image inspect "${image}" --format '{{.Id}}')"
+image_manifest_sha256="$(shasum -a 256 "${image_manifest}" | awk '{print $1}')"
+rust_fil_proofs_source_sha256="$(jq -r '.rustFilProofsSourceSha256 // empty' "${image_manifest}")"
 rust_fil_proofs_commit="$(jq -r '.rustFilProofsCommit // empty' "${image_manifest}")"
 [[ "${rust_fil_proofs_commit}" =~ ^[0-9a-f]{40}$ ]] ||
-  devnet_die "image manifest has no valid rust-fil-proofs commit; run just build"
+  devnet_die "ZigZag image manifest has no valid rust-fil-proofs commit"
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 baseline_dir="${DEVNET_ROOT}/.runtime/runs/${timestamp}-zigzag-512-baseline"
 devnet_require_safe_write_path "${baseline_dir}" directory
 mkdir -p "${baseline_dir}"
 
-# A fresh parameter directory makes preparation visible in the first run. All
-# three measured runs use the same generated 512 MiB / 11 / 10 / 18 parameters.
-parameter_dir="${baseline_dir}/proof-parameters"
+# A prepared profile cache can be reused after the separate setup acceptance.
+# With no override the original fresh-cache behaviour remains available.
+parameter_dir="${BENCH_ZIGZAG_512_PARAMETER_DIR:-${baseline_dir}/proof-parameters}"
+if [[ "${parameter_dir}" == "${DEVNET_ROOT}/"* ]]; then
+  devnet_require_safe_write_path "${parameter_dir}" directory
+fi
+parameter_cache_initial_state="empty before prewarm"
+if [[ -n "$(find "${parameter_dir}" -maxdepth 1 -type f -name 'v28-zigzag-proof-of-replication-*.params' -print -quit 2>/dev/null)" ]]; then
+  parameter_cache_initial_state="reused prepared cache"
+fi
 parent_dir="${baseline_dir}/parent-cache"
 mkdir -p "${parameter_dir}" "${parent_dir}"
 
@@ -55,28 +64,40 @@ for repetition in 1 2 3; do
   [[ -n "${summary}" && -f "${summary}" ]] || devnet_die "missing zigzag-512 run ${repetition} summary"
   report="$(dirname "${summary}")/report.json"
   [[ -f "${report}" ]] || devnet_die "missing zigzag-512 run ${repetition} report"
-  jq -e --arg commit "${rust_fil_proofs_commit}" \
-    '.provenance.build.manifest.rust_fil_proofs_commit == $commit' "${report}" >/dev/null ||
-    devnet_die "zigzag-512 run ${repetition} used a different rust-fil-proofs build"
+  jq -e \
+    --arg commit "${rust_fil_proofs_commit}" \
+    --arg sourceSha "${rust_fil_proofs_source_sha256}" \
+    --arg manifest "${image_manifest}" \
+    --arg manifestSha "${image_manifest_sha256}" \
+    --arg image "${image}" \
+    --arg imageId "${image_id}" \
+    '.provenance.build.manifest.rust_fil_proofs_commit == $commit
+      and .provenance.build.manifest.rust_fil_proofs_source_sha256 == $sourceSha
+      and .provenance.build.image_manifest_path == $manifest
+      and .provenance.build.image_manifest_sha256 == $manifestSha
+      and .provenance.build.image.reference == $image
+      and .provenance.build.image.id == $imageId' "${report}" >/dev/null ||
+    devnet_die "zigzag-512 run ${repetition} used a different ZigZag image or source"
   reports+=("${report}")
 done
 
 jq -s \
   --rawfile devnetHead "${baseline_dir}/devnet-head.txt" \
-  --rawfile rustHead "${baseline_dir}/rust-fil-proofs-head.txt" '
+  --rawfile rustHead "${baseline_dir}/rust-fil-proofs-head.txt" \
+  --arg initialCacheState "${parameter_cache_initial_state}" '
   {
     profile: "zigzag-512",
     command: "just bench-zigzag-512",
     devnet_head: ($devnetHead | rtrimstr("\n")),
     rust_fil_proofs_head: ($rustHead | rtrimstr("\n")),
     rust_fil_proofs_commit_source: "image manifest",
-    cold_cache_policy: "first run starts with an empty profile-specific parameter directory; OS page cache state is not forced",
+    cold_cache_policy: "first run may reuse an explicitly supplied profile cache; OS page cache state is not forced",
     completed_runs: length,
     runs: [to_entries[] | {
       repetition: (.key + 1),
       run_id: .value.provenance.run_id,
       report: (".runtime/runs/" + .value.provenance.run_id + "/report.json"),
-      parameter_cache_state: (if .key == 0 then "empty before prewarm" else "reused" end),
+      parameter_cache_state: (if .key == 0 then $initialCacheState else "reused" end),
       image_id: .value.provenance.build.image.id,
       profile: .value.benchmark.profile,
       verified: .value.benchmark.verify_seal,

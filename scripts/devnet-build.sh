@@ -175,6 +175,8 @@ rust_fil_proofs_source_relative=".cache/sources/rust_fil_proofs/${rust_fil_proof
   devnet_die "typed BLST source path does not match the managed source path"
 [[ "${rust_fil_proofs_source_reported}" == "${rust_fil_proofs_source}" ]] ||
   devnet_die "typed rust-fil-proofs source path does not match the managed source path"
+[[ -z "${DEVNET_RUST_FIL_PROOFS_SOURCE:-}" && -z "${DEVNET_ZIGZAG_RUST_TOOLCHAIN_IMAGE:-}" && -z "${DEVNET_ZIGZAG_RUSTUP_TOOLCHAIN:-}" ]] ||
+  devnet_die "ZigZag development source/toolchain belongs to scripts/devnet-build-zigzag-microbench.sh"
 [[ -d "${curio_source}" && ! -L "${curio_source}" ]] ||
   devnet_die "managed Curio source path is missing or symbolic"
 [[ -d "${lotus_source}" && ! -L "${lotus_source}" ]] ||
@@ -204,6 +206,7 @@ grep -Fq 'pub fn zigzag_pre_commit_phase1_with_replica_id' \
   devnet_die "ZigZag rust-fil-proofs source does not expose zigzag_pre_commit_phase1_with_replica_id"
 zigzag_source_overrides_sha256="$(devnet_zigzag_source_overrides_sha256)"
 rust_fil_proofs_zigzag_api_sha256="$(devnet_rust_fil_proofs_zigzag_api_sha256 "${rust_fil_proofs_commit}")"
+rust_fil_proofs_source_sha256="$(devnet_rust_fil_proofs_content_sha256 "${rust_fil_proofs_source}")"
 
 required_images=(
   "lotus_devnet ${lotus_devnet_image_reference}"
@@ -296,6 +299,7 @@ docker buildx build \
   --build-arg "BLST_COMMIT=${blst_commit}" \
   --build-arg "DOCKERFILE_SHA256=${dockerfile_sha256}" \
   --build-arg "RUST_FIL_PROOFS_COMMIT=${rust_fil_proofs_commit}" \
+  --build-arg "RUST_FIL_PROOFS_SOURCE_SHA256=${rust_fil_proofs_source_sha256}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_source_overrides_sha256}" \
   --build-arg "ZIGZAG_RUST_FIL_PROOFS_API_SHA256=${rust_fil_proofs_zigzag_api_sha256}" \
   --tag "${base_image}" \
@@ -350,7 +354,7 @@ manifest_temporary="$(mktemp "${DEVNET_BUILD_DIR}/images.json.XXXXXX")"
 node - "${inspect_evidence}" "${manifest_temporary}" \
   "${build_started_at}" "${build_finished_at}" "${build_duration_seconds}" \
   "${platform}" "${curio_commit}" "${lotus_commit}" "${blst_commit}" "${dockerfile_sha256}" \
-  "${rust_fil_proofs_commit}" "${zigzag_source_overrides_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
+  "${rust_fil_proofs_commit}" "${rust_fil_proofs_source_sha256}" "${rust_fil_proofs_source_relative}" "${rust_toolchain_image_reference}" "${zigzag_source_overrides_sha256}" "${rust_fil_proofs_zigzag_api_sha256}" \
   "${curio_short_commit}" "${DEVNET_IMAGE_NAMESPACE}" <<'NODE'
 const fs = require("node:fs");
 
@@ -366,6 +370,9 @@ const [
   blstCommit,
   dockerfileSha256,
   rustFilProofsCommit,
+  rustFilProofsSourceSha256,
+  rustFilProofsSourceRelative,
+  rustToolchainImage,
   zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,
   tag,
@@ -377,6 +384,8 @@ const expectedLabels = {
   "io.porep-market.blst.commit": blstCommit,
   "io.porep-market.dockerfile.sha256": dockerfileSha256,
   "io.porep-market.zigzag.rust-fil-proofs.commit": rustFilProofsCommit,
+  "io.porep-market.zigzag.rust-fil-proofs.source-sha256": rustFilProofsSourceSha256,
+  "io.porep-market.rust-toolchain.image": rustToolchainImage,
   "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
   "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagRustFilProofsApiSha256,
 };
@@ -426,6 +435,9 @@ const manifest = {
   lotusCommit,
   blstCommit: blstCommit,
   rustFilProofsCommit,
+  rustFilProofsSourceSha256,
+  rustFilProofsSourceRelative,
+  rustToolchainImage,
   dockerfileSha256,
   zigzagSourceOverridesSha256,
   zigzagRustFilProofsApiSha256,

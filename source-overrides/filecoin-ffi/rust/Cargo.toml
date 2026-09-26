@@ -75,6 +75,7 @@ tempfile = "3.19.1"
 
 [features]
 zigzag-bench = ["filecoin-proofs-zigzag/zigzag-bench"]
+zigzag-setup-status = []
 default = ["cuda", "multicore-sdr", "fvm"]
 fvm = [
   "fvm2",

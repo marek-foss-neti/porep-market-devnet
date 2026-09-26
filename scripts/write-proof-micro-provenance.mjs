@@ -118,6 +118,11 @@ function selectedEnvironment() {
     "BENCH_STACKED_USE_MULTICORE_SDR",
     "BENCH_TELEMETRY_INTERVAL_MS",
     "BENCH_ZIGZAG_PARENT_CACHE_DIR",
+    "BENCH_ZIGZAG_SETUP_BATCH_POINTS",
+    "BENCH_ZIGZAG_SETUP_BUDGET_BYTES",
+    "BENCH_ZIGZAG_SETUP_MEMORY_BYTES",
+    "BENCH_ZIGZAG_SETUP_REQUIRE_MISS",
+    "BENCH_ZIGZAG_SETUP_WORKERS",
     "DEVNET_RUST_FIL_PROOFS_SOURCE",
     "FIL_PROOFS_USE_MULTICORE_SDR",
     "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS",
@@ -145,7 +150,8 @@ export function buildProvenance({
   }
   const rustFilProofsSource = resolve(
     repositoryRoot,
-    process.env.DEVNET_RUST_FIL_PROOFS_SOURCE ||
+    imageManifest.rustFilProofsSourceRelative ||
+      process.env.DEVNET_RUST_FIL_PROOFS_SOURCE ||
       `.cache/sources/rust_fil_proofs/${imageManifest.rustFilProofsCommit}`,
   );
   const runnerPath = resolve(repositoryRoot, "scripts", "bench-proof-micro.sh");
@@ -202,6 +208,9 @@ export function buildProvenance({
         lotus_commit: imageManifest.lotusCommit,
         blst_commit: imageManifest.blstCommit,
         rust_fil_proofs_commit: imageManifest.rustFilProofsCommit,
+        rust_fil_proofs_source_sha256: imageManifest.rustFilProofsSourceSha256 ?? null,
+        rust_fil_proofs_source_relative: imageManifest.rustFilProofsSourceRelative ?? null,
+        rust_toolchain_image: imageManifest.rustToolchainImage ?? null,
         dockerfile_sha256: imageManifest.dockerfileSha256,
         zigzag_source_overrides_sha256: imageManifest.zigzagSourceOverridesSha256,
         zigzag_rust_fil_proofs_api_sha256: imageManifest.zigzagRustFilProofsApiSha256,
@@ -215,7 +224,9 @@ export function buildProvenance({
         telemetry_source_override_path: telemetrySourcePath,
         cargo_profile: "release",
         cargo_default_features: false,
-        cargo_features: ["multicore-sdr", "zigzag-bench"],
+        cargo_features: backend === "zigzag"
+          ? ["multicore-sdr", "zigzag-bench", "zigzag-setup-status"]
+          : ["multicore-sdr", "zigzag-bench"],
       },
     },
     machine: {

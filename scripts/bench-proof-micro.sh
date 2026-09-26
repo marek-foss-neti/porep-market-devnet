@@ -16,15 +16,18 @@ case "${bench_profile}" in
   *) devnet_die "unknown proof microbench profile: ${bench_profile}" ;;
 esac
 if [[ "${bench_profile}" == "zigzag-512" ]]; then
-  [[ "${backend}" == "zigzag" && "${sector_size}" == "512mib" && "${mode}" == "full" ]] ||
-    devnet_die "zigzag-512 requires zigzag 512mib full"
+  [[ "${backend}" == "zigzag" && "${sector_size}" == "512mib" && ( "${mode}" == "full" || "${mode}" == "prewarm-only" ) ]] ||
+    devnet_die "zigzag-512 requires zigzag 512mib full or prewarm-only"
 fi
 profile_args=()
 [[ -z "${bench_profile}" ]] || profile_args=(--profile "${bench_profile}")
 case "${mode}" in
-  full|prepare-fixture|unseal-only) ;;
-  *) devnet_die "invalid proof microbench mode: ${mode}; expected full, prepare-fixture, or unseal-only" ;;
+  full|prewarm-only|prepare-fixture|unseal-only) ;;
+  *) devnet_die "invalid proof microbench mode: ${mode}; expected full, prewarm-only, prepare-fixture, or unseal-only" ;;
 esac
+if [[ "${mode}" == "prewarm-only" && "${backend}" != "zigzag" ]]; then
+  devnet_die "prewarm-only mode is reserved for ZigZag setup"
+fi
 
 microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
 if [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
@@ -73,21 +76,8 @@ fi
 
 devnet_prepare_runtime
 
-image_manifest="${DEVNET_BUILD_DIR}/images.json"
-[[ -f "${image_manifest}" && ! -L "${image_manifest}" ]] ||
-  devnet_die "image manifest is missing; run just build first"
-curio_commit="$(jq -r '.curioCommit // empty' "${image_manifest}")"
-[[ "${curio_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "image manifest has no Curio commit"
-manifest_dockerfile_sha256="$(jq -r '.dockerfileSha256 // empty' "${image_manifest}")"
-manifest_zigzag_overrides_sha256="$(jq -r '.zigzagSourceOverridesSha256 // empty' "${image_manifest}")"
-[[ "$(devnet_docker_surface_sha256)" == "${manifest_dockerfile_sha256}" ]] ||
-  devnet_die "image manifest is stale for the current Docker/source surface; run just build"
-[[ "$(devnet_zigzag_source_overrides_sha256)" == "${manifest_zigzag_overrides_sha256}" ]] ||
-  devnet_die "image manifest is stale for the current ZigZag source overrides; run just build"
-image="${DEVNET_IMAGE_NAMESPACE}/curio-all-in-one:${curio_commit:0:12}"
-docker image inspect "${image}" >/dev/null || devnet_die "required image is missing: ${image}"
-docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench >/dev/null 2>&1' ||
-  devnet_die "image ${image} does not contain porep-proof-microbench; run just build"
+image_manifest="$(devnet_proof_microbench_manifest_for_backend "${backend}")"
+image="$(devnet_proof_microbench_image_for_backend "${backend}")"
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 safe_sector="$(printf '%s' "${sector_size}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
@@ -176,9 +166,79 @@ docker_common_args=(
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+zigzag_setup_args=()
+prewarm_limit_args=()
+if [[ "${backend}" == "zigzag" ]]; then
+  setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
+  setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-2}"
+  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-100000000000}"
+  for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
+    [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
+      devnet_die "ZigZag setup batch, workers, and budget must be positive integers"
+  done
+  mkdir -p "${run_dir}/prewarm-work"
+  zigzag_setup_args=(
+    -e "FIL_PROOFS_ZIGZAG_SETUP_BATCH_POINTS=${setup_batch_points}"
+    -e "FIL_PROOFS_ZIGZAG_SETUP_WORKERS=${setup_workers}"
+    -e "FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=${setup_budget_bytes}"
+    -e "FIL_PROOFS_ZIGZAG_SETUP_SCRATCH_DIR=/var/tmp/filecoin-proof-parameters/zigzag-setup-scratch"
+    -e "FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE=/bench-run/zigzag-setup-phase.txt"
+  )
+  if [[ "${mode}" == "prewarm-only" ]]; then
+    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-110000000000}"
+    [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 )) ||
+      devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be a positive integer"
+    prewarm_limit_args=(--memory "${setup_memory_bytes}" --memory-swap "${setup_memory_bytes}")
+    if [[ "${BENCH_ZIGZAG_SETUP_REQUIRE_MISS:-0}" == "1" ]]; then
+      [[ -z "$(find "${parameter_cache_host}" -maxdepth 1 -type f -name 'v28-zigzag-proof-of-replication-*.params' -print -quit)" ]] ||
+        devnet_die "ZigZag setup acceptance requires a cache miss; select an empty parameter directory"
+    fi
+  fi
+fi
 
 bench_epoch_ms() {
   node -e 'process.stdout.write(String(Date.now()))'
+}
+
+bench_prewarm_exit() {
+  local script_status="$?"
+  trap - EXIT
+  set +e
+  devnet_stop_prewarm_progress "${prewarm_progress_pid:-}"
+  local container_id="" captured=0 report_saved=1
+  local container_json="${run_dir}/prewarm-container.json"
+  if [[ -f "${measured_cidfile}" && ! -L "${measured_cidfile}" ]]; then
+    container_id="$(cat "${measured_cidfile}")"
+  fi
+  if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] &&
+    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}}}' \
+      "${container_id}" > "${container_json}.temporary" 2>> "${prewarm_stderr_log}"; then
+    mv -- "${container_json}.temporary" "${container_json}"
+    captured=1
+  else
+    jq -n --arg id "${container_id}" \
+      '{id:$id,state:null,capture_error:"container state unavailable; container retained if it exists"}' > "${container_json}"
+  fi
+  if ((script_status != 0)); then
+    prewarm_finished_ms="${prewarm_finished_ms:-$(bench_epoch_ms)}"
+    if node "${DEVNET_ROOT}/scripts/write-proof-micro-failure.mjs" \
+      "${report_json}" "${DEVNET_ROOT}" "${image_manifest}" "${image}" "${backend}" "${sector_size}" \
+      "${prewarm_started_ms}" "${prewarm_finished_ms}" "${prewarm_exit_code:-${script_status}}" \
+      "${container_json}" "${prewarm_telemetry_ndjson}" "${prewarm_summary_json}" \
+      "${prewarm_stderr_log}" "${run_dir}/zigzag-setup-phase.txt"; then
+      printf 'proof parameter prewarm failure: %s\n' "${report_json}" >&2
+    else
+      report_saved=0
+      printf 'could not write prewarm failure report; retained diagnostics and container: %s\n' "${run_dir}" >&2
+    fi
+  fi
+  # Final state and failure report are durable before removal. Never remove
+  # a running container or one whose state could not be inspected.
+  if ((captured && report_saved)) && jq -e '.state.Running == false' "${container_json}" >/dev/null; then
+    docker rm "${container_id}" > "${run_dir}/prewarm-container-removal.log" 2>&1 ||
+      printf 'could not remove stopped prewarm container: %s\n' "${container_id}" >&2
+  fi
+  exit "${script_status}"
 }
 
 bench_finalize_telemetry() {
@@ -751,8 +811,18 @@ if [[ "${mode}" == "unseal-only" ]]; then
 fi
 
 devnet_progress "bench-proof-micro: prewarming ${backend} PoRep params for ${sector_size} outside measured phases"
-docker run --rm \
+rm -f -- "${measured_cidfile}"
+prewarm_started_ms="$(bench_epoch_ms)"
+prewarm_remove_args=(--rm)
+if [[ "${mode}" == "prewarm-only" ]]; then
+  prewarm_remove_args=()
+  trap bench_prewarm_exit EXIT
+fi
+docker run "${prewarm_remove_args[@]}" \
+  --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
+  "${zigzag_setup_args[@]}" \
+  "${prewarm_limit_args[@]}" \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/param-prewarm-telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \
@@ -769,12 +839,17 @@ devnet_start_prewarm_progress \
   "bench-proof-micro: ${backend} ${sector_size} parameter prewarm" \
   "${prewarm_stderr_log}"
 if wait "${prewarm_pid}"; then
+  prewarm_finished_ms="$(bench_epoch_ms)"
   devnet_stop_prewarm_progress "${prewarm_progress_pid}"
+  prewarm_progress_pid=""
   devnet_progress "bench-proof-micro: ${backend} ${sector_size} parameter prewarm complete; summary=${prewarm_summary_json}"
   :
 else
   status=$?
+  prewarm_exit_code="${status}"
+  prewarm_finished_ms="$(bench_epoch_ms)"
   devnet_stop_prewarm_progress "${prewarm_progress_pid}"
+  prewarm_progress_pid=""
   if [[ -s "${prewarm_stderr_log}" ]]; then
     tail -40 "${prewarm_stderr_log}" >&2
   fi
@@ -794,6 +869,44 @@ if [[ "${bench_profile}" == "zigzag-512" ]]; then
     and .profile.total_challenge_instances == 1980
     and .verifying_key_matches_params == true
   ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-512 prewarm used wrong parameters"
+fi
+
+if [[ "${mode}" == "prewarm-only" ]]; then
+  bench_write_provenance \
+    "prewarm-only" "${prewarm_started_ms}" "${prewarm_finished_ms}" \
+    "${prewarm_telemetry_summary_json}" "${prewarm_summary_json}"
+  bench_compose_report \
+    "prewarm-only" "${prewarm_summary_json}" "${prewarm_telemetry_summary_json}" - -
+  jq -e --argjson limit "${setup_memory_bytes}" \
+    --argjson page_size "$(getconf PAGESIZE)" \
+    '.benchmark.verifying_key_matches_params == true
+      and .derived.cgroup_memory_peak_bytes <= $limit
+      and .derived.swap_peak_bytes == 0
+      and .derived.oom_delta == 0
+      and .derived.oom_kill_delta == 0
+      and .telemetry.overall.cgroup.memory_max_bytes <= $limit
+      and .telemetry.overall.cgroup.memory_max_bytes > ($limit - $page_size)
+      and .telemetry.overall.cgroup.swap_max_bytes == 0' \
+    "${report_json}" >/dev/null || devnet_die "ZigZag prewarm exceeded its memory, swap, or correctness limit; see ${report_json}"
+  if [[ "${BENCH_ZIGZAG_SETUP_REQUIRE_MISS:-0}" == "1" ]]; then
+    jq -e '.parameter_cache_hit == false' "${prewarm_summary_json}" >/dev/null ||
+      devnet_die "ZigZag setup acceptance unexpectedly hit existing parameter cache"
+  fi
+  params_name="$(basename "$(jq -r '.parameter_cache_params_path' "${prewarm_summary_json}")")"
+  vk_name="$(basename "$(jq -r '.parameter_cache_verifying_key_path' "${prewarm_summary_json}")")"
+  meta_name="$(basename "$(jq -r '.parameter_cache_metadata_path' "${prewarm_summary_json}")")"
+  sha256sum "${parameter_cache_host}/${params_name}" \
+    "${parameter_cache_host}/${vk_name}" \
+    "${parameter_cache_host}/${meta_name}" > "${run_dir}/parameter-cache-sha256.txt"
+  summary_md="${run_dir}/summary.md"
+  {
+    printf '# ZigZag parameter prewarm\n\n'
+    printf 'Report: [report.json](./report.json)\n\n'
+    printf 'Parameter digests: [parameter-cache-sha256.txt](./parameter-cache-sha256.txt)\n\n'
+    jq -r '"Cache hit: \(.benchmark.parameter_cache_hit)\nKernel memory.peak: \(.derived.cgroup_memory_peak_bytes) bytes\nContainer memory.max: \(.telemetry.overall.cgroup.memory_max_bytes) bytes\nSampled swap peak: \(.derived.swap_peak_bytes) bytes\nOOM kills: \(.derived.oom_kill_delta)\nWall time: \(.benchmark.wall_ms) ms\n"' "${report_json}"
+  } > "${summary_md}"
+  printf 'proof parameter prewarm: %s\n' "${summary_md}"
+  exit 0
 fi
 
 rm -f -- "${measured_cidfile}"

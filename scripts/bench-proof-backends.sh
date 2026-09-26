@@ -59,31 +59,11 @@ proof_parameter_cache_bytes() {
     awk '{sum += $1} END {printf "%d\n", sum + 0}'
 }
 
-proof_microbench_image() {
-  local image_manifest curio_commit manifest_dockerfile_sha256 manifest_zigzag_overrides_sha256 image
-  image_manifest="${DEVNET_BUILD_DIR}/images.json"
-  [[ -f "${image_manifest}" && ! -L "${image_manifest}" ]] ||
-    devnet_die "image manifest is missing; run just build first"
-  curio_commit="$(jq -r '.curioCommit // empty' "${image_manifest}")"
-  [[ "${curio_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "image manifest has no Curio commit"
-  manifest_dockerfile_sha256="$(jq -r '.dockerfileSha256 // empty' "${image_manifest}")"
-  manifest_zigzag_overrides_sha256="$(jq -r '.zigzagSourceOverridesSha256 // empty' "${image_manifest}")"
-  [[ "$(devnet_docker_surface_sha256)" == "${manifest_dockerfile_sha256}" ]] ||
-    devnet_die "image manifest is stale for the current Docker/source surface; run just build"
-  [[ "$(devnet_zigzag_source_overrides_sha256)" == "${manifest_zigzag_overrides_sha256}" ]] ||
-    devnet_die "image manifest is stale for the current ZigZag source overrides; run just build"
-  image="${DEVNET_IMAGE_NAMESPACE}/curio-all-in-one:${curio_commit:0:12}"
-  docker image inspect "${image}" >/dev/null || devnet_die "required image is missing: ${image}"
-  docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench >/dev/null 2>&1' ||
-    devnet_die "image ${image} does not contain porep-proof-microbench; run just build"
-  printf '%s\n' "${image}"
-}
-
 prewarm_backend_params() {
   local backend="$1"
   local image prewarm_summary prewarm_stderr prewarm_pid prewarm_progress_pid status parameter_cache_host parent_cache_host
   local parameter_cache_file_count parameter_cache_bytes cleanup_json
-  image="$(proof_microbench_image)"
+  image="$(devnet_proof_microbench_image_for_backend "${backend}")"
   prewarm_summary="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.json"
   prewarm_stderr="${comparison_dir}/param-prewarm-${backend}-${bench_sector_size}.stderr.log"
   parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"

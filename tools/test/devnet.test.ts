@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -792,12 +792,13 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(reportComposer, /unattributed_outer_wall_ms/);
   assert.match(provenanceWriter, /tracked_patch_sha256/);
   assert.match(provenanceWriter, /zigzag_source_overrides_sha256/);
-  assert.match(provenanceWriter, /cargo_features: \["multicore-sdr", "zigzag-bench"\]/);
+  assert.match(provenanceWriter, /cargo_features: backend === "zigzag"\s*\? \["multicore-sdr", "zigzag-bench", "zigzag-setup-status"\]\s*:\s*\["multicore-sdr", "zigzag-bench"\]/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);
   assert.match(script, /porep-proof-microbench/);
   assert.match(script, /--prewarm-only/);
+  assert.match(script, /devnet_proof_microbench_image_for_backend "\$\{backend\}"/);
   assert.match(script, /using devnet proof parameter cache/);
   assert.match(script, /using isolated transient proof parameter cache/);
   assert.match(script, /post-success-stacked-prewarm-parameter-cache-prune/);
@@ -827,11 +828,11 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
 test("zigzag-512 baseline records the image revision without a sibling checkout", async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
-  const imageManifest = join(fixture.root, ".runtime/devnet/build/images.json");
+  const imageManifest = join(fixture.root, ".runtime/devnet/build/zigzag-microbench-images.json");
   try {
     await cp(join(repositoryRoot, "scripts/bench-zigzag-512.sh"), join(fixture.root, "scripts/bench-zigzag-512.sh"));
-    await mkdir(dirname(imageManifest), { recursive: true });
-    await writeFile(imageManifest, JSON.stringify({ rustFilProofsCommit: commit }));
+    const manifest = await prepareZigzagMicrobenchManifest(fixture, commit);
+    await assert.rejects(lstat(join(fixture.root, ".runtime/devnet/build/images.json")), { code: "ENOENT" });
     await assert.rejects(lstat(join(fixture.root, "../rust-fil-proofs")), { code: "ENOENT" });
     await writeFile(join(fixture.stubBin, "git"), `#!/usr/bin/env bash
 [[ "$*" == "-C $DEVNET_TEST_ROOT rev-parse HEAD" ]] || exit 99
@@ -842,14 +843,19 @@ printf '%s\\n' '${"d".repeat(40)}'
 set -euo pipefail
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
 touch "$run_dir/summary.md"
-jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_dir")" '
-  {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit}}},
+manifest="$DEVNET_TEST_ROOT/.runtime/devnet/build/zigzag-microbench-images.json"
+jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_dir")" \\
+  --arg manifest "$manifest" --arg manifestSha "$(shasum -a 256 "$manifest" | awk '{print $1}')" \\
+  --arg sourceSha "\${DEVNET_TEST_REPORT_SOURCE_SHA:-$(jq -r .rustFilProofsSourceSha256 "$manifest")}" \\
+  --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
+  {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit, rust_fil_proofs_source_sha256: $sourceSha},
+     image_manifest_path: $manifest, image_manifest_sha256: $manifestSha, image: {reference: $image, id: $imageId}}},
    benchmark: {verify_seal: true, raw_unseal_bytes_match: true, proof_len: 1920,
      profile: {total_challenge_instances: 1980}}}
 ' > "$run_dir/report.json"
 printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
 `);
-    const run = (reportCommit: string) => spawnSync(
+    const run = (reportCommit: string, overrides: Record<string, string> = {}) => spawnSync(
       "bash", [join(fixture.root, "scripts/bench-zigzag-512.sh")], {
         encoding: "utf8",
         timeout: 30_000,
@@ -859,6 +865,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
           DEVNET_TEST_ROOT: fixture.root,
           DEVNET_TEST_COMMAND_LOG: fixture.commandLog,
           DEVNET_TEST_REPORT_COMMIT: reportCommit,
+          ...overrides,
         },
       },
     );
@@ -872,11 +879,19 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     assert.equal(baseline.completed_runs, 3);
     const mismatch = run("b".repeat(40));
     assert.notEqual(mismatch.status, 0);
-    assert.match(mismatch.stderr, /used a different rust-fil-proofs build/);
-    await writeFile(imageManifest, "{}");
+    assert.match(mismatch.stderr, /used a different ZigZag image or source/);
+    for (const overrides of [
+      { DEVNET_TEST_REPORT_SOURCE_SHA: "b".repeat(64) },
+      { DEVNET_TEST_REPORT_IMAGE_ID: "sha256:other" },
+    ]) {
+      const mismatch = run(commit, overrides);
+      assert.notEqual(mismatch.status, 0);
+      assert.match(mismatch.stderr, /used a different ZigZag image or source/);
+    }
+    await writeFile(imageManifest, JSON.stringify({ ...manifest, rustFilProofsCommit: null }));
     const missingCommit = run(commit);
     assert.notEqual(missingCommit.status, 0);
-    assert.match(missingCommit.stderr, /image manifest has no valid rust-fil-proofs commit/);
+    assert.match(missingCommit.stderr, /ZigZag image manifest has no valid rust-fil-proofs commit/);
   } finally {
     await rm(fixture.fixtureBase, { recursive: true, force: true });
   }
@@ -1724,6 +1739,132 @@ async function writeOwnershipMarker(root: string): Promise<void> {
     "utf8",
   );
 }
+
+async function prepareZigzagMicrobenchManifest(
+  fixture: Awaited<ReturnType<typeof createLifecycleFixture>>,
+  commit = rustFilProofsSourceCommit,
+) {
+  const dockerfile = "FROM scratch\n";
+  await writeFile(join(fixture.root, "docker/zigzag-microbench.Dockerfile"), dockerfile);
+  await mkdir(join(fixture.root, "source-overrides/zigzag-bench"), { recursive: true });
+  await writeFile(join(fixture.root, "source-overrides/zigzag-bench/Cargo.lock"), "fixture lock\n");
+  const sourceRelative = `.cache/sources/rust_fil_proofs/${rustFilProofsSourceCommit}`;
+  const hashes = spawnSync("bash", ["-c",
+    'set -e; source "$1"; devnet_zigzag_microbench_overrides_sha256; devnet_rust_fil_proofs_content_sha256 "$2"',
+    "manifest-fixture", join(fixture.root, "scripts/devnet-common.sh"), join(fixture.root, sourceRelative),
+  ], { encoding: "utf8" });
+  assert.equal(hashes.status, 0, hashes.stderr);
+  const [overridesSha, sourceSha] = hashes.stdout.trim().split(/\r?\n/);
+  const imageReference = "porep-market-curio-devnet/zigzag-microbench:fixture";
+  const manifest = {
+    schemaVersion: 1, platform: "linux/arm64", curioCommit: curioSourceCommit,
+    rustFilProofsCommit: commit, rustFilProofsSourceSha256: sourceSha,
+    rustFilProofsSourceRelative: sourceRelative,
+    dockerfileSha256: createHash("sha256").update(dockerfile).digest("hex"),
+    zigzagSourceOverridesSha256: overridesSha, imageReference,
+    images: [{ reference: imageReference, id: "sha256:fixture" }],
+  };
+  const path = join(fixture.root, ".runtime/devnet/build/zigzag-microbench-images.json");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(manifest));
+  return manifest;
+}
+
+test("prewarm-only records failure telemetry and Docker OOM state before container removal", async () => {
+  for (const scenario of ["oom-truncated", "killed", "oom-no-samples", "inspect-unavailable"]) {
+    const fixture = await createLifecycleFixture();
+    try {
+      await prepareZigzagMicrobenchManifest(fixture);
+      for (const name of ["bench-proof-micro.sh", "write-proof-micro-failure.mjs",
+        "write-proof-micro-provenance.mjs", "compose-proof-micro-report.mjs", "summarize-proof-micro-telemetry.mjs"]) {
+        await cp(join(repositoryRoot, "scripts", name), join(fixture.root, "scripts", name));
+      }
+      await rm(join(fixture.stubBin, "node"));
+      await symlink(process.execPath, join(fixture.stubBin, "node"));
+      await writeFile(join(fixture.stubBin, "just"), "#!/usr/bin/env bash\necho just-fixture\n");
+      await chmod(join(fixture.stubBin, "just"), 0o755);
+      const sample = JSON.stringify({
+        schema_version: 1, sequence: 0, pid: 7, sampling_interval_ms: 500,
+        timestamp_unix_ms: 1, elapsed_ms: 1, phase: "setup_eval_aux", trigger: "interval",
+        cgroup: { memory_peak_bytes: 2000, memory_events: { oom: 0, oom_kill: 0 } },
+        process: {}, disk: { paths: [] }, warnings: [],
+      });
+      const raw = scenario === "oom-no-samples" ? "" : `${sample}\n${scenario === "oom-truncated" ? '{"schema_version":' : ""}`;
+      const rawFixture = join(fixture.fixtureBase, "samples.ndjson");
+      await writeFile(rawFixture, raw);
+      const directoryFile = join(fixture.fixtureBase, "run-directory");
+      await writeFile(join(fixture.stubBin, "docker"), `#!/usr/bin/env bash
+printf 'docker' >> "$DEVNET_TEST_COMMAND_LOG"
+printf ' <%s>' "$@" >> "$DEVNET_TEST_COMMAND_LOG"
+printf '\\n' >> "$DEVNET_TEST_COMMAND_LOG"
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$*" == *'{{.Id}}'* ]]; then echo sha256:fixture; else echo '{"Id":"sha256:fixture"}'; fi
+elif [[ "$1" == info ]]; then echo '{}'
+elif [[ "$1" == version ]]; then echo docker-fixture
+elif [[ "$1" == run && "$*" != *'--entrypoint sh'* ]]; then
+  while (($#)); do
+    if [[ "$1" == --cidfile ]]; then cidfile="$2"; break; fi
+    shift
+  done
+  run_dir="$(dirname "$cidfile")"
+  printf '%s' '${"1".repeat(64)}' > "$cidfile"
+  printf '%s' "$run_dir" > "$DEVNET_TEST_RUN_DIRECTORY_FILE"
+  cp "$DEVNET_TEST_TELEMETRY_FIXTURE" "$run_dir/param-prewarm-telemetry.ndjson"
+  echo setup_eval_aux > "$run_dir/zigzag-setup-phase.txt"
+  exit 137
+elif [[ "$1" == inspect ]]; then
+  [[ "$DEVNET_TEST_SCENARIO" != inspect-unavailable ]] || exit 1
+  oom=true; [[ "$DEVNET_TEST_SCENARIO" != killed ]] || oom=false
+  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":110000000000,"memory_swap_limit_bytes":110000000000}\\n' "$oom"
+elif [[ "$1" == rm ]]; then
+  run_dir="$(cat "$DEVNET_TEST_RUN_DIRECTORY_FILE")"
+  [[ -s "$run_dir/prewarm-container.json" ]] || exit 97
+  jq -e '.status == "failed" and .failure.exit_code == 137' "$run_dir/report.json" >/dev/null || exit 98
+fi
+`);
+      await chmod(join(fixture.stubBin, "docker"), 0o755);
+      const result = spawnSync("bash", [join(fixture.root, "scripts/bench-proof-micro.sh"), "zigzag", "2kib", "prewarm-only"], {
+        encoding: "utf8", timeout: 30_000,
+        env: { ...process.env, PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
+          DEVNET_TEST_COMMAND_LOG: fixture.commandLog, DEVNET_TEST_RUN_DIRECTORY_FILE: directoryFile,
+          DEVNET_TEST_TELEMETRY_FIXTURE: rawFixture, DEVNET_TEST_SCENARIO: scenario },
+      });
+      assert.notEqual(result.status, 0);
+      const reportPath = result.stderr.match(/^proof parameter prewarm failure: (.+)$/m)?.[1];
+      assert.ok(reportPath, result.stderr);
+      const report = JSON.parse(await readFile(reportPath, "utf8"));
+      assert.equal(report.status, "failed");
+      assert.equal(report.failure.exit_code, 137);
+      assert.equal(report.failure.last_setup_phase, "setup_eval_aux");
+      assert.equal(report.benchmark, null);
+      assert.equal(report.diagnostics.telemetry_complete, false);
+      assert.equal(await readFile(report.failure.raw_telemetry_path, "utf8"), raw);
+      const log = await readFile(fixture.commandLog, "utf8");
+      const prewarm = log.split("\n").find((line) => line.includes("<--cidfile>"));
+      assert.ok(prewarm);
+      assert.doesNotMatch(prewarm, /<--rm>/);
+      if (scenario === "inspect-unavailable") {
+        assert.equal(report.derived.docker_oom_killed, null);
+        assert.equal(report.diagnostics.container_state_available, false);
+        assert.doesNotMatch(log, /docker <rm>/);
+      } else {
+        assert.equal(report.derived.docker_oom_killed, scenario !== "killed");
+        assert.equal(report.failure.kind, scenario === "killed" ? "nonzero_exit" : "container_oom");
+        assert.match(log, /docker <rm>/);
+        assert.ok(log.indexOf("docker <inspect>") < log.indexOf("docker <rm>"));
+      }
+      if (scenario === "oom-no-samples") {
+        assert.equal(report.telemetry, null);
+        assert.equal(report.derived.oom_kill_delta, null);
+      } else {
+        assert.equal(report.telemetry.sample_count, 1);
+        assert.equal(report.derived.oom_kill_delta, 0);
+      }
+    } finally {
+      await rm(fixture.fixtureBase, { recursive: true, force: true });
+    }
+  }
+});
 
 test("runtime preparation rejects symlinks at every writable path before outside writes", async () => {
   const targets: Array<{ kind: "directory" | "file"; path: string }> = [
@@ -2660,6 +2801,9 @@ test("project build manifest validation rejects volumes on every inspected image
     const lotusCommit = "1".repeat(40);
     const blstCommit = "b".repeat(40);
     const rustFilProofsCommit = "a".repeat(40);
+    const rustFilProofsSourceSha256 = "9".repeat(64);
+    const rustFilProofsSourceRelative = `.cache/sources/rust_fil_proofs/${rustFilProofsCommit}`;
+    const rustToolchainImage = `rust:1.86.0@sha256:${"8".repeat(64)}`;
     const dockerfileSha256 = "d".repeat(64);
     const zigzagSourceOverridesSha256 = "e".repeat(64);
     const zigzagApiSha256 = "f".repeat(64);
@@ -2672,11 +2816,13 @@ test("project build manifest validation rejects volumes on every inspected image
       "io.porep-market.blst.commit": blstCommit,
       "io.porep-market.dockerfile.sha256": dockerfileSha256,
       "io.porep-market.zigzag.rust-fil-proofs.commit": rustFilProofsCommit,
+      "io.porep-market.zigzag.rust-fil-proofs.source-sha256": rustFilProofsSourceSha256,
+      "io.porep-market.rust-toolchain.image": rustToolchainImage,
       "io.porep-market.zigzag.source-overrides.sha256": zigzagSourceOverridesSha256,
       "io.porep-market.zigzag.rust-fil-proofs.api.sha256": zigzagApiSha256,
     };
 
-    for (const [volumeIndex, imageName] of imageNames.entries()) {
+    for (const [volumeIndex, imageName] of [[-1, "valid baseline"] as const, ...imageNames.map((name, index) => [index, name] as const)]) {
       const inspections = imageNames.map((name, index) => ({
         Architecture: "arm64",
         Config: {
@@ -2693,7 +2839,7 @@ test("project build manifest validation rejects volumes on every inspected image
         "utf8",
       );
 
-      const result = spawnSync(
+      const result: SpawnSyncReturns<string> = spawnSync(
         process.execPath,
         [
           "-",
@@ -2708,6 +2854,9 @@ test("project build manifest validation rejects volumes on every inspected image
           blstCommit,
           dockerfileSha256,
           rustFilProofsCommit,
+          rustFilProofsSourceSha256,
+          rustFilProofsSourceRelative,
+          rustToolchainImage,
           zigzagSourceOverridesSha256,
           zigzagApiSha256,
           tag,
@@ -2719,8 +2868,16 @@ test("project build manifest validation rejects volumes on every inspected image
         },
       );
 
-      assert.notEqual(result.status, 0, `${imageName} volume metadata was accepted`);
-      assert.match(result.stderr, /declares unexpected image volumes/);
+      if (volumeIndex === -1) {
+        assert.equal(result.status, 0, result.stderr);
+        const manifest = JSON.parse(await readFile(outputPath, "utf8"));
+        assert.equal(manifest.rustFilProofsSourceSha256, rustFilProofsSourceSha256);
+        assert.equal(manifest.rustFilProofsSourceRelative, rustFilProofsSourceRelative);
+        assert.equal(manifest.rustToolchainImage, rustToolchainImage);
+      } else {
+        assert.notEqual(result.status, 0, `${imageName} volume metadata was accepted`);
+        assert.match(result.stderr, /declares unexpected image volumes/);
+      }
     }
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });

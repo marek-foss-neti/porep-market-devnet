@@ -114,6 +114,7 @@ struct TelemetryRecorder {
     disk_paths: Vec<DiskPath>,
     writer: Mutex<BufWriter<File>>,
     phase: Mutex<&'static str>,
+    zigzag_setup_phase_file: Option<PathBuf>,
     sequence: AtomicU64,
     stopping: AtomicBool,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -165,6 +166,8 @@ impl TelemetrySession {
             disk_paths: telemetry_disk_paths(work_dir, proof_parameter_cache, parent_cache),
             writer: Mutex::new(BufWriter::new(output)),
             phase: Mutex::new("unattributed"),
+            zigzag_setup_phase_file: std::env::var_os("FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE")
+                .map(PathBuf::from),
             sequence: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             worker: Mutex::new(None),
@@ -295,7 +298,22 @@ impl Drop for PhaseGuard {
 impl TelemetryRecorder {
     fn record_sample(&self, trigger: &'static str) {
         let mut warnings = Vec::new();
-        let phase = *self.phase.lock().unwrap_or_else(|lock| lock.into_inner());
+        let mut phase = *self.phase.lock().unwrap_or_else(|lock| lock.into_inner());
+        if phase == "parameter_prewarm" {
+            if let Some(path) = &self.zigzag_setup_phase_file {
+                phase = match fs::read_to_string(path).ok().as_deref().map(str::trim) {
+                    Some("setup_cache_lookup") => "setup_cache_lookup",
+                    Some("setup_synthesis") => "setup_synthesis",
+                    Some("setup_h") => "setup_h",
+                    Some("setup_ifft") => "setup_ifft",
+                    Some("setup_qap") => "setup_qap",
+                    Some("setup_eval_input_aux") => "setup_eval_input_aux",
+                    Some("setup_write") => "setup_write",
+                    Some("setup_readback") => "setup_readback",
+                    _ => phase,
+                };
+            }
+        }
         let sample = TelemetrySample {
             schema_version: 1,
             sequence: self.sequence.fetch_add(1, Ordering::Relaxed),
