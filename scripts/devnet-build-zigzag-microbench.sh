@@ -8,8 +8,6 @@ devnet_require_command jq
 devnet_require_command npm
 devnet_require_command shasum
 
-[[ -n "${DEVNET_RUST_FIL_PROOFS_SOURCE:-}" ]] ||
-  devnet_die "DEVNET_RUST_FIL_PROOFS_SOURCE must name the isolated ZigZag source"
 [[ -z "${DEVNET_ZIGZAG_RUSTUP_TOOLCHAIN:-}" ]] ||
   devnet_die "the ZigZag toolchain is selected by its pinned image, not rustup"
 zigzag_toolchain_image="${DEVNET_ZIGZAG_RUST_TOOLCHAIN_IMAGE:-docker.io/library/rust:1.94.0-slim-bookworm@sha256:a86cada82e36ebd7a9bffed7548792c55a952fdb20718eea9278a936bcb76e62}"
@@ -29,7 +27,9 @@ curio_source="$(devnet_curio_source_path "${curio_commit}")"
 [[ "$(git -C "${curio_source}" rev-parse HEAD)" == "${curio_commit}" ]] ||
   devnet_die "managed Curio source commit differs from manifest"
 
-zigzag_source="$(realpath "${DEVNET_RUST_FIL_PROOFS_SOURCE}")"
+# Normal builds use the verified managed checkout. A standalone ZigZag build
+# can still select an isolated development copy at the same pinned commit.
+zigzag_source="$(devnet_rust_fil_proofs_source_path "${rust_fil_proofs_commit}")"
 [[ "${zigzag_source}" == "${DEVNET_ROOT}/"* && -d "${zigzag_source}" && ! -L "${zigzag_source}" ]] ||
   devnet_die "ZigZag source must be a directory inside the devnet build context"
 [[ "$(git -C "${zigzag_source}" rev-parse HEAD)" == "${rust_fil_proofs_commit}" ]] ||

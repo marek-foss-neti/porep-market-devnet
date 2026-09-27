@@ -13,6 +13,7 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/bootstrap.sh
     scripts/devnet-common.sh
     scripts/devnet-build.sh
+    scripts/devnet-build-zigzag-microbench.sh
     scripts/devnet-up.sh
     scripts/devnet-down.sh
     scripts/devnet-reset.sh
@@ -56,7 +57,7 @@ if [[ -f versions.lock.yaml ]]; then
     }
   done
 
-  bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
+  bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-build-zigzag-microbench.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
   node --check scripts/cleanup-proof-micro-artifacts.mjs
   rg -q '^build:' justfile
   if rg -n -i \
