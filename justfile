@@ -5,6 +5,7 @@ bootstrap:
 
 build:
     @bash scripts/devnet-build.sh
+    @bash scripts/devnet-build-zigzag-microbench.sh
 
 build-contracts:
     @bash scripts/contracts-build.sh
