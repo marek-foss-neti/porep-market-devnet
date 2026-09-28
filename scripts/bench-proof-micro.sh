@@ -170,7 +170,7 @@ zigzag_setup_args=()
 prewarm_limit_args=()
 if [[ "${backend}" == "zigzag" ]]; then
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
-  setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-2}"
+  setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
   setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-100000000000}"
   for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
     [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
