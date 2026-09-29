@@ -222,6 +222,9 @@ for required_image_record in "${required_images[@]}"; do
   [[ "${image_reference}" =~ @sha256:[0-9a-f]{64}$ ]] ||
     devnet_die "typed runtime lock did not report immutable ${required_image} image"
 done
+if ! docker image inspect "${yugabyte_image_reference}" >/dev/null 2>&1; then
+  docker pull "${yugabyte_image_reference}"
+fi
 
 required_tools=(
   "go_car ${go_car_tool_commit}"

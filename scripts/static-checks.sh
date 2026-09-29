@@ -4,6 +4,7 @@ set -euo pipefail
 if [[ -f versions.lock.yaml ]]; then
   build_files=(
     docker/curio-all-in-one.Dockerfile
+    docker/zigzag-curio.Dockerfile
     docker/lotus/Dockerfile
     docker/contracts-bootstrap/Dockerfile
     docker/lotus-miner/Dockerfile
@@ -13,6 +14,7 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/bootstrap.sh
     scripts/devnet-common.sh
     scripts/devnet-build.sh
+    scripts/devnet-build-zigzag-curio.sh
     scripts/devnet-build-zigzag-microbench.sh
     scripts/devnet-up.sh
     scripts/devnet-down.sh
@@ -34,9 +36,14 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/curio/lib/ffi/unseal_funcs.go
     source-overrides/curio/market/mk20/ddo_v1.go
     source-overrides/curio/tasks/piece/task_park_piece.go
+    source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go
     source-overrides/curio/tasks/unseal/task_unseal_decode.go
     source-overrides/curio/tasks/unseal/task_unseal_sdr.go
     source-overrides/filecoin-ffi/rust/Cargo.lock
+    source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto
+    source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml
+    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
+    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/filecoin-ffi/rust/Cargo.toml
     source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
     source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_io.rs
@@ -57,12 +64,13 @@ if [[ -f versions.lock.yaml ]]; then
     }
   done
 
-  bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-build-zigzag-microbench.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
+  bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-build-zigzag-microbench.sh scripts/devnet-build-zigzag-curio.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
   node --check scripts/cleanup-proof-micro-artifacts.mjs
   rg -q '^build:' justfile
   if rg -n -i \
     '(latest|@master|@main|foundryup|nodesource|git[[:space:]]+clone|git[[:space:]]+submodule[[:space:]]+update)' \
     docker/curio-all-in-one.Dockerfile \
+    docker/zigzag-curio.Dockerfile \
     docker/lotus/Dockerfile \
     docker/contracts-bootstrap/Dockerfile \
     docker/lotus-miner/Dockerfile \
@@ -75,6 +83,7 @@ if [[ -f versions.lock.yaml ]]; then
   fi
   if rg -n '^[[:space:]]*VOLUME([[:space:]]|$)' \
     docker/curio-all-in-one.Dockerfile \
+    docker/zigzag-curio.Dockerfile \
     docker/lotus/Dockerfile \
     docker/contracts-bootstrap/Dockerfile \
     docker/lotus-miner/Dockerfile \

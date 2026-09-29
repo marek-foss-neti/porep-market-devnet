@@ -1,0 +1,296 @@
+package seal
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"runtime"
+	"time"
+
+	"github.com/ipfs/go-cid"
+	"go.opencensus.io/stats"
+	"go.opencensus.io/tag"
+	"golang.org/x/xerrors"
+
+	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/abi"
+	"github.com/filecoin-project/go-state-types/crypto"
+
+	"github.com/filecoin-project/curio/harmony/harmonydb"
+	"github.com/filecoin-project/curio/harmony/harmonytask"
+	"github.com/filecoin-project/curio/harmony/resources"
+	"github.com/filecoin-project/curio/harmony/taskhelp"
+	"github.com/filecoin-project/curio/lib/cuzk"
+	"github.com/filecoin-project/curio/lib/ffi"
+	"github.com/filecoin-project/curio/lib/storiface"
+	"github.com/filecoin-project/curio/tasks/tasknames"
+
+	"github.com/filecoin-project/lotus/chain/types"
+)
+
+type PoRepAPI interface {
+	ChainHead(context.Context) (*types.TipSet, error)
+	StateGetRandomnessFromBeacon(context.Context, crypto.DomainSeparationTag, abi.ChainEpoch, []byte, types.TipSetKey) (abi.Randomness, error)
+}
+
+type PoRepTask struct {
+	db          *harmonydb.DB
+	api         PoRepAPI
+	sp          *SealPoller
+	sc          *ffi.SealCalls
+	paramsReady func() (bool, error)
+
+	cuzkClient *cuzk.Client
+
+	max                int
+	enableRemoteProofs bool
+}
+
+func zigzagPoRepEnabled() bool {
+	return os.Getenv("FIL_PROOFS_USE_ZIGZAG") == "1"
+}
+
+func zigzagPoRepRam() uint64 {
+	switch os.Getenv("CURIO_NEW_MINER_SECTOR_SIZE") {
+	case "2kib":
+		return 4 << 30
+	case "8mib":
+		return 32 << 30
+	case "512mib":
+		return 100 << 30
+	case "32gib":
+		return 110 << 30
+	default:
+		return 110 << 30
+	}
+}
+
+func zigzagPoRepCpu() int {
+	available := runtime.NumCPU()
+	switch os.Getenv("CURIO_NEW_MINER_SECTOR_SIZE") {
+	case "2kib":
+		return min(available, 4)
+	case "8mib":
+		return min(available, 8)
+	case "512mib":
+		return min(available, 16)
+	default:
+		return available
+	}
+}
+
+func NewPoRepTask(db *harmonydb.DB, api PoRepAPI, sp *SealPoller, sc *ffi.SealCalls, paramck func() (bool, error), enableRemoteProofs bool, maxPoRep int, cuzkClient *cuzk.Client) *PoRepTask {
+	return &PoRepTask{
+		db:                 db,
+		api:                api,
+		sp:                 sp,
+		sc:                 sc,
+		paramsReady:        paramck,
+		max:                maxPoRep,
+		enableRemoteProofs: enableRemoteProofs,
+		cuzkClient:         cuzkClient,
+	}
+}
+
+func (p *PoRepTask) Do(taskID harmonytask.TaskID, stillOwned func() bool) (done bool, err error) {
+	ctx := context.Background()
+
+	var sectorParamsArr []struct {
+		SpID         int64                   `db:"sp_id"`
+		SectorNumber int64                   `db:"sector_number"`
+		RegSealProof abi.RegisteredSealProof `db:"reg_seal_proof"`
+		TicketEpoch  abi.ChainEpoch          `db:"ticket_epoch"`
+		TicketValue  []byte                  `db:"ticket_value"`
+		SeedEpoch    abi.ChainEpoch          `db:"seed_epoch"`
+		SealedCID    string                  `db:"tree_r_cid"`
+		UnsealedCID  string                  `db:"tree_d_cid"`
+	}
+
+	err = p.db.Select(ctx, &sectorParamsArr, `
+		SELECT sp_id, sector_number, reg_seal_proof, ticket_epoch, ticket_value, seed_epoch, tree_r_cid, tree_d_cid
+		FROM sectors_sdr_pipeline
+		WHERE task_id_porep = $1`, taskID)
+	if err != nil {
+		return false, err
+	}
+	if len(sectorParamsArr) != 1 {
+		return false, xerrors.Errorf("expected 1 sector params, got %d", len(sectorParamsArr))
+	}
+	sectorParams := sectorParamsArr[0]
+
+	sealed, err := cid.Parse(sectorParams.SealedCID)
+	if err != nil {
+		return false, xerrors.Errorf("failed to parse sealed cid: %w", err)
+	}
+
+	unsealed, err := cid.Parse(sectorParams.UnsealedCID)
+	if err != nil {
+		return false, xerrors.Errorf("failed to parse unsealed cid: %w", err)
+	}
+
+	ts, err := p.api.ChainHead(ctx)
+	if err != nil {
+		return false, xerrors.Errorf("failed to get chain head: %w", err)
+	}
+
+	maddr, err := address.NewIDAddress(uint64(sectorParams.SpID))
+	if err != nil {
+		return false, xerrors.Errorf("failed to create miner address: %w", err)
+	}
+
+	buf := new(bytes.Buffer)
+	if err := maddr.MarshalCBOR(buf); err != nil {
+		return false, xerrors.Errorf("failed to marshal miner address: %w", err)
+	}
+
+	rand, err := p.api.StateGetRandomnessFromBeacon(ctx, crypto.DomainSeparationTag_InteractiveSealChallengeSeed, sectorParams.SeedEpoch, buf.Bytes(), ts.Key())
+	if err != nil {
+		return false, xerrors.Errorf("failed to get randomness for computing seal proof: %w", err)
+	}
+
+	sr := storiface.SectorRef{
+		ID: abi.SectorID{
+			Miner:  abi.ActorID(sectorParams.SpID),
+			Number: abi.SectorNumber(sectorParams.SectorNumber),
+		},
+		ProofType: sectorParams.RegSealProof,
+	}
+
+	// COMPUTE THE PROOF!
+
+	var proof []byte
+	if !zigzagPoRepEnabled() && p.cuzkClient != nil && p.cuzkClient.Enabled() {
+		proof, err = p.sc.PoRepSnarkCuzk(ctx, p.cuzkClient, sr, sealed, unsealed, sectorParams.TicketValue, abi.InteractiveSealRandomness(rand))
+	} else {
+		proof, err = p.sc.PoRepSnark(ctx, sr, sealed, unsealed, sectorParams.TicketValue, abi.InteractiveSealRandomness(rand))
+	}
+	if err != nil {
+		return false, xerrors.Errorf("failed to compute seal proof: %w", err)
+	}
+
+	// store success!
+	n, err := p.db.Exec(ctx, `UPDATE sectors_sdr_pipeline
+		SET after_porep = TRUE, seed_value = $3, porep_proof = $4, task_id_porep = NULL
+		WHERE sp_id = $1 AND sector_number = $2`,
+		sectorParams.SpID, sectorParams.SectorNumber, []byte(rand), proof)
+	if err != nil {
+		return false, xerrors.Errorf("store sdr success: updating pipeline: %w", err)
+	}
+	if n != 1 {
+		return false, xerrors.Errorf("store sdr success: updated %d rows", n)
+	}
+
+	// Record metric
+	err = stats.RecordWithTags(ctx, []tag.Mutator{
+		tag.Upsert(MinerTag, maddr.String()),
+	}, SealMeasures.PoRepCompleted.M(1))
+	if err != nil {
+		log.Errorf("recording metric: %s", err)
+	}
+	return true, nil
+}
+
+func (p *PoRepTask) CanAccept(ids []harmonytask.TaskID, _ *harmonytask.TaskEngine) ([]harmonytask.TaskID, error) {
+	if !p.enableRemoteProofs {
+		// remote proofs enabled but not local prove - we still need the task for poller
+		return []harmonytask.TaskID{}, nil
+	}
+
+	// When cuzk is enabled, the shared Max limiter (from cuzkClient.TaskMax())
+	// enforces MaxPending across all CuZK task types. CanAccept just needs to
+	// accept all IDs — harmonytask's Max.AtMax() / Headroom() gate handles the cap.
+	if !zigzagPoRepEnabled() && p.cuzkClient != nil && p.cuzkClient.Enabled() {
+		return ids, nil
+	}
+
+	rdy, err := p.paramsReady()
+	if err != nil {
+		return []harmonytask.TaskID{}, xerrors.Errorf("failed to setup params: %w", err)
+	}
+	if !rdy {
+		log.Infow("PoRepTask.CanAccept() params not ready, not scheduling")
+		return []harmonytask.TaskID{}, nil
+	}
+	// todo sort by priority
+
+	return ids, nil
+}
+
+func (p *PoRepTask) TypeDetails() harmonytask.TaskTypeDetails {
+	zigzag := zigzagPoRepEnabled()
+	gpu := 1.0
+	mem := uint64(128 << 30) // for GPU sealing. 160 for CPU sealing, which we pretend nobody uses.
+	cpu := 1
+	if IsDevnet {
+		gpu = 0
+		mem = 1 << 30
+	}
+	if !zigzag && p.cuzkClient != nil && p.cuzkClient.Enabled() {
+		// When cuzk handles SNARK computation, the local node only needs to
+		// generate vanilla proofs (CPU-only) and submit via gRPC.
+		// GPU and large RAM are not needed locally.
+		gpu = 0
+		mem = 1 << 30
+	}
+	if zigzag {
+		gpu = 0
+		mem = zigzagPoRepRam()
+		cpu = zigzagPoRepCpu()
+	}
+	var maxLimiter taskhelp.Limiter
+	if !zigzag && p.cuzkClient != nil && p.cuzkClient.Enabled() {
+		// Use the shared cuzk limiter so all CuZK task types (PoRep, Snap,
+		// ProofShare) share one in-flight count bounded by MaxPending.
+		maxLimiter = p.cuzkClient.TaskMax()
+	} else {
+		if zigzag {
+			maxLimiter = taskhelp.Max(1)
+		} else {
+			maxLimiter = taskhelp.Max(p.max)
+		}
+	}
+
+	res := harmonytask.TaskTypeDetails{
+		Max:  maxLimiter,
+		Name: tasknames.PoRep,
+		Cost: resources.Resources{
+			Cpu: cpu,
+			Gpu: gpu,
+			Ram: mem,
+		},
+		MaxFailures: 10,
+		RetryWait: func(retries int) time.Duration {
+			return min(time.Second<<retries, 2*time.Minute)
+		},
+	}
+	return res
+}
+
+func (p *PoRepTask) GetSpid(db *harmonydb.DB, taskID int64) string {
+	sid, err := p.GetSectorID(db, taskID)
+	if err != nil {
+		log.Errorf("getting sector id: %s", err)
+		return ""
+	}
+	return sid.Miner.String()
+}
+
+func (p *PoRepTask) GetSectorID(db *harmonydb.DB, taskID int64) (*abi.SectorID, error) {
+	var spId, sectorNumber uint64
+	err := db.QueryRow(context.Background(), `SELECT sp_id,sector_number FROM sectors_sdr_pipeline WHERE task_id_porep = $1`, taskID).Scan(&spId, &sectorNumber)
+	if err != nil {
+		return nil, err
+	}
+	return &abi.SectorID{
+		Miner:  abi.ActorID(spId),
+		Number: abi.SectorNumber(sectorNumber),
+	}, nil
+}
+
+var _ = harmonytask.Reg(&PoRepTask{})
+
+func (p *PoRepTask) Adder(taskFunc harmonytask.AddTaskFunc) {
+	p.sp.pollers[pollerPoRep].Set(taskFunc)
+}
+
+var _ harmonytask.TaskInterface = &PoRepTask{}

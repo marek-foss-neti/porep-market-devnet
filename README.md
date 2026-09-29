@@ -83,6 +83,19 @@ just build
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 32gib
 ```
 
+`just build` prepares the standard DevNet images, the pinned Yugabyte image,
+and dedicated ZigZag microbench and Curio images. The standard images always
+use the managed locked Rust source. The lock includes the Stage 3 C1/C2 API,
+so the ZigZag builds also use managed sources by default. After updating the
+lock, run `npm --prefix tools run cli -- sources fetch` before `just build`.
+For development, `DEVNET_RUST_FIL_PROOFS_SOURCE` can select an absolute source
+directory inside this repository for the ZigZag builds.
+The builds keep separate toolchains and manifests (`images.json`,
+`zigzag-microbench-images.json`, and `zigzag-curio-images.json`).
+The ZigZag build also runs when the standard images are reused from cache;
+Docker BuildKit can reuse its own cached layers. Building does not run a
+benchmark or generate proof parameters.
+
 ## Canonical Run
 
 ```sh
@@ -149,8 +162,8 @@ just bench-proof-micro-backends 8mib
 ```
 
 These runs do not start Curio or Lotus. They execute pre-commit, prove,
-verify, and raw unseal inside the built `curio-all-in-one` image and write
-reports under:
+verify, and raw unseal inside the dedicated `zigzag-microbench` image for
+ZigZag or `curio-all-in-one` for Stacked, and write reports under:
 
 ```text
 .runtime/runs/<timestamp>-bench-proof-micro-<backend>-<sector>/summary.md
@@ -167,6 +180,65 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 512
 ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
+
+### ZigZag 512 MiB parameter setup
+
+Build the dedicated ZigZag microbench image with the reviewed source, then generate the exact 512 MiB,
+11-layer, 10-partition parameter set once with an empty cache:
+
+`just build` prepares both sets of images. The standard
+`scripts/devnet-build.sh` uses the managed Rust source and the Rust image from
+the runtime lock for Curio and Lotus, including SDR. Their FFI sources may
+select a toolchain through their own `rust-toolchain.toml`. The ZigZag
+microbench keeps its own lockfile and pinned Rust 1.94 image. To build only
+that image from the managed sources:
+
+```sh
+bash scripts/devnet-build-zigzag-microbench.sh
+```
+
+For development, the standalone ZigZag build also accepts an isolated source
+copy at the managed rust-fil-proofs commit:
+
+```sh
+DEVNET_RUST_FIL_PROOFS_SOURCE="$PWD/.runtime/zigzag-setup-source" \
+bash scripts/devnet-build-zigzag-microbench.sh
+```
+
+The separate manifest records the source content digest and toolchain image.
+`bench-proof-micro.sh` selects this image for ZigZag and the standard image for
+Stacked.
+
+```sh
+BENCH_PROOF_MICRO_PROFILE=zigzag-512 \
+BENCH_PROOF_PARAMETERS_DIR="$PWD/.cache/zigzag-512-parameters" \
+BENCH_ZIGZAG_SETUP_REQUIRE_MISS=1 \
+POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+bash scripts/bench-proof-micro.sh zigzag 512mib prewarm-only
+```
+
+The setup container uses `--memory=110000000000` and
+`--memory-swap=110000000000`. Its report records the kernel `memory.peak`,
+actual cgroup limits, swap, setup phases, disk use, image provenance, and
+SHA-256 digests of `.params/.vk/.meta`. The default generator limits are
+`BENCH_ZIGZAG_SETUP_BATCH_POINTS=65536`, `BENCH_ZIGZAG_SETUP_WORKERS=16`, and
+`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=100000000000`. The parameter directory is
+persistent and may be used for a second `prewarm-only` call with
+`BENCH_ZIGZAG_SETUP_REQUIRE_MISS` unset; its summary must report a cache hit.
+Scratch is reused under that parameter directory's `zigzag-setup-scratch`.
+New scratch and publication workspaces hold an OS file lock. The next writable
+setup removes abandoned workspaces after acquiring their locks, including
+after SIGKILL/OOM, and preserves active workspaces. Unmarked files from older
+versions are excluded from automatic recovery and require separate inspection.
+
+Failed `prewarm-only` runs also write `report.json` with `status: "failed"`,
+available telemetry, the last setup phase, and final Docker state in
+`prewarm-container.json`. Raw logs and partial telemetry are retained.
+Docker's `OOMKilled` is recorded separately from sampled cgroup counters.
+The stopped container is removed after diagnostics are saved; a container
+whose state cannot be inspected is retained with its ID in `container.cid`.
+For subsequent full runs, set `BENCH_ZIGZAG_512_PARAMETER_DIR` to the same
+parameter directory when invoking `scripts/bench-zigzag-512.sh`.
 
 For raw unseal/retrieval comparison without Groth parameter generation, use the
 fixture mode:

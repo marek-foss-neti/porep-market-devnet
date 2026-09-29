@@ -4,8 +4,13 @@ bootstrap:
     @bash scripts/bootstrap.sh
 
 build:
-    @bash scripts/devnet-build.sh
+    @DEVNET_RUST_FIL_PROOFS_SOURCE='' bash scripts/devnet-build.sh
     @bash scripts/devnet-build-zigzag-microbench.sh
+    @bash scripts/devnet-build-zigzag-curio.sh
+
+build-zigzag-stage3:
+    @bash scripts/devnet-build-zigzag-microbench.sh
+    @bash scripts/devnet-build-zigzag-curio.sh
 
 build-contracts:
     @bash scripts/contracts-build.sh

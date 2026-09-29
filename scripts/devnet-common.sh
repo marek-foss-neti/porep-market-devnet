@@ -251,7 +251,7 @@ devnet_stop_prewarm_progress() {
 }
 
 devnet_compose() {
-  env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_DATA_DIR \
+  env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_CURIO_IMAGE -u DEVNET_DATA_DIR \
     -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_PARENT_CACHE_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
     -u DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS \
     -u DEVNET_FILECOIN_SERVICES_SOURCE -u DEVNET_MULTICALL3_SOURCE \
@@ -531,7 +531,7 @@ devnet_write_compose_env() {
   local compose_environment_temporary="${DEVNET_COMPOSE_ENV}.temporary.$$"
   devnet_require_safe_write_path "${compose_environment_temporary}" file
   local proof_backend sector_size sector_size_bytes actor_network_bundle firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
-  local parent_cache_dir parent_cache_window_nodes
+  local parent_cache_dir parent_cache_window_nodes curio_image
   local curio_disable_actor_metadata_tasks
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
     proof_backend="$(devnet_current_proof_backend)"
@@ -547,6 +547,10 @@ devnet_write_compose_env() {
   actor_network_bundle="$(devnet_actor_network_bundle_for_sector_size "${sector_size}")"
   firehorse_height="$(devnet_firehorse_upgrade_epoch_for_sector_size "${sector_size}")"
   fil_proofs_use_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
+  curio_image="${DEVNET_IMAGE_NAMESPACE}/curio:${curio_commit:0:12}"
+  if [[ "${proof_backend}" == zigzag ]]; then
+    curio_image="$(devnet_zigzag_curio_image "${curio_commit}")"
+  fi
   fil_proofs_zigzag_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
   parent_cache_dir="$(devnet_parent_cache_dir_for_backend "${proof_backend}")"
   parent_cache_window_nodes="$(devnet_parent_cache_window_nodes)"
@@ -557,6 +561,7 @@ devnet_write_compose_env() {
   (set -o noclobber; cat > "${compose_environment_temporary}" <<EOF
 DEVNET_IMAGE_NAMESPACE=${DEVNET_IMAGE_NAMESPACE}
 DEVNET_CURIO_SHORT_COMMIT=${curio_commit:0:12}
+DEVNET_CURIO_IMAGE=${curio_image}
 DEVNET_DATA_DIR=${DEVNET_DATA_DIR}
 DEVNET_PROOF_BACKEND=${proof_backend}
 DEVNET_SECTOR_SIZE=${sector_size}
@@ -989,8 +994,78 @@ devnet_zigzag_microbench_overrides_sha256() {
     devnet_die "dedicated ZigZag benchmark Cargo.lock is missing"
   {
     devnet_zigzag_source_overrides_sha256
+    devnet_zigzag_stage3_ffi_overrides_sha256
     shasum -a 256 "${zigzag_lock}" | awk '{print $1}'
   } | shasum -a 256 | awk '{print $1}'
+}
+
+devnet_zigzag_stage3_ffi_overrides_sha256() {
+  local root="${DEVNET_ROOT}/source-overrides/zigzag-stage3/filecoin-ffi"
+  local path
+  for path in \
+    install-filcrypto \
+    rust/Cargo.toml \
+    rust/src/bin/porep-proof-microbench.rs \
+    rust/src/proofs/api.rs; do
+    [[ -f "${root}/${path}" && ! -L "${root}/${path}" ]] ||
+      devnet_die "dedicated ZigZag stage 3 override is missing: ${path}"
+  done
+  (
+    cd "${root}"
+    find . \( -type f -o -type l \) -print | LC_ALL=C sort | while IFS= read -r path; do
+      [[ -f "${path}" && ! -L "${path}" ]] ||
+        devnet_die "dedicated ZigZag stage 3 override is symbolic: ${path}"
+      printf '%s\n' "${path}"
+      shasum -a 256 "${path}" | awk '{print $1}'
+    done
+  ) | shasum -a 256 | awk '{print $1}'
+}
+
+devnet_zigzag_curio_overrides_sha256() {
+  local task="${DEVNET_ROOT}/source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go"
+  [[ -f "${task}" && ! -L "${task}" ]] ||
+    devnet_die "dedicated ZigZag Curio task override is missing or symbolic"
+  {
+    devnet_zigzag_microbench_overrides_sha256
+    shasum -a 256 "${task}" | awk '{print $1}'
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+devnet_zigzag_curio_image() {
+  local curio_commit="$1" manifest="${DEVNET_BUILD_DIR}/zigzag-curio-images.json"
+  local image source_relative source_sha expected_id base_image base_id
+  [[ -f "${manifest}" && ! -L "${manifest}" ]] ||
+    devnet_die "dedicated ZigZag Curio image manifest is missing; run scripts/devnet-build-zigzag-curio.sh"
+  [[ "$(jq -r '.schemaVersion' "${manifest}")" == 1 &&
+     "$(jq -r '.curioCommit' "${manifest}")" == "${curio_commit}" ]] ||
+    devnet_die "ZigZag Curio manifest identity mismatch"
+  [[ "$(shasum -a 256 "${DEVNET_ROOT}/docker/zigzag-curio.Dockerfile" | awk '{print $1}')" == "$(jq -r '.dockerfileSha256' "${manifest}")" &&
+     "$(devnet_zigzag_curio_overrides_sha256)" == "$(jq -r '.sourceOverridesSha256' "${manifest}")" ]] ||
+    devnet_die "ZigZag Curio build inputs differ from its manifest"
+  source_relative="$(jq -r '.rustFilProofsSourceRelative' "${manifest}")"
+  source_sha="$(jq -r '.rustFilProofsSourceSha256' "${manifest}")"
+  [[ "${source_relative}" != /* && "${source_relative}" != *..* && "${source_sha}" =~ ^[0-9a-f]{64}$ ]] ||
+    devnet_die "ZigZag Curio manifest has unsafe source identity"
+  [[ "$(devnet_rust_fil_proofs_content_sha256 "${DEVNET_ROOT}/${source_relative}")" == "${source_sha}" ]] ||
+    devnet_die "ZigZag Curio source differs from its manifest"
+  base_image="${DEVNET_IMAGE_NAMESPACE}/curio:${curio_commit:0:12}"
+  base_id="$(docker image inspect "${base_image}" --format '{{.Id}}')"
+  [[ "$(jq -r '.baseImage' "${manifest}")" == "${base_image}" &&
+     "$(jq -r '.baseImageId' "${manifest}")" == "${base_id}" ]] ||
+    devnet_die "ZigZag Curio base image differs from its manifest"
+  image="$(jq -r '.imageReference' "${manifest}")"
+  expected_id="$(jq -r '.imageId' "${manifest}")"
+  [[ "${image}" == "${DEVNET_IMAGE_NAMESPACE}/curio-zigzag:"* && "${expected_id}" == sha256:* ]] ||
+    devnet_die "ZigZag Curio image identity is invalid"
+  [[ "$(docker image inspect "${image}" --format '{{.Id}}')" == "${expected_id}" &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.stage3"}}')" == 1 &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.source-sha256"}}')" == "${source_sha}" &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.source-overrides.sha256"}}')" == "$(jq -r '.sourceOverridesSha256' "${manifest}")" &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.dockerfile.sha256"}}')" == "$(jq -r '.dockerfileSha256' "${manifest}")" &&
+     "$(docker image inspect "${image}" --format '{{.Os}}/{{.Architecture}}')" == "$(jq -r '.platform' "${manifest}")" &&
+     "$(docker image inspect "${image}" --format '{{json .Config.Volumes}}')" == null ]] ||
+    devnet_die "ZigZag Curio image differs from its manifest"
+  printf '%s\n' "${image}"
 }
 
 devnet_docker_surface_sha256() {
@@ -1016,7 +1091,7 @@ devnet_docker_surface_sha256() {
 
 devnet_proof_microbench_manifest_for_backend() {
   case "$1" in
-    zigzag) printf '%s\n' "${DEVNET_BUILD_DIR}/zigzag-microbench-images.json" ;;
+    zigzag) printf '%s\n' "${BENCH_ZIGZAG_MICROBENCH_MANIFEST:-${DEVNET_BUILD_DIR}/zigzag-microbench-images.json}" ;;
     stacked) printf '%s\n' "${DEVNET_BUILD_DIR}/images.json" ;;
     *) devnet_die "unknown proof microbench backend: $1" ;;
   esac

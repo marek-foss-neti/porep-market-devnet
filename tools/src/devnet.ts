@@ -14,6 +14,7 @@ export interface ComposeInspection {
 }
 
 export interface ComposeRuntimeContract {
+  curioImage: string;
   curioShortCommit: string;
   dataDirectory: string;
   actorNetworkBundle: "devnet" | "testing";
@@ -54,6 +55,7 @@ export interface DevnetStatusInspection {
 }
 
 const composeEnvironmentKeys = [
+  "DEVNET_CURIO_IMAGE",
   "DEVNET_CURIO_SHORT_COMMIT",
   "DEVNET_DATA_DIR",
   "LOTUS_DEVNET_NETWORK_BUNDLE",
@@ -149,7 +151,9 @@ export function inspectRenderedCompose(
     if (lock.runtime.services.includes(name as typeof lock.runtime.services[number])) {
       const expectedImage = name === "yugabyte"
         ? contract.yugabyteImage
-        : `${contract.imageNamespace}/${name}:${contract.curioShortCommit}`;
+        : name === "curio"
+          ? contract.curioImage
+          : `${contract.imageNamespace}/${name}:${contract.curioShortCommit}`;
       if (service.image !== expectedImage) throw new Error(`${name} image mismatch`);
     }
     const environment = environmentRecord(service.environment);
@@ -310,8 +314,20 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
   if (curioDisableActorMetadataTasks !== disableActorMetadataTasksForSectorSize(sectorSizeSelector)) {
     throw new Error("CURIO_DISABLE_ACTOR_METADATA_TASKS does not match sector size");
   }
+  const proofBackend = proofBackendValue(requiredValue(values, "DEVNET_PROOF_BACKEND"));
+  const curioImage = requiredValue(values, "DEVNET_CURIO_IMAGE");
+  const imageNamespace = requiredValue(values, "DEVNET_IMAGE_NAMESPACE");
+  const curioShortCommit = requiredValue(values, "DEVNET_CURIO_SHORT_COMMIT");
+  if (proofBackend === "stacked") {
+    if (curioImage !== `${imageNamespace}/curio:${curioShortCommit}`) {
+      throw new Error("SDR Curio image mismatch");
+    }
+  } else if (!curioImage.startsWith(`${imageNamespace}/curio-zigzag:`)) {
+    throw new Error("ZigZag Curio image mismatch");
+  }
   return {
-    curioShortCommit: requiredValue(values, "DEVNET_CURIO_SHORT_COMMIT"),
+    curioImage,
+    curioShortCommit,
     dataDirectory: requiredValue(values, "DEVNET_DATA_DIR"),
     actorNetworkBundle: actorNetworkBundleValue(requiredValue(values, "LOTUS_DEVNET_NETWORK_BUNDLE")),
     firehorseHeight: requiredValue(values, "DEVNET_FIREHORSE_HEIGHT"),
@@ -324,10 +340,10 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     filProofsZigZagParentCacheSize: requiredValue(values, "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE"),
     filProofsZigZagGenerateMissingParams: requiredValue(values, "FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS"),
     filProofsZigZagSidecarDirectory: requiredValue(values, "FIL_PROOFS_ZIGZAG_SIDECAR_DIR"),
-    imageNamespace: requiredValue(values, "DEVNET_IMAGE_NAMESPACE"),
+    imageNamespace,
     multicall3Source: requiredValue(values, "DEVNET_MULTICALL3_SOURCE"),
     parentCacheDirectory: requiredValue(values, "DEVNET_PARENT_CACHE_DIR"),
-    proofBackend: proofBackendValue(requiredValue(values, "DEVNET_PROOF_BACKEND")),
+    proofBackend,
     proofParametersDirectory: requiredValue(values, "DEVNET_PROOF_PARAMETERS_DIR"),
     sectorSizeBytes: sectorSizeBytesValue(requiredValue(values, "SECTOR_SIZE")),
     sectorSizeSelector,

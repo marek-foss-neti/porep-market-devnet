@@ -36,7 +36,7 @@ test("loads the ten checked-in managed sources", async () => {
   );
   assert.equal(
     sources.find((source) => source.name === "rust_fil_proofs")?.commit,
-    "2dc8c02953a2071dcb2327ace47225a4f31dea8c",
+    "e1f017407e0bbadf4b3dd9880d92d750b41b0a85",
   );
 });
 

@@ -166,9 +166,26 @@ docker_common_args=(
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+if [[ "${backend}" == "zigzag" && "${sector_size}" == "512mib" && "${mode}" == "full" ]]; then
+  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-110000000000}"
+  [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0)) ||
+    devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be a positive integer"
+  docker_common_args+=(--memory "${full_memory_bytes}" --memory-swap "${full_memory_bytes}")
+fi
 zigzag_setup_args=()
 prewarm_limit_args=()
 if [[ "${backend}" == "zigzag" ]]; then
+  zigzag_default_batch_size=2
+  case "${sector_size}" in
+    512mib|32gib) zigzag_default_batch_size=1 ;;
+  esac
+  zigzag_groth16_batch_size="${BENCH_ZIGZAG_GROTH16_BATCH_SIZE:-${zigzag_default_batch_size}}"
+  [[ "${zigzag_groth16_batch_size}" =~ ^[0-9]+$ ]] &&
+    ((zigzag_groth16_batch_size >= 1 && zigzag_groth16_batch_size <= 10)) ||
+    devnet_die "BENCH_ZIGZAG_GROTH16_BATCH_SIZE must be between 1 and 10"
+  docker_common_args+=(
+    -e "FIL_PROOFS_ZIGZAG_GROTH16_BATCH_SIZE=${zigzag_groth16_batch_size}"
+  )
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
   setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
   setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-100000000000}"
@@ -956,6 +973,12 @@ if [[ "${bench_profile}" == "zigzag-512" ]]; then
     and .unsealed_bytes == 532676608
   ' "${summary_json}" >/dev/null || devnet_die "zigzag-512 seal/prove/verify/unseal parameters differ from prewarm"
 fi
+if [[ "${backend}" == "zigzag" ]] &&
+  jq -e '.cargoFeatures | index("zigzag-stage3") != null' "${image_manifest}" >/dev/null; then
+  jq -e --argjson batch "${zigzag_groth16_batch_size}" \
+    '.zigzag_groth16_batch_size == $batch' "${summary_json}" >/dev/null ||
+    devnet_die "ZigZag C2 used a different Groth16 batch size; see ${summary_json}"
+fi
 bench_finalize_telemetry "${telemetry_ndjson}" "${telemetry_summary_json}"
 bench_write_provenance \
   "full" \
@@ -997,6 +1020,7 @@ summary_md="${run_dir}/summary.md"
       "| Registered seal proof | `" + .registered_seal_proof + "` (`" + (.registered_seal_proof_id | tostring) + "`) |",
       "| PoRep layers | `" + (.porep_layers | tostring) + "` |",
       "| PoRep partitions | `" + (.porep_partitions | tostring) + "` |",
+      "| Effective ZigZag Groth16 batch size | `" + ((.zigzag_groth16_batch_size // "n/a") | tostring) + "` |",
       "| Minimum total challenges | `" + (.minimum_total_challenges | tostring) + "` |",
       "| Challenges per layer per partition | `" + (.challenges_per_layer_per_partition | tostring) + "` |",
       "| Stacked SDR replication | `" + $stackedSdrReplicationMode + "` |",

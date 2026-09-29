@@ -118,6 +118,8 @@ function selectedEnvironment() {
     "BENCH_STACKED_USE_MULTICORE_SDR",
     "BENCH_TELEMETRY_INTERVAL_MS",
     "BENCH_ZIGZAG_PARENT_CACHE_DIR",
+    "BENCH_ZIGZAG_GROTH16_BATCH_SIZE",
+    "BENCH_ZIGZAG_FULL_MEMORY_BYTES",
     "BENCH_ZIGZAG_SETUP_BATCH_POINTS",
     "BENCH_ZIGZAG_SETUP_BUDGET_BYTES",
     "BENCH_ZIGZAG_SETUP_MEMORY_BYTES",
@@ -168,13 +170,20 @@ export function buildProvenance({
   const microbenchSourcePath = resolve(
     repositoryRoot,
     "source-overrides",
+    ...(backend === "zigzag" ? ["zigzag-stage3"] : []),
     "filecoin-ffi",
     "rust",
     "src",
     "bin",
     "porep-proof-microbench.rs",
   );
-  const ioSourcePath = resolve(dirname(microbenchSourcePath), "support", "porep_microbench_io.rs");
+  const ioSourcePath = resolve(dirname(telemetrySourcePath), "porep_microbench_io.rs");
+  const cargoFeatures = backend === "zigzag"
+    ? imageManifest.cargoFeatures
+    : ["multicore-sdr", "zigzag-bench"];
+  if (!Array.isArray(cargoFeatures) || !cargoFeatures.every((feature) => typeof feature === "string")) {
+    fail("ZigZag image manifest has no valid cargoFeatures");
+  }
   const summarizerPath = resolve(repositoryRoot, "scripts", "summarize-proof-micro-telemetry.mjs");
   const provenanceWriterPath = resolve(repositoryRoot, "scripts", "write-proof-micro-provenance.mjs");
   const reportComposerPath = resolve(repositoryRoot, "scripts", "compose-proof-micro-report.mjs");
@@ -214,6 +223,7 @@ export function buildProvenance({
         dockerfile_sha256: imageManifest.dockerfileSha256,
         zigzag_source_overrides_sha256: imageManifest.zigzagSourceOverridesSha256,
         zigzag_rust_fil_proofs_api_sha256: imageManifest.zigzagRustFilProofsApiSha256,
+        cargo_features: cargoFeatures,
       },
       image: filteredImageInspect(repositoryRoot, imageReference),
       benchmark_binary: {
@@ -224,9 +234,7 @@ export function buildProvenance({
         telemetry_source_override_path: telemetrySourcePath,
         cargo_profile: "release",
         cargo_default_features: false,
-        cargo_features: backend === "zigzag"
-          ? ["multicore-sdr", "zigzag-bench", "zigzag-setup-status"]
-          : ["multicore-sdr", "zigzag-bench"],
+        cargo_features: cargoFeatures,
       },
     },
     machine: {

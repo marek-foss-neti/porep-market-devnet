@@ -1,6 +1,8 @@
 ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE=docker.io/library/rust:1.94.0-slim-bookworm@sha256:a86cada82e36ebd7a9bffed7548792c55a952fdb20718eea9278a936bcb76e62
+ARG ZIGZAG_STAGE3_CARGO_FEATURE=
 
 FROM ${ZIGZAG_RUST_TOOLCHAIN_IMAGE} AS zigzag-builder
+ARG ZIGZAG_STAGE3_CARGO_FEATURE
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -17,6 +19,7 @@ COPY --from=curio-source / /opt/curio/
 RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
 COPY --from=rust-fil-proofs / /opt/curio/extern/rust-fil-proofs/
 COPY --from=harness-overlay source-overrides/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
+COPY --from=harness-overlay source-overrides/zigzag-stage3/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
 COPY --from=harness-overlay source-overrides/zigzag-bench/Cargo.lock /opt/curio/extern/filecoin-ffi/rust/Cargo.lock
 RUN set -eu; \
     fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
@@ -32,7 +35,7 @@ RUN toolchain="$(rustup default | awk '{print $1}')" \
     && RUSTUP_TOOLCHAIN="${toolchain}" CARGO_BUILD_JOBS=2 cargo build --release --locked \
          --bin porep-proof-microbench \
          --no-default-features \
-         --features multicore-sdr,zigzag-bench,zigzag-setup-status
+         --features "multicore-sdr,zigzag-bench,zigzag-setup-status${ZIGZAG_STAGE3_CARGO_FEATURE}"
 
 FROM ${ZIGZAG_RUST_TOOLCHAIN_IMAGE} AS zigzag-microbench
 

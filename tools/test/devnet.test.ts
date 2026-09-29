@@ -192,6 +192,13 @@ const sourceOverrideInputs = [
   "source-overrides/lotus/build/buildconstants/devnet_network_bundle.go",
   "source-overrides/lotus/entrypoint.sh",
 ] as const;
+const stage3OverrideInputs = [
+  "source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go",
+  "source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto",
+  "source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml",
+  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
+  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs",
+] as const;
 
 async function sha256File(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
@@ -372,6 +379,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   const lotusService = compose.match(/  lotus:\n[\s\S]*?\n  contracts-bootstrap:/)?.[0] ?? "";
   const lotusMinerService = compose.match(/  lotus-miner:\n[\s\S]*?\n  curio:/)?.[0] ?? "";
   const curioService = compose.match(/  curio:\n[\s\S]*?\n  yugabyte:/)?.[0] ?? "";
+  assert.match(curioService, /image: \$\{DEVNET_CURIO_IMAGE:-/);
   assert.match(curioService, /FIL_PROOFS_USE_ZIGZAG=\$\{FIL_PROOFS_USE_ZIGZAG\}/);
   assert.match(curioService, /CURIO_NEW_MINER_SECTOR_SIZE=\$\{DEVNET_SECTOR_SIZE\}/);
   assert.match(curioService, /CURIO_DISABLE_ACTOR_METADATA_TASKS=\$\{CURIO_DISABLE_ACTOR_METADATA_TASKS\}/);
@@ -792,7 +800,8 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(reportComposer, /unattributed_outer_wall_ms/);
   assert.match(provenanceWriter, /tracked_patch_sha256/);
   assert.match(provenanceWriter, /zigzag_source_overrides_sha256/);
-  assert.match(provenanceWriter, /cargo_features: backend === "zigzag"\s*\? \["multicore-sdr", "zigzag-bench", "zigzag-setup-status"\]\s*:\s*\["multicore-sdr", "zigzag-bench"\]/);
+  assert.match(provenanceWriter, /imageManifest\.cargoFeatures/);
+  assert.match(provenanceWriter, /zigzag-stage3/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);
@@ -902,7 +911,10 @@ test("proof provenance uses managed or explicitly configured Rust sources", asyn
   try {
     const imageManifestPath = join(fixture.root, "images.json");
     const summaryPath = join(fixture.root, "summary.json");
-    await writeFile(imageManifestPath, JSON.stringify({ rustFilProofsCommit: rustFilProofsSourceCommit }));
+    await writeFile(imageManifestPath, JSON.stringify({
+      rustFilProofsCommit: rustFilProofsSourceCommit,
+      cargoFeatures: ["multicore-sdr", "zigzag-bench", "zigzag-setup-status", "zigzag-stage3"],
+    }));
     await writeFile(summaryPath, "{}");
     for (const name of ["bench-proof-micro.sh", "summarize-proof-micro-telemetry.mjs", "write-proof-micro-provenance.mjs", "compose-proof-micro-report.mjs"]) {
       await cp(join(repositoryRoot, "scripts", name), join(fixture.root, "scripts", name));
@@ -945,6 +957,10 @@ test("proof provenance uses managed or explicitly configured Rust sources", asyn
       assert.equal(result.status, 0, result.stderr);
       const provenance = JSON.parse(result.stdout);
       assert.equal(provenance.build.manifest.rust_fil_proofs_commit, rustFilProofsSourceCommit);
+      assert.deepEqual(provenance.build.benchmark_binary.cargo_features,
+        ["multicore-sdr", "zigzag-bench", "zigzag-setup-status", "zigzag-stage3"]);
+      assert.equal(provenance.build.benchmark_binary.source_override_path,
+        join(fixture.root, "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs"));
       assert.equal(provenance.workspaces.rust_fil_proofs_source_path, configured ? resolve(fixture.root, configured) : managed);
       if (configured) {
         assert.equal(provenance.workspaces.rust_fil_proofs, null);
@@ -1340,7 +1356,7 @@ test("mismatched generated Stacked proof parameters are quarantined before devne
   }
 });
 
-async function renderTaskThreeCompose(): Promise<{
+async function renderTaskThreeCompose(options: { curioImage?: string | null } = {}): Promise<{
   contract: ComposeRuntimeContract;
   rendered: string;
 }> {
@@ -1373,6 +1389,9 @@ async function renderTaskThreeCompose(): Promise<{
     [
       `DEVNET_IMAGE_NAMESPACE=${imageNamespace}`,
       `DEVNET_CURIO_SHORT_COMMIT=${curioShortCommit}`,
+      ...(options.curioImage === null ? [] : [
+        `DEVNET_CURIO_IMAGE=${options.curioImage ?? `${imageNamespace}/curio:${curioShortCommit}`}`,
+      ]),
       `DEVNET_DATA_DIR=${dataDirectory}`,
       "DEVNET_PROOF_BACKEND=stacked",
       "DEVNET_SECTOR_SIZE=8mib",
@@ -1404,6 +1423,8 @@ async function renderTaskThreeCompose(): Promise<{
       "DEVNET_DATA_DIR",
       "-u",
       "DEVNET_IMAGE_NAMESPACE",
+      "-u",
+      "DEVNET_CURIO_IMAGE",
       "docker",
       "compose",
       "--env-file",
@@ -1422,6 +1443,7 @@ async function renderTaskThreeCompose(): Promise<{
         ...process.env,
         DEVNET_DATA_DIR: "/tmp/hostile-data-override",
         DEVNET_IMAGE_NAMESPACE: "hostile-image-override",
+        DEVNET_CURIO_IMAGE: "hostile-curio-image",
       },
       timeout: 5_000,
     },
@@ -1430,6 +1452,7 @@ async function renderTaskThreeCompose(): Promise<{
   assert.equal(result.status, 0, result.stderr);
   return {
     contract: {
+      curioImage: options.curioImage || `${imageNamespace}/curio:${curioShortCommit}`,
       curioShortCommit,
       dataDirectory,
       actorNetworkBundle: "devnet",
@@ -1456,6 +1479,21 @@ async function renderTaskThreeCompose(): Promise<{
     rendered: result.stdout,
   };
 }
+
+test("compose renders legacy environments without the Curio image selector", async () => {
+  const lock = await loadRuntimeLock(runtimeLockPath);
+  const { contract, rendered } = await renderTaskThreeCompose({ curioImage: null });
+
+  assert.equal(JSON.parse(rendered).services.curio.image, contract.curioImage);
+  inspectRenderedCompose(rendered, lock, contract);
+});
+
+test("compose selects the dedicated ZigZag image over the legacy fallback", async () => {
+  const curioImage = "porep-market-curio-devnet/curio-zigzag:fixture-source-fixture-overrides";
+  const { rendered } = await renderTaskThreeCompose({ curioImage });
+
+  assert.equal(JSON.parse(rendered).services.curio.image, curioImage);
+});
 
 test("rendered compose inspector enforces the complete Task 3 contract", async () => {
   const lock = await loadRuntimeLock(runtimeLockPath);
@@ -1563,6 +1601,7 @@ test("typed CLI accepts the rendered Compose contract and up invokes it before s
       [
         `DEVNET_IMAGE_NAMESPACE=${contract.imageNamespace}`,
         `DEVNET_CURIO_SHORT_COMMIT=${contract.curioShortCommit}`,
+        `DEVNET_CURIO_IMAGE=${contract.curioImage}`,
         `DEVNET_DATA_DIR=${contract.dataDirectory}`,
         `DEVNET_PROOF_BACKEND=${contract.proofBackend}`,
         `DEVNET_SECTOR_SIZE=${contract.sectorSizeSelector}`,
@@ -1649,6 +1688,10 @@ async function createLifecycleFixture(): Promise<{
   for (const path of sourceOverrideInputs) {
     await mkdir(dirname(join(root, path)), { recursive: true });
     await writeFile(join(root, path), `fixture source override ${path}\n`, "utf8");
+  }
+  for (const path of stage3OverrideInputs) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), `fixture stage 3 override ${path}\n`, "utf8");
   }
   for (const path of dockerSurfaceInputs) {
     await writeFile(join(root, path), "FROM scratch\n", "utf8");
@@ -2035,14 +2078,15 @@ test("runtime preparation creates the exact tree and never overwrites a mismatch
 test("up requires lsof before its first runtime write", async () => {
   const fixture = await createLifecycleFixture();
   try {
+    await symlink("/usr/bin/dirname", join(fixture.stubBin, "dirname"));
     const result = spawnSync(
-      "bash",
+      "/bin/bash",
       [join(fixture.root, "scripts", "devnet-up.sh")],
       {
         encoding: "utf8",
         env: {
           DEVNET_TEST_COMMAND_LOG: fixture.commandLog,
-          PATH: `${fixture.stubBin}:/bin:/usr/bin`,
+          PATH: fixture.stubBin,
         },
       },
     );
@@ -2513,16 +2557,21 @@ test("devnet build declares every base-image argument once before the first FROM
       .filter(({ instruction }) =>
         instruction.name === "ARG"
         && new RegExp(`^${argumentName}(?:=|$)`).test(instruction.arguments));
-    assert.equal(declarations.length, 1, `${argumentName} must be declared exactly once`);
+    const globalDeclarations = declarations.filter(({ index }) => index < firstFrom);
+    assert.equal(globalDeclarations.length, 1, `${argumentName} must have one pinned global declaration`);
     assert.ok(
       declarations[0] !== undefined && declarations[0].index < firstFrom,
       `${argumentName} must be declared before the first FROM`,
     );
     assert.equal(
-      declarations[0]?.instruction.arguments,
+      globalDeclarations[0]?.instruction.arguments,
       `${argumentName}=${expectedReference}`,
       `${argumentName} default must equal the immutable runtime lock reference`,
     );
+    for (const redeclaration of declarations.filter(({ index }) => index >= firstFrom)) {
+      assert.equal(redeclaration.instruction.arguments, argumentName,
+        `${argumentName} stage redeclaration must inherit its pinned value`);
+    }
   }
 });
 

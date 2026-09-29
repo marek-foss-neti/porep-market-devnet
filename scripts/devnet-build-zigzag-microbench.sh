@@ -6,6 +6,7 @@ cd "${DEVNET_ROOT}"
 devnet_require_command docker
 devnet_require_command jq
 devnet_require_command npm
+devnet_require_command grep
 devnet_require_command shasum
 
 [[ -z "${DEVNET_ZIGZAG_RUSTUP_TOOLCHAIN:-}" ]] ||
@@ -32,9 +33,18 @@ curio_source="$(devnet_curio_source_path "${curio_commit}")"
 zigzag_source="$(devnet_rust_fil_proofs_source_path "${rust_fil_proofs_commit}")"
 [[ "${zigzag_source}" == "${DEVNET_ROOT}/"* && -d "${zigzag_source}" && ! -L "${zigzag_source}" ]] ||
   devnet_die "ZigZag source must be a directory inside the devnet build context"
-[[ "$(git -C "${zigzag_source}" rev-parse HEAD)" == "${rust_fil_proofs_commit}" ]] ||
-  devnet_die "ZigZag source has a different base commit"
+zigzag_source_commit="$(git -C "${zigzag_source}" rev-parse HEAD)"
+[[ "${zigzag_source_commit}" =~ ^[0-9a-f]{40}$ ]] ||
+  devnet_die "ZigZag source has invalid base commit"
+if [[ -z "${DEVNET_RUST_FIL_PROOFS_SOURCE:-}" ]]; then
+  [[ "${zigzag_source_commit}" == "${rust_fil_proofs_commit}" ]] ||
+    devnet_die "managed ZigZag source differs from the lock"
+fi
 zigzag_source_relative="${zigzag_source#"${DEVNET_ROOT}/"}"
+zigzag_stage3_cargo_feature=""
+if grep -q 'pub fn zigzag_commit_phase1_from_cache' "${zigzag_source}/filecoin-proofs/src/api/zigzag.rs"; then
+  zigzag_stage3_cargo_feature=",zigzag-stage3"
+fi
 curio_source_relative=".cache/sources/curio/${curio_commit}"
 zigzag_source_sha256="$(devnet_rust_fil_proofs_content_sha256 "${zigzag_source}")"
 zigzag_overrides_sha256="$(devnet_zigzag_microbench_overrides_sha256)"
@@ -53,7 +63,8 @@ docker buildx build \
   --build-context "harness-overlay=." \
   --build-context "rust-fil-proofs=${zigzag_source_relative}" \
   --build-arg "ZIGZAG_RUST_TOOLCHAIN_IMAGE=${zigzag_toolchain_image}" \
-  --build-arg "RUST_FIL_PROOFS_COMMIT=${rust_fil_proofs_commit}" \
+  --build-arg "ZIGZAG_STAGE3_CARGO_FEATURE=${zigzag_stage3_cargo_feature}" \
+  --build-arg "RUST_FIL_PROOFS_COMMIT=${zigzag_source_commit}" \
   --build-arg "RUST_FIL_PROOFS_SOURCE_SHA256=${zigzag_source_sha256}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_overrides_sha256}" \
   --tag "${image}" \
@@ -75,15 +86,16 @@ jq -n \
   --arg curioCommit "${curio_commit}" \
   --arg lotusCommit "${lotus_commit}" \
   --arg blstCommit "${blst_commit}" \
-  --arg rustFilProofsCommit "${rust_fil_proofs_commit}" \
+  --arg rustFilProofsCommit "${zigzag_source_commit}" \
   --arg rustFilProofsSourceSha256 "${zigzag_source_sha256}" \
   --arg rustFilProofsSourceRelative "${zigzag_source_relative}" \
   --arg rustToolchainImage "${zigzag_toolchain_image}" \
+  --arg stage3Feature "${zigzag_stage3_cargo_feature}" \
   --arg zigzagSourceOverridesSha256 "${zigzag_overrides_sha256}" \
   --arg dockerfileSha256 "${dockerfile_sha256}" \
   --arg imageReference "${image}" \
   --arg imageId "${image_id}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
+  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(if $stage3Feature == ",zigzag-stage3" then ["multicore-sdr","zigzag-bench","zigzag-setup-status","zigzag-stage3"] else ["multicore-sdr","zigzag-bench","zigzag-setup-status"] end),imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
   > "${temporary}"
 mv -f -- "${temporary}" "${manifest}"
 printf 'ZigZag microbench image=%s manifest=%s\n' "${image}" "${manifest}"

@@ -1,0 +1,1573 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{bail, ensure, Context, Result};
+use filecoin_proofs_api::seal;
+use filecoin_proofs_api::{
+    PaddedBytesAmount as ApiPaddedBytesAmount, RegisteredSealProof, SectorId as ApiSectorId,
+    UnpaddedByteIndex as ApiUnpaddedByteIndex, UnpaddedBytesAmount as ApiUnpaddedBytesAmount,
+};
+use filecoin_proofs_zigzag as zigzag;
+use filecoin_proofs_zigzag::with_shape;
+use memmap2::MmapOptions;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use storage_proofs_core_zigzag::{
+    api_version::ApiVersion as ZigZagApiVersion, compound_proof::CompoundProof,
+    merkle::MerkleTreeTrait, parameter_cache::CacheableParameters,
+    sector::SectorId as ZigZagSectorId,
+};
+use storage_proofs_porep_zigzag::{
+    stacked::{generate_replica_id, StackedCircuit, StackedCompound, StackedDrg},
+    zigzag::{
+        circuit::{ZigZagCircuit, ZigZagCompound},
+        encode as zigzag_encode, prepare_parent_table, ZigZagDrgPoRep,
+    },
+};
+
+#[path = "support/porep_microbench_io.rs"]
+mod microbench_io;
+use microbench_io::{DeterministicReader, DeterministicVerifySink};
+
+#[path = "support/porep_microbench_telemetry.rs"]
+mod microbench_telemetry;
+use microbench_telemetry::{PhaseGuard, TelemetrySession};
+
+const PROVER_ID: [u8; 32] = [4u8; 32];
+const TICKET: [u8; 32] = [7u8; 32];
+const SEED: [u8; 32] = [0xffu8; 32];
+const SECTOR_SIZE_2_KIB: u64 = 2 * 1024;
+const SECTOR_SIZE_8_MIB: u64 = 8 * 1024 * 1024;
+const SECTOR_SIZE_512_MIB: u64 = 512 * 1024 * 1024;
+const SECTOR_SIZE_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_LOCAL_SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
+const MICROBENCH_LAYERS_ENV: &str = "POREP_PROOF_MICROBENCH_LAYERS";
+
+#[path = "support/zigzag_512_profile.rs"]
+mod zigzag_512_profile;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Full,
+    PrewarmOnly,
+    PrepareFixture,
+    UnsealOnly,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Backend {
+    Stacked,
+    ZigZag,
+}
+
+#[derive(Debug, Serialize)]
+struct PhaseMetric {
+    name: &'static str,
+    wall_ms: u128,
+    cpu_ms: u128,
+    max_rss_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BenchmarkSummary {
+    schema_version: u8,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    porep_layers: usize,
+    porep_partitions: usize,
+    zigzag_groth16_batch_size: Option<usize>,
+    minimum_total_challenges: usize,
+    challenges_per_layer_per_partition: usize,
+    profile: Option<zigzag_512_profile::EffectiveProfile>,
+    work_dir: String,
+    proof_parameter_cache: String,
+    proof_len: usize,
+    unsealed_bytes: usize,
+    verify_seal: bool,
+    raw_unseal_bytes_match: bool,
+    phases: Vec<PhaseMetric>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FixtureManifest {
+    schema_version: u8,
+    #[serde(default = "legacy_fixture_kind")]
+    fixture_kind: String,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    sealed_path: String,
+    cache_dir: String,
+    prover_id: String,
+    sector_id: u64,
+    ticket: String,
+    comm_d: String,
+    comm_r: Option<String>,
+    comm_r_star: Option<String>,
+    #[serde(default)]
+    proof_cache_artifacts: Vec<String>,
+    unpadded_bytes: u64,
+    deterministic_pattern: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FixtureSummary {
+    schema_version: u8,
+    mode: &'static str,
+    manifest_path: String,
+    fixture: FixtureManifest,
+    phases: Vec<PhaseMetric>,
+}
+
+#[derive(Debug, Serialize)]
+struct UnsealOnlySummary {
+    schema_version: u8,
+    mode: &'static str,
+    fixture_kind: String,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    fixture_manifest_path: String,
+    sealed_path: String,
+    cache_dir: String,
+    proof_cache_artifacts: Vec<String>,
+    proof_parameter_cache: String,
+    proof_parameter_cache_skipped: bool,
+    parent_cache: String,
+    parent_cache_window_nodes: u32,
+    unseal_path: &'static str,
+    range_offset: u64,
+    range_size: u64,
+    unsealed_bytes: u64,
+    raw_unseal_bytes_match: bool,
+    mismatch_at: Option<u64>,
+    throughput_mib_per_s: Option<f64>,
+    phases: Vec<PhaseMetric>,
+}
+
+#[derive(Debug, Serialize)]
+struct ParamPrewarmSummary {
+    schema_version: u8,
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    registered_seal_proof: String,
+    registered_seal_proof_id: i32,
+    porep_layers: usize,
+    porep_partitions: usize,
+    minimum_total_challenges: usize,
+    challenges_per_layer_per_partition: usize,
+    profile: Option<zigzag_512_profile::EffectiveProfile>,
+    proof_parameter_cache: String,
+    parent_cache: String,
+    parent_cache_window_nodes: u32,
+    zigzag_parent_cache: Option<String>,
+    parameter_cache_identifier: String,
+    parameter_cache_metadata_path: String,
+    parameter_cache_params_path: String,
+    parameter_cache_verifying_key_path: String,
+    verifying_key_matches_params: bool,
+    verifying_key_rewritten: bool,
+    parameter_cache_hit: Option<bool>,
+    wall_ms: u128,
+    cpu_ms: u128,
+    max_rss_bytes: u64,
+}
+
+#[derive(Debug)]
+struct ParamPrewarmResult {
+    cache_identifier: String,
+    metadata_path: PathBuf,
+    params_path: PathBuf,
+    verifying_key_path: PathBuf,
+    verifying_key_matches_params: bool,
+    verifying_key_rewritten: bool,
+    parameter_cache_hit: Option<bool>,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse(std::env::args().skip(1).collect())?;
+    configure_microbench_layers(&args)?;
+    fs::create_dir_all(&args.work_dir).context("create work directory")?;
+
+    let telemetry = TelemetrySession::start(
+        &args.work_dir,
+        &proof_parameter_cache_dir(),
+        &parent_cache_dir(),
+    )?;
+
+    let output = match args.mode {
+        Mode::PrewarmOnly => {
+            let summary = prewarm_params(&args)?;
+            serde_json::to_string_pretty(&summary)?
+        }
+        Mode::PrepareFixture => {
+            let summary = prepare_fixture(&args)?;
+            serde_json::to_string_pretty(&summary)?
+        }
+        Mode::UnsealOnly => {
+            let summary = run_unseal_only(&args)?;
+            serde_json::to_string_pretty(&summary)?
+        }
+        Mode::Full => {
+            let summary = match args.backend {
+                Backend::Stacked => run_stacked(&args)?,
+                Backend::ZigZag => run_zigzag(&args)?,
+            };
+            serde_json::to_string_pretty(&summary)?
+        }
+    };
+    if let Some(telemetry) = telemetry {
+        telemetry.finish()?;
+    }
+    println!("{output}");
+    Ok(())
+}
+
+struct Args {
+    backend: Backend,
+    sector_size_label: String,
+    sector_size_bytes: u64,
+    work_dir: PathBuf,
+    mode: Mode,
+    range_offset: u64,
+    range_size: Option<u64>,
+    profile: Option<String>,
+}
+
+impl Args {
+    fn parse(raw: Vec<String>) -> Result<Self> {
+        let mut backend = None;
+        let mut sector_size = None;
+        let mut work_dir = None;
+        let mut mode = Mode::Full;
+        let mut explicit_mode = false;
+        let mut range_offset = 0;
+        let mut range_size = None;
+        let mut profile = None;
+        let mut iter = raw.into_iter();
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--backend" => {
+                    backend = Some(parse_backend(&required_arg(&mut iter, "--backend")?)?)
+                }
+                "--sector-size" => {
+                    sector_size = Some(parse_sector_size(&required_arg(
+                        &mut iter,
+                        "--sector-size",
+                    )?)?)
+                }
+                "--work-dir" => {
+                    work_dir = Some(PathBuf::from(required_arg(&mut iter, "--work-dir")?))
+                }
+                "--profile" => profile = Some(required_arg(&mut iter, "--profile")?),
+                "--fixture-dir" => {
+                    work_dir = Some(PathBuf::from(required_arg(&mut iter, "--fixture-dir")?))
+                }
+                "--prewarm-only" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::PrewarmOnly)?;
+                }
+                "--prepare-fixture" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::PrepareFixture)?;
+                }
+                "--unseal-only" => {
+                    set_mode_once(&mut mode, &mut explicit_mode, Mode::UnsealOnly)?;
+                }
+                "--range-offset" => {
+                    range_offset = parse_u64_arg(
+                        &required_arg(&mut iter, "--range-offset")?,
+                        "--range-offset",
+                    )?;
+                }
+                "--range-size" => {
+                    range_size = Some(parse_u64_arg(
+                        &required_arg(&mut iter, "--range-size")?,
+                        "--range-size",
+                    )?);
+                }
+                "--help" | "-h" => {
+                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
+                    std::process::exit(0);
+                }
+                _ => bail!("unknown argument: {arg}"),
+            }
+        }
+
+        let backend = backend.unwrap_or(Backend::Stacked);
+        let (sector_size_label, sector_size_bytes) =
+            sector_size.unwrap_or_else(|| ("8mib".to_string(), 8 * 1024 * 1024));
+        if sector_size_bytes > DEFAULT_MAX_LOCAL_SECTOR_SIZE && !large_sector_microbench_enabled() {
+            bail!(
+                "sector size {sector_size_label} is intentionally disabled for the local microbench because it allocates and verifies a full sector; set POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 to opt in"
+            );
+        }
+        if backend == Backend::ZigZag
+            && !matches!(
+                sector_size_bytes,
+                SECTOR_SIZE_2_KIB | SECTOR_SIZE_8_MIB | SECTOR_SIZE_512_MIB | SECTOR_SIZE_32_GIB
+            )
+        {
+            bail!("ZigZag microbench supports only 2KiB, 8MiB, 512MiB, and 32GiB sectors in this restore-zigzag overlay");
+        }
+        let work_dir = work_dir.unwrap_or_else(default_work_dir);
+        if let Some(ref name) = profile {
+            ensure!(
+                name == zigzag_512_profile::NAME,
+                "unknown benchmark profile: {name}"
+            );
+            ensure!(
+                backend == Backend::ZigZag && sector_size_bytes == SECTOR_SIZE_512_MIB,
+                "zigzag-512 requires the ZigZag backend and 512mib sector size"
+            );
+            ensure!(
+                matches!(mode, Mode::Full | Mode::PrewarmOnly),
+                "zigzag-512 supports only full and prewarm-only modes"
+            );
+        }
+        Ok(Self {
+            backend,
+            sector_size_label,
+            sector_size_bytes,
+            work_dir,
+            mode,
+            range_offset,
+            range_size,
+            profile,
+        })
+    }
+}
+
+fn large_sector_microbench_enabled() -> bool {
+    std::env::var("POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn configure_microbench_layers(args: &Args) -> Result<()> {
+    let raw_layers = std::env::var(MICROBENCH_LAYERS_ENV).unwrap_or_default();
+    let raw_layers = raw_layers.trim();
+    if args.profile.is_some() {
+        ensure!(
+            raw_layers.is_empty(),
+            "zigzag-512 has fixed layers; remove {MICROBENCH_LAYERS_ENV}"
+        );
+        return Ok(());
+    }
+    if raw_layers.is_empty() {
+        return Ok(());
+    }
+
+    let layers = raw_layers
+        .parse::<usize>()
+        .with_context(|| format!("{MICROBENCH_LAYERS_ENV} must be an integer"))?;
+    ensure!(
+        matches!(layers, 2 | 11 | 15 | 19 | 22 | 25),
+        "{MICROBENCH_LAYERS_ENV} supports only 2, 11, 15, 19, 22, or 25 layers in this microbench"
+    );
+
+    let mut layers_by_sector = zigzag::constants::LAYERS.write().expect("LAYERS poisoned");
+    let previous_layers = layers_by_sector.insert(args.sector_size_bytes, layers);
+    eprintln!(
+        "using PoRep microbench layer override: sector_size={} previous_layers={} effective_layers={} env={}",
+        args.sector_size_label,
+        previous_layers
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        layers,
+        MICROBENCH_LAYERS_ENV,
+    );
+    Ok(())
+}
+
+fn current_porep_layers(sector_size: u64) -> Result<usize> {
+    zigzag::constants::LAYERS
+        .read()
+        .expect("LAYERS poisoned")
+        .get(&sector_size)
+        .copied()
+        .with_context(|| format!("unknown PoRep layer count for sector size {sector_size}"))
+}
+
+fn required_arg(iter: &mut impl Iterator<Item = String>, name: &str) -> Result<String> {
+    iter.next()
+        .with_context(|| format!("{name} requires a value"))
+}
+
+fn set_mode_once(mode: &mut Mode, explicit: &mut bool, value: Mode) -> Result<()> {
+    if *explicit {
+        bail!("only one mode flag can be used");
+    }
+    *mode = value;
+    *explicit = true;
+    Ok(())
+}
+
+fn parse_u64_arg(value: &str, name: &str) -> Result<u64> {
+    value
+        .parse::<u64>()
+        .with_context(|| format!("{name} must be a non-negative integer"))
+}
+
+fn parse_backend(value: &str) -> Result<Backend> {
+    match value.to_ascii_lowercase().as_str() {
+        "stacked" | "sdr" => Ok(Backend::Stacked),
+        "zigzag" => Ok(Backend::ZigZag),
+        _ => bail!("invalid backend: {value}"),
+    }
+}
+
+fn parse_sector_size(value: &str) -> Result<(String, u64)> {
+    let normalized = value
+        .to_ascii_lowercase()
+        .replace(['_', '-', ' '], "")
+        .replace("kb", "kib")
+        .replace("mb", "mib")
+        .replace("gb", "gib");
+    let bytes = match normalized.as_str() {
+        "2kib" => 2 * 1024,
+        "8mib" => 8 * 1024 * 1024,
+        "512mib" => 512 * 1024 * 1024,
+        "32gib" => 32 * 1024 * 1024 * 1024,
+        "64gib" => bail!("64GiB is a registered Filecoin sector size, but this branch wires ZigZag comparison for 512MiB and 32GiB as the large-sector targets"),
+        "2mib" | "2gib" | "8gib" => bail!(
+            "{value} is not a Filecoin registered seal proof sector size; use 2KiB, 8MiB, 512MiB, or 32GiB"
+        ),
+        _ => bail!("unsupported sector size: {value}"),
+    };
+    Ok((normalized, bytes))
+}
+
+fn default_work_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "porep-proof-microbench-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0)
+    ))
+}
+
+fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
+    let _phase = PhaseGuard::enter("parameter_prewarm");
+    let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let profile = zigzag_512_profile::effective(args.profile.as_deref(), registered_proof)?;
+    let porep_layers = profile
+        .as_ref()
+        .map_or(current_porep_layers(args.sector_size_bytes)?, |p| p.layers);
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
+    eprintln!(
+        "prewarming {:?} PoRep parameters for {} with {} layers in {}",
+        args.backend,
+        args.sector_size_label,
+        porep_layers,
+        proof_parameter_cache_dir().display()
+    );
+    let cpu_before = process_cpu_ms();
+    let started = Instant::now();
+    let prewarm = match args.backend {
+        Backend::Stacked => prewarm_stacked_params(args, registered_proof)?,
+        Backend::ZigZag => prewarm_zigzag_params(args, registered_proof)?,
+    };
+    if let Some(ref profile) = profile {
+        ensure!(
+            profile.parameter_cache_identifier == prewarm.cache_identifier,
+            "zigzag-512 prewarm cache identifier differs from effective setup"
+        );
+    }
+    let summary = ParamPrewarmSummary {
+        schema_version: 1,
+        backend: args.backend,
+        sector_size_label: args.sector_size_label.clone(),
+        sector_size_bytes: args.sector_size_bytes,
+        registered_seal_proof: format!("{registered_proof:?}"),
+        registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
+        porep_partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
+        profile,
+        proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        parent_cache: parent_cache_dir().display().to_string(),
+        parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
+        zigzag_parent_cache: match args.backend {
+            Backend::Stacked => None,
+            Backend::ZigZag => Some(parent_cache_dir().display().to_string()),
+        },
+        parameter_cache_identifier: prewarm.cache_identifier,
+        parameter_cache_metadata_path: prewarm.metadata_path.display().to_string(),
+        parameter_cache_params_path: prewarm.params_path.display().to_string(),
+        parameter_cache_verifying_key_path: prewarm.verifying_key_path.display().to_string(),
+        verifying_key_matches_params: prewarm.verifying_key_matches_params,
+        verifying_key_rewritten: prewarm.verifying_key_rewritten,
+        parameter_cache_hit: prewarm.parameter_cache_hit,
+        wall_ms: started.elapsed().as_millis(),
+        cpu_ms: process_cpu_ms().saturating_sub(cpu_before),
+        max_rss_bytes: max_rss_bytes(),
+    };
+    eprintln!(
+        "prewarmed {:?} PoRep parameters for {} with {} layers in {} ms",
+        args.backend, args.sector_size_label, summary.porep_layers, summary.wall_ms
+    );
+    Ok(summary)
+}
+
+fn prewarm_stacked_params(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+) -> Result<ParamPrewarmResult> {
+    let porep_config = zigzag::PoRepConfig::new_groth16(
+        args.sector_size_bytes,
+        registered_proof.as_v1_config().porep_id,
+        ZigZagApiVersion::V1_1_0,
+    );
+    with_shape!(
+        args.sector_size_bytes,
+        prewarm_stacked_params_for_shape,
+        porep_config
+    )
+}
+
+fn prewarm_stacked_params_for_shape<Tree: 'static + MerkleTreeTrait>(
+    porep_config: zigzag::PoRepConfig,
+) -> Result<ParamPrewarmResult> {
+    let public_params = zigzag::parameters::public_params::<Tree>(&porep_config)
+        .context("get Stacked public params")?;
+    eprintln!(
+        "prewarming Stacked parent cache in {}",
+        parent_cache_dir().display()
+    );
+    let _parent_cache = public_params
+        .graph
+        .parent_cache()
+        .context("prepare Stacked parent cache")?;
+    let cache_identifier =
+        <StackedCompound<Tree, zigzag::constants::DefaultPieceHasher> as CacheableParameters<
+            StackedCircuit<Tree, zigzag::constants::DefaultPieceHasher>,
+            _,
+        >>::cache_identifier(&public_params);
+    let metadata_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
+        &cache_identifier,
+    );
+    let params_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(&cache_identifier);
+    let verifying_key_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_verifying_key_path(
+            &cache_identifier,
+        );
+    let circuit = <StackedCompound<Tree, zigzag::constants::DefaultPieceHasher> as CompoundProof<
+        StackedDrg<Tree, zigzag::constants::DefaultPieceHasher>,
+        StackedCircuit<Tree, zigzag::constants::DefaultPieceHasher>,
+    >>::blank_circuit(&public_params);
+
+    let _ = StackedCompound::<Tree, zigzag::constants::DefaultPieceHasher>::get_param_metadata(
+        circuit.clone(),
+        &public_params,
+    )
+    .context("cache Stacked parameter metadata")?;
+    let groth_params =
+        StackedCompound::<Tree, zigzag::constants::DefaultPieceHasher>::get_groth_params(
+            Some(&mut OsRng),
+            circuit.clone(),
+            &public_params,
+        )
+        .context("cache Stacked Groth params")?;
+    let verifying_key =
+        StackedCompound::<Tree, zigzag::constants::DefaultPieceHasher>::get_verifying_key(
+            Some(&mut OsRng),
+            circuit,
+            &public_params,
+        )
+        .context("cache Stacked verifying key")?;
+    let verifying_key_matches_params = verifying_key == groth_params.vk;
+    let verifying_key_rewritten = if verifying_key_matches_params {
+        false
+    } else {
+        eprintln!(
+            "cached Stacked verifying key did not match Groth params; rewriting {}",
+            verifying_key_path.display()
+        );
+        let mut file = File::create(&verifying_key_path).with_context(|| {
+            format!(
+                "create repaired Stacked verifying key cache file {}",
+                verifying_key_path.display()
+            )
+        })?;
+        groth_params.vk.write(&mut file).with_context(|| {
+            format!(
+                "write repaired Stacked verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        file.flush().with_context(|| {
+            format!(
+                "flush repaired Stacked verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        true
+    };
+    Ok(ParamPrewarmResult {
+        cache_identifier,
+        metadata_path,
+        params_path,
+        verifying_key_path,
+        verifying_key_matches_params: true,
+        verifying_key_rewritten,
+        parameter_cache_hit: None,
+    })
+}
+
+#[cfg(not(feature = "zigzag-setup-status"))]
+fn prewarm_zigzag_params(
+    _args: &Args,
+    _registered_proof: RegisteredSealProof,
+) -> Result<ParamPrewarmResult> {
+    bail!("ZigZag parameter prewarm requires the dedicated ZigZag microbench image")
+}
+
+#[cfg(feature = "zigzag-setup-status")]
+fn prewarm_zigzag_params(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+) -> Result<ParamPrewarmResult> {
+    let porep_config = zigzag_porep_config(args, registered_proof);
+    let public_params =
+        zigzag::parameters::zigzag_public_params::<zigzag::constants::ZigZagTree>(&porep_config)
+            .context("get ZigZag public params")?;
+    eprintln!(
+        "prewarming ZigZag parent tables in {}",
+        parent_cache_dir().display()
+    );
+    prepare_parent_table(&public_params.graph).context("prepare ZigZag forward parent table")?;
+    let reversed_graph = public_params.graph.zigzag();
+    prepare_parent_table(&reversed_graph).context("prepare ZigZag reversed parent table")?;
+
+    let cache_identifier = <ZigZagCompound<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    > as CacheableParameters<
+        ZigZagCircuit<zigzag::constants::ZigZagTree, zigzag::constants::DefaultPieceHasher>,
+        _,
+    >>::cache_identifier(&public_params);
+    let metadata_path = storage_proofs_core_zigzag::parameter_cache::parameter_cache_metadata_path(
+        &cache_identifier,
+    );
+    let params_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_params_path(&cache_identifier);
+    let verifying_key_path =
+        storage_proofs_core_zigzag::parameter_cache::parameter_cache_verifying_key_path(
+            &cache_identifier,
+        );
+    let circuit = <ZigZagCompound<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    > as CompoundProof<
+        ZigZagDrgPoRep<zigzag::constants::ZigZagTree, zigzag::constants::DefaultPieceHasher>,
+        _,
+    >>::blank_circuit(&public_params);
+
+    let _ = ZigZagCompound::<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    >::get_param_metadata(circuit.clone(), &public_params)
+    .context("cache ZigZag parameter metadata")?;
+    let (groth_params, parameter_cache_hit) = ZigZagCompound::<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    >::get_groth_params_with_cache_status(
+        Some(&mut OsRng), circuit.clone(), &public_params
+    )
+    .context("cache ZigZag Groth params")?;
+    drop(groth_params);
+    let parameter_vk = ZigZagCompound::<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    >::read_parameter_verifying_key(&params_path)
+    .context("read ZigZag parameter verifying key")?;
+    let verifying_key = ZigZagCompound::<
+        zigzag::constants::ZigZagTree,
+        zigzag::constants::DefaultPieceHasher,
+    >::get_verifying_key(Some(&mut OsRng), circuit, &public_params)
+    .context("cache ZigZag verifying key")?;
+    let verifying_key_matches_params = verifying_key == parameter_vk;
+    let verifying_key_rewritten = if verifying_key_matches_params {
+        false
+    } else {
+        eprintln!(
+            "cached ZigZag verifying key did not match Groth params; rewriting {}",
+            verifying_key_path.display()
+        );
+        let mut file = File::create(&verifying_key_path).with_context(|| {
+            format!(
+                "create repaired ZigZag verifying key cache file {}",
+                verifying_key_path.display()
+            )
+        })?;
+        parameter_vk.write(&mut file).with_context(|| {
+            format!(
+                "write repaired ZigZag verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        file.flush().with_context(|| {
+            format!(
+                "flush repaired ZigZag verifying key {}",
+                verifying_key_path.display()
+            )
+        })?;
+        true
+    };
+    Ok(ParamPrewarmResult {
+        cache_identifier,
+        metadata_path,
+        params_path,
+        verifying_key_path,
+        verifying_key_matches_params: true,
+        verifying_key_rewritten,
+        parameter_cache_hit: Some(parameter_cache_hit),
+    })
+}
+
+fn prepare_fixture(args: &Args) -> Result<FixtureSummary> {
+    let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let mut phases = Vec::new();
+    let fixture = match args.backend {
+        Backend::Stacked => prepare_stacked_fixture(args, registered_proof, &mut phases)?,
+        Backend::ZigZag => prepare_zigzag_fixture(args, registered_proof, &mut phases)?,
+    };
+    let manifest_path = fixture_manifest_path(args);
+    let mut manifest = File::create(&manifest_path)
+        .with_context(|| format!("create fixture manifest {}", manifest_path.display()))?;
+    serde_json::to_writer_pretty(&mut manifest, &fixture)
+        .with_context(|| format!("write fixture manifest {}", manifest_path.display()))?;
+    manifest
+        .flush()
+        .with_context(|| format!("flush fixture manifest {}", manifest_path.display()))?;
+
+    Ok(FixtureSummary {
+        schema_version: 1,
+        mode: "prepare-fixture",
+        manifest_path: manifest_path.display().to_string(),
+        fixture,
+        phases,
+    })
+}
+
+fn prepare_stacked_fixture(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    phases: &mut Vec<PhaseMetric>,
+) -> Result<FixtureManifest> {
+    let cache_dir = args.work_dir.join("seal-cache");
+    fs::create_dir_all(&cache_dir).context("create Stacked fixture seal cache")?;
+    let staged_path = args.work_dir.join("staged.dat");
+    let sealed_path = args.work_dir.join("sealed.dat");
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+
+    eprintln!(
+        "preparing Stacked minimal unseal fixture: write/preprocess sector_size={} raw_bytes={}",
+        args.sector_size_label, raw_len
+    );
+    let piece_info = measure(phases, "prepare_fixture_write_and_preprocess", || {
+        let mut staged = File::create(&staged_path).context("create Stacked staged sector")?;
+        let (piece_info, _written) = seal::write_and_preprocess(
+            registered_proof,
+            DeterministicReader::new(0, raw_len),
+            &mut staged,
+            ApiUnpaddedBytesAmount(raw_len),
+        )?;
+        staged.flush().context("flush Stacked staged sector")?;
+        Ok(piece_info)
+    })?;
+    let piece_infos = vec![piece_info];
+    File::create(&sealed_path).context("create Stacked sealed sector")?;
+
+    let sector_id = ApiSectorId::from(0);
+    eprintln!("preparing Stacked minimal unseal fixture: pre_commit_phase1");
+    let phase1_out = measure(phases, "prepare_fixture_pre_commit_phase1", || {
+        seal::seal_pre_commit_phase1(
+            registered_proof,
+            &cache_dir,
+            &staged_path,
+            &sealed_path,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            &piece_infos,
+        )
+    })?;
+    eprintln!("preparing Stacked minimal unseal fixture: pre_commit_phase2");
+    let pre_commit = measure(phases, "prepare_fixture_pre_commit_phase2", || {
+        seal::seal_pre_commit_phase2(phase1_out, &cache_dir, &sealed_path)
+    })?;
+    eprintln!("preparing Stacked minimal unseal fixture: removing unused staged sector");
+    fs::remove_file(&staged_path).with_context(|| {
+        format!(
+            "remove unused Stacked staged sector {}",
+            staged_path.display()
+        )
+    })?;
+
+    fixture_manifest(
+        args,
+        registered_proof,
+        &sealed_path,
+        &cache_dir,
+        0,
+        pre_commit.comm_d,
+        Some(pre_commit.comm_r),
+        None,
+        vec!["seal-cache".to_string()],
+        raw_len,
+    )
+}
+
+fn prepare_zigzag_fixture(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    phases: &mut Vec<PhaseMetric>,
+) -> Result<FixtureManifest> {
+    let cache_dir = args.work_dir.join("zigzag-cache");
+    fs::create_dir_all(&cache_dir).context("create ZigZag fixture cache")?;
+    let sealed_path = args.work_dir.join("zigzag-sealed.dat");
+    let porep_config = zigzag_porep_config(args, registered_proof);
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+
+    eprintln!(
+        "preparing ZigZag minimal unseal fixture: add_piece sector_size={} raw_bytes={}",
+        args.sector_size_label, raw_len
+    );
+    let piece_info = measure(phases, "prepare_fixture_add_piece", || {
+        let mut sealed = File::create(&sealed_path).context("create ZigZag fixture sector")?;
+        let (piece_info, _written) = zigzag::add_piece(
+            DeterministicReader::new(0, raw_len),
+            &mut sealed,
+            zigzag::UnpaddedBytesAmount(raw_len),
+            &[],
+        )?;
+        sealed.flush().context("flush ZigZag fixture sector")?;
+        Ok(piece_info)
+    })?;
+    let comm_d = piece_info.commitment;
+    let sector_id = 0;
+    let replica_id =
+        generate_replica_id::<<zigzag::constants::ZigZagTree as MerkleTreeTrait>::Hasher, _>(
+            &PROVER_ID,
+            sector_id,
+            &TICKET,
+            comm_d,
+            &porep_config.porep_id,
+        );
+
+    measure(phases, "prepare_fixture_encode_layers", || {
+        let sealed = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&sealed_path)
+            .with_context(|| format!("open ZigZag fixture sector {}", sealed_path.display()))?;
+        let mut data = unsafe {
+            MmapOptions::new()
+                .map_mut(&sealed)
+                .with_context(|| format!("mmap ZigZag fixture sector {}", sealed_path.display()))?
+        };
+        let public_params = zigzag::parameters::zigzag_public_params::<
+            zigzag::constants::ZigZagTree,
+        >(&porep_config)?;
+        let mut graph = public_params.graph.clone();
+        let layers = public_params.layer_challenges.layers();
+        for layer in 0..layers {
+            let layer_started = Instant::now();
+            eprintln!(
+                "preparing ZigZag minimal unseal fixture: encoding layer {}/{}",
+                layer + 1,
+                layers
+            );
+            zigzag_encode(&graph, &replica_id, &mut data[..])
+                .with_context(|| format!("encode ZigZag fixture layer {layer}"))?;
+            eprintln!(
+                "preparing ZigZag minimal unseal fixture: finished layer {}/{} wall_ms={}",
+                layer + 1,
+                layers,
+                layer_started.elapsed().as_millis()
+            );
+            graph = graph.zigzag();
+        }
+        eprintln!("preparing ZigZag minimal unseal fixture: flushing encoded sector");
+        data.flush()
+            .with_context(|| format!("flush sealed ZigZag fixture {}", sealed_path.display()))?;
+        Ok(())
+    })?;
+
+    fixture_manifest(
+        args,
+        registered_proof,
+        &sealed_path,
+        &cache_dir,
+        0,
+        comm_d,
+        None,
+        None,
+        Vec::new(),
+        raw_len,
+    )
+}
+
+fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
+    let manifest_path = fixture_manifest_path(args);
+    let manifest = read_fixture_manifest(&manifest_path)?;
+    ensure_fixture_matches_args(args, &manifest)?;
+
+    let range_offset = args.range_offset;
+    ensure!(
+        range_offset <= manifest.unpadded_bytes,
+        "range offset {} exceeds fixture unpadded bytes {}",
+        range_offset,
+        manifest.unpadded_bytes
+    );
+    let range_size = args
+        .range_size
+        .unwrap_or_else(|| manifest.unpadded_bytes - range_offset);
+    ensure!(
+        range_offset
+            .checked_add(range_size)
+            .is_some_and(|end| end <= manifest.unpadded_bytes),
+        "range {}..{} exceeds fixture unpadded bytes {}",
+        range_offset,
+        range_offset.saturating_add(range_size),
+        manifest.unpadded_bytes
+    );
+
+    let registered_proof = registered_proof_for_sector_size(manifest.sector_size_bytes)?;
+    let prover_id = commitment_from_hex(&manifest.prover_id)?;
+    let ticket = commitment_from_hex(&manifest.ticket)?;
+    let comm_d = commitment_from_hex(&manifest.comm_d)?;
+    let sector_id = manifest.sector_id;
+    let sealed_path = manifest.sealed_path.clone();
+    let cache_dir = manifest.cache_dir.clone();
+    let mut phases = Vec::new();
+    let mut verifier = DeterministicVerifySink::new(range_offset);
+
+    let unsealed_bytes = match manifest.backend {
+        Backend::Stacked => {
+            let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                eprintln!(
+                    "running Stacked raw unseal/retrieval: get_unsealed_range_mapped sector_size={} range_offset={} range_size={}",
+                    manifest.sector_size_label, range_offset, range_size
+                );
+                seal::get_unsealed_range_mapped(
+                    registered_proof,
+                    PathBuf::from(cache_dir.as_str()),
+                    PathBuf::from(sealed_path.as_str()),
+                    &mut verifier,
+                    prover_id,
+                    ApiSectorId::from(sector_id),
+                    comm_d,
+                    ticket,
+                    ApiUnpaddedByteIndex(range_offset),
+                    ApiUnpaddedBytesAmount(range_size),
+                )
+            })?;
+            amount.0
+        }
+        Backend::ZigZag => {
+            let porep_config = zigzag::PoRepConfig::new_groth16(
+                manifest.sector_size_bytes,
+                registered_proof.as_v1_config().porep_id,
+                ZigZagApiVersion::V1_2_0,
+            );
+            let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: opening sealed sector sector_size={} range_offset={} range_size={}",
+                    manifest.sector_size_label, range_offset, range_size
+                );
+                let sealed = OpenOptions::new()
+                    .read(true)
+                    .open(&sealed_path)
+                    .with_context(|| format!("open ZigZag sealed fixture {}", sealed_path))?;
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: copy-mmap sealed sector {}",
+                    sealed_path
+                );
+                let mut data = unsafe {
+                    MmapOptions::new().map_copy(&sealed).with_context(|| {
+                        format!("copy-mmap ZigZag sealed fixture {}", sealed_path)
+                    })?
+                };
+                eprintln!(
+                    "running ZigZag raw unseal/retrieval: decoding full sealed sector before writing requested range"
+                );
+                zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
+                    &porep_config,
+                    prover_id,
+                    ZigZagSectorId::from(sector_id),
+                    ticket,
+                    comm_d,
+                    &mut data[..],
+                    &mut verifier,
+                    zigzag::UnpaddedByteIndex(range_offset),
+                    zigzag::UnpaddedBytesAmount(range_size),
+                )
+            })?;
+            amount.0
+        }
+    };
+
+    let unseal_phase = phases
+        .iter()
+        .find(|phase| phase.name == "raw_unseal_retrieval");
+    let throughput_mib_per_s = unseal_phase
+        .filter(|phase| phase.wall_ms > 0)
+        .map(|phase| (unsealed_bytes as f64 / 1_048_576.0) / (phase.wall_ms as f64 / 1000.0));
+    let raw_unseal_bytes_match = verifier.matches_expected(range_size);
+    let backend = manifest.backend;
+    let unseal_path = match backend {
+        Backend::Stacked => "Stacked get_unsealed_range_mapped",
+        Backend::ZigZag => "ZigZag zigzag_unseal_range",
+    };
+    let parent_cache_window_nodes = parent_cache_window_nodes(backend);
+
+    Ok(UnsealOnlySummary {
+        schema_version: 1,
+        mode: "unseal-only",
+        fixture_kind: manifest.fixture_kind,
+        backend,
+        sector_size_label: manifest.sector_size_label,
+        sector_size_bytes: manifest.sector_size_bytes,
+        registered_seal_proof: manifest.registered_seal_proof,
+        registered_seal_proof_id: manifest.registered_seal_proof_id,
+        fixture_manifest_path: manifest_path.display().to_string(),
+        sealed_path,
+        cache_dir,
+        proof_cache_artifacts: manifest.proof_cache_artifacts,
+        proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        proof_parameter_cache_skipped: true,
+        parent_cache: parent_cache_dir().display().to_string(),
+        parent_cache_window_nodes,
+        unseal_path,
+        range_offset,
+        range_size,
+        unsealed_bytes,
+        raw_unseal_bytes_match,
+        mismatch_at: verifier.mismatch_at,
+        throughput_mib_per_s,
+        phases,
+    })
+}
+
+fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
+    let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let porep_layers = current_porep_layers(args.sector_size_bytes)?;
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
+    let cache_dir = args.work_dir.join("seal-cache");
+    fs::create_dir_all(&cache_dir).context("create seal cache")?;
+    let staged_path = args.work_dir.join("staged.dat");
+    let sealed_path = args.work_dir.join("sealed.dat");
+
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+    let mut staged = File::create(&staged_path).context("create staged sector")?;
+    let (piece_info, _written) = seal::write_and_preprocess(
+        registered_proof,
+        DeterministicReader::new(0, raw_len),
+        &mut staged,
+        ApiUnpaddedBytesAmount(raw_len),
+    )?;
+    let piece_infos = vec![piece_info];
+    drop(staged);
+    File::create(&sealed_path).context("create sealed sector")?;
+
+    let mut phases = Vec::new();
+    let sector_id = ApiSectorId::from(0);
+
+    let phase1_out = measure(&mut phases, "pre_commit_phase1", || {
+        seal::seal_pre_commit_phase1(
+            registered_proof,
+            &cache_dir,
+            &staged_path,
+            &sealed_path,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            &piece_infos,
+        )
+    })?;
+
+    let pre_commit = measure(&mut phases, "pre_commit_phase2", || {
+        seal::seal_pre_commit_phase2(phase1_out, &cache_dir, &sealed_path)
+    })?;
+
+    let commit_phase1 = measure(&mut phases, "prove_from_cache_equivalent_phase1", || {
+        seal::seal_commit_phase1(
+            &cache_dir,
+            &sealed_path,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            SEED,
+            pre_commit.clone(),
+            &piece_infos,
+        )
+    })?;
+
+    let proof = measure(&mut phases, "prove_from_cache_equivalent_phase2", || {
+        seal::seal_commit_phase2(commit_phase1, PROVER_ID, sector_id)
+    })?
+    .proof;
+
+    let verify = measure(&mut phases, "verify", || {
+        seal::verify_seal(
+            registered_proof,
+            pre_commit.comm_r,
+            pre_commit.comm_d,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            SEED,
+            &proof,
+        )
+    })?;
+
+    let mut verifier = DeterministicVerifySink::new(0);
+    let unsealed = measure(&mut phases, "raw_unseal", || {
+        seal::get_unsealed_range_mapped(
+            registered_proof,
+            &cache_dir,
+            &sealed_path,
+            &mut verifier,
+            PROVER_ID,
+            sector_id,
+            pre_commit.comm_d,
+            TICKET,
+            ApiUnpaddedByteIndex(0),
+            ApiUnpaddedBytesAmount(raw_len),
+        )
+    })?;
+
+    Ok(BenchmarkSummary {
+        schema_version: 1,
+        backend: Backend::Stacked,
+        sector_size_label: args.sector_size_label.clone(),
+        sector_size_bytes: args.sector_size_bytes,
+        registered_seal_proof: format!("{registered_proof:?}"),
+        registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
+        porep_partitions,
+        zigzag_groth16_batch_size: None,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
+        profile: None,
+        work_dir: args.work_dir.display().to_string(),
+        proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        proof_len: proof.len(),
+        unsealed_bytes: usize::try_from(verifier.written)
+            .context("unsealed byte count overflow")?,
+        verify_seal: verify,
+        raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
+        phases,
+    })
+}
+
+fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
+    let registered_proof = registered_proof_for_sector_size(args.sector_size_bytes)?;
+    let profile = zigzag_512_profile::effective(args.profile.as_deref(), registered_proof)?;
+    let porep_layers = profile
+        .as_ref()
+        .map_or(current_porep_layers(args.sector_size_bytes)?, |p| p.layers);
+    let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
+        proof_configuration(args, registered_proof);
+    #[cfg(feature = "zigzag-stage3")]
+    let zigzag_groth16_batch_size = Some(
+        storage_proofs_porep_zigzag::zigzag::circuit::groth16_batch_size_for_sector_size(
+            args.sector_size_bytes,
+        )?,
+    );
+    #[cfg(not(feature = "zigzag-stage3"))]
+    let zigzag_groth16_batch_size = None;
+    let cache_dir = args.work_dir.join("zigzag-cache");
+    fs::create_dir_all(&cache_dir).context("create ZigZag cache")?;
+    let sealed_path = args.work_dir.join("zigzag-sealed.dat");
+
+    let porep_config = zigzag_porep_config(args, registered_proof);
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+    // This is the mutable sector required by the ZZ API, not a retained copy of raw input.
+    let mut staged = Vec::with_capacity(
+        usize::try_from(args.sector_size_bytes).context("sector size exceeds address space")?,
+    );
+    let (piece_info, _written) = zigzag::add_piece(
+        DeterministicReader::new(0, raw_len),
+        &mut staged,
+        zigzag::UnpaddedBytesAmount(raw_len),
+        &[],
+    )?;
+    let piece_infos = vec![piece_info];
+
+    let mut phases = Vec::new();
+    let sector_id = ZigZagSectorId::from(0);
+
+    let (phase1_out, state) = measure(&mut phases, "pre_commit_phase1", || {
+        zigzag::zigzag_pre_commit_phase1::<zigzag::constants::ZigZagTree>(
+            &porep_config,
+            &cache_dir,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            &mut staged,
+            &piece_infos,
+        )
+    })?;
+    drop(state);
+    fs::write(&sealed_path, &staged).context("write ZigZag sealed sector")?;
+    // Proving reopens its cache; the runner no longer needs this sector buffer.
+    drop(staged);
+
+    let pre_commit = measure(&mut phases, "pre_commit_phase2", || {
+        zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)
+    })?;
+
+    #[cfg(feature = "zigzag-stage3")]
+    let commit = {
+        let commit_phase1 = measure(&mut phases, "commit_phase1_vanilla", || {
+            zigzag::zigzag_commit_phase1_from_cache::<zigzag::constants::ZigZagTree>(
+                &porep_config,
+                &cache_dir,
+                pre_commit.comm_d,
+                pre_commit.comm_r,
+                pre_commit.comm_r_star,
+                PROVER_ID,
+                sector_id,
+                TICKET,
+                Some(SEED),
+            )
+        })?;
+        let serialized_phase1 = measure(&mut phases, "commit_phase1_serialize", || {
+            serde_json::to_vec(&commit_phase1).context("serialize ZigZag C1")
+        })?;
+        drop(commit_phase1);
+        let commit_phase1 = measure(&mut phases, "commit_phase2_deserialize", || {
+            serde_json::from_slice(&serialized_phase1).context("deserialize ZigZag C1")
+        })?;
+        drop(serialized_phase1);
+        let commit = measure(&mut phases, "commit_phase2_groth16", || {
+            zigzag::zigzag_commit_phase2::<zigzag::constants::ZigZagTree>(
+                &porep_config,
+                commit_phase1,
+                PROVER_ID,
+                sector_id,
+            )
+        })?;
+        commit
+    };
+    #[cfg(not(feature = "zigzag-stage3"))]
+    let commit = measure(&mut phases, "prove_from_cache", || {
+        zigzag::zigzag_prove_from_cache::<zigzag::constants::ZigZagTree>(
+            &porep_config,
+            &cache_dir,
+            pre_commit.comm_d,
+            pre_commit.comm_r,
+            pre_commit.comm_r_star,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            Some(SEED),
+        )
+    })?;
+    if profile.is_some() {
+        ensure!(
+            commit.proof.len() == 10 * 192,
+            "zigzag-512 must prove all ten partitions"
+        );
+    }
+
+    let verify = measure(&mut phases, "verify", || {
+        zigzag::zigzag_verify_seal::<zigzag::constants::ZigZagTree>(
+            &porep_config,
+            pre_commit.comm_r,
+            pre_commit.comm_d,
+            pre_commit.comm_r_star,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            Some(SEED),
+            &commit.proof,
+        )
+    })?;
+
+    // Check the persisted replica, using one sector buffer for in-place decoding.
+    let mut sealed = fs::read(&sealed_path).context("read ZigZag sealed sector")?;
+    let mut verifier = DeterministicVerifySink::new(0);
+    let unsealed = measure(&mut phases, "raw_unseal", || {
+        zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
+            &porep_config,
+            PROVER_ID,
+            sector_id,
+            TICKET,
+            pre_commit.comm_d,
+            &mut sealed,
+            &mut verifier,
+            zigzag::UnpaddedByteIndex(0),
+            zigzag::UnpaddedBytesAmount(raw_len),
+        )
+    })?;
+
+    Ok(BenchmarkSummary {
+        schema_version: 1,
+        backend: Backend::ZigZag,
+        sector_size_label: args.sector_size_label.clone(),
+        sector_size_bytes: args.sector_size_bytes,
+        registered_seal_proof: format!("{registered_proof:?}"),
+        registered_seal_proof_id: registered_proof as i32,
+        porep_layers,
+        porep_partitions,
+        zigzag_groth16_batch_size,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
+        profile,
+        work_dir: args.work_dir.display().to_string(),
+        proof_parameter_cache: proof_parameter_cache_dir().display().to_string(),
+        proof_len: commit.proof.len(),
+        unsealed_bytes: usize::try_from(verifier.written)
+            .context("unsealed byte count overflow")?,
+        verify_seal: verify,
+        raw_unseal_bytes_match: unsealed.0 == raw_len && verifier.matches_expected(raw_len),
+        phases,
+    })
+}
+
+fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zigzag::PoRepConfig {
+    if args.profile.is_some() {
+        return zigzag_512_profile::config();
+    }
+    zigzag::PoRepConfig::new_groth16(
+        args.sector_size_bytes,
+        registered_proof.as_v1_config().porep_id,
+        ZigZagApiVersion::V1_2_0,
+    )
+}
+
+fn proof_configuration(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+) -> (usize, usize, usize) {
+    let config = zigzag_porep_config(args, registered_proof);
+    let partitions = usize::from(config.partitions);
+    let minimum_total_challenges = config.minimum_challenges();
+    let challenges_per_layer_per_partition = minimum_total_challenges.div_ceil(partitions);
+    (
+        partitions,
+        minimum_total_challenges,
+        challenges_per_layer_per_partition,
+    )
+}
+
+fn measure<T>(
+    phases: &mut Vec<PhaseMetric>,
+    name: &'static str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _phase = PhaseGuard::enter(name);
+    let cpu_before = process_cpu_ms();
+    let started = Instant::now();
+    let result = action();
+    let wall_ms = started.elapsed().as_millis();
+    let cpu_ms = process_cpu_ms().saturating_sub(cpu_before);
+    phases.push(PhaseMetric {
+        name,
+        wall_ms,
+        cpu_ms,
+        max_rss_bytes: max_rss_bytes(),
+    });
+    result
+}
+
+fn registered_proof_for_sector_size(sector_size: u64) -> Result<RegisteredSealProof> {
+    Ok(match sector_size {
+        2_048 => RegisteredSealProof::StackedDrg2KiBV1_1,
+        8_388_608 => RegisteredSealProof::StackedDrg8MiBV1_1,
+        536_870_912 => RegisteredSealProof::StackedDrg512MiBV1_1,
+        34_359_738_368 => RegisteredSealProof::StackedDrg32GiBV1_1,
+        _ => bail!("unsupported registered sector size: {sector_size}"),
+    })
+}
+
+fn fixture_manifest_path(args: &Args) -> PathBuf {
+    args.work_dir.join("fixture.json")
+}
+
+fn legacy_fixture_kind() -> String {
+    "legacy".to_string()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture_manifest(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    sealed_path: &PathBuf,
+    cache_dir: &PathBuf,
+    sector_id: u64,
+    comm_d: [u8; 32],
+    comm_r: Option<[u8; 32]>,
+    comm_r_star: Option<[u8; 32]>,
+    proof_cache_artifacts: Vec<String>,
+    unpadded_bytes: u64,
+) -> Result<FixtureManifest> {
+    Ok(FixtureManifest {
+        schema_version: 1,
+        fixture_kind: "minimal-unseal".to_string(),
+        backend: args.backend,
+        sector_size_label: args.sector_size_label.clone(),
+        sector_size_bytes: args.sector_size_bytes,
+        registered_seal_proof: format!("{registered_proof:?}"),
+        registered_seal_proof_id: registered_proof as i32,
+        sealed_path: sealed_path.display().to_string(),
+        cache_dir: cache_dir.display().to_string(),
+        prover_id: hex::encode(PROVER_ID),
+        sector_id,
+        ticket: hex::encode(TICKET),
+        comm_d: hex::encode(comm_d),
+        comm_r: comm_r.map(hex::encode),
+        comm_r_star: comm_r_star.map(hex::encode),
+        proof_cache_artifacts,
+        unpadded_bytes,
+        deterministic_pattern: "byte(i)=(i*31+(i>>3)+17)&0xff".to_string(),
+    })
+}
+
+fn read_fixture_manifest(path: &PathBuf) -> Result<FixtureManifest> {
+    let file =
+        File::open(path).with_context(|| format!("open fixture manifest {}", path.display()))?;
+    serde_json::from_reader(file)
+        .with_context(|| format!("read fixture manifest {}", path.display()))
+}
+
+fn ensure_fixture_matches_args(args: &Args, manifest: &FixtureManifest) -> Result<()> {
+    ensure!(
+        manifest.schema_version == 1,
+        "unsupported fixture schema version {}",
+        manifest.schema_version
+    );
+    ensure!(
+        manifest.fixture_kind == "minimal-unseal",
+        "fixture kind {} is not supported by unseal-only; recreate the fixture with the current bench-proof-micro script",
+        manifest.fixture_kind
+    );
+    ensure!(
+        manifest.backend == args.backend,
+        "fixture backend {:?} does not match requested backend {:?}",
+        manifest.backend,
+        args.backend
+    );
+    ensure!(
+        manifest.sector_size_bytes == args.sector_size_bytes,
+        "fixture sector size {} does not match requested sector size {}",
+        manifest.sector_size_bytes,
+        args.sector_size_bytes
+    );
+    ensure!(
+        manifest.deterministic_pattern == "byte(i)=(i*31+(i>>3)+17)&0xff",
+        "unsupported fixture deterministic pattern {}",
+        manifest.deterministic_pattern
+    );
+    ensure!(
+        PathBuf::from(&manifest.sealed_path).is_file(),
+        "fixture sealed sector is missing: {}",
+        manifest.sealed_path
+    );
+    ensure!(
+        PathBuf::from(&manifest.cache_dir).is_dir(),
+        "fixture seal cache is missing: {}",
+        manifest.cache_dir
+    );
+    Ok(())
+}
+
+fn commitment_from_hex(value: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(value).with_context(|| format!("decode commitment hex {value}"))?;
+    ensure!(
+        bytes.len() == 32,
+        "commitment hex must decode to 32 bytes, got {}",
+        bytes.len()
+    );
+    let mut commitment = [0u8; 32];
+    commitment.copy_from_slice(&bytes);
+    Ok(commitment)
+}
+
+fn unpadded_bytes_for_sector_size(sector_size: u64) -> u64 {
+    ApiUnpaddedBytesAmount::from(ApiPaddedBytesAmount(sector_size)).0
+}
+
+fn proof_parameter_cache_dir() -> PathBuf {
+    std::env::var("FIL_PROOFS_PARAMETER_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-proof-parameters"))
+}
+
+fn parent_cache_dir() -> PathBuf {
+    std::env::var("FIL_PROOFS_PARENT_CACHE")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            std::env::var("FIL_PROOFS_CACHE_DIR")
+                .map(|base| PathBuf::from(base).join("filecoin-parents"))
+        })
+        .unwrap_or_else(|_| PathBuf::from("/var/tmp/filecoin-parents"))
+}
+
+fn parent_cache_window_nodes(backend: Backend) -> u32 {
+    let variable = match backend {
+        Backend::Stacked => "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE",
+        Backend::ZigZag => "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE",
+    };
+    std::env::var(variable)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(2_048)
+}
+
+fn process_cpu_ms() -> u128 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if rc != 0 {
+        return 0;
+    }
+    let usage = unsafe { usage.assume_init() };
+    timeval_ms(usage.ru_utime) + timeval_ms(usage.ru_stime)
+}
+
+fn timeval_ms(value: libc::timeval) -> u128 {
+    (value.tv_sec as u128) * 1000 + (value.tv_usec as u128) / 1000
+}
+
+fn max_rss_bytes() -> u64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if rc != 0 {
+        return 0;
+    }
+    let usage = unsafe { usage.assume_init() };
+    #[cfg(target_os = "macos")]
+    {
+        usage.ru_maxrss as u64
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (usage.ru_maxrss as u64) * 1024
+    }
+}
