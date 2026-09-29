@@ -25,6 +25,10 @@ use crate::util::types::{
     as_path_buf, catch_panic_response, catch_panic_response_raw, FCPResponseStatus,
 };
 
+#[path = "../zigzag_replica.rs"]
+mod zigzag_replica;
+use zigzag_replica::FileReplica;
+
 #[ffi_export]
 fn alloc_boxed_slice(size: usize) -> c_slice::Box<u8> {
     vec![0u8; size].into_boxed_slice().into()
@@ -289,17 +293,6 @@ fn read_zigzag_replica_id_manifest(cache_dir: &std::path::Path) -> Result<[u8; 3
         manifest.version
     );
     Ok(manifest.replica_id)
-}
-
-fn read_curio_tree_d_sector(cache_dir: &std::path::Path, sector_size: u64) -> Result<Vec<u8>> {
-    let tree_d_path = cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE);
-    let sector_size = usize::try_from(sector_size).context("sector size does not fit usize")?;
-    let mut data = vec![0u8; sector_size];
-    let mut file = fs::File::open(&tree_d_path)
-        .with_context(|| format!("open Curio TreeD file at {:?}", tree_d_path))?;
-    file.read_exact(&mut data)
-        .with_context(|| format!("read sector data prefix from {:?}", tree_d_path))?;
-    Ok(data)
 }
 
 #[allow(dead_code)]
@@ -686,27 +679,28 @@ fn seal_pre_commit_phase1(
             let cache_dir = as_path_buf(&cache_dir_path)?;
             let staged_sector_path = as_path_buf(&staged_sector_path)?;
             let sealed_sector_path = as_path_buf(&sealed_sector_path)?;
-            let mut data = fs::read(&staged_sector_path).with_context(|| {
-                format!("failed to read staged sector at {:?}", staged_sector_path)
-            })?;
             let porep_config = zigzag_porep_config(registered_proof)?;
             let piece_infos = zigzag_piece_infos(&public_pieces);
-
-            let (output, _state) = zigzag::zigzag_pre_commit_phase1::<zigzag::ZigZagTree>(
-                &porep_config,
+            let mut replica = FileReplica::new(
                 &cache_dir,
-                *prover_id,
-                zigzag_sector_id(sector_id),
-                *ticket,
-                &mut data,
-                &piece_infos,
+                &sealed_sector_path,
+                zigzag_registered_sector_size(registered_proof),
             )?;
-            fs::write(&sealed_sector_path, &data).with_context(|| {
-                format!(
-                    "failed to write ZigZag sealed sector at {:?}",
-                    sealed_sector_path
-                )
+            replica.copy_from(&staged_sector_path, false)?;
+            let output = replica.encode(|data, work_cache| {
+                let (output, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::ZigZagTree>(
+                    &porep_config,
+                    work_cache,
+                    *prover_id,
+                    zigzag_sector_id(sector_id),
+                    *ticket,
+                    data,
+                    &piece_infos,
+                )?;
+                drop(state);
+                Ok(output)
             })?;
+            replica.publish()?;
 
             let result = serde_json::to_vec(&ZigZagPreCommitPhase1Envelope {
                 zigzag: ZIGZAG_ENVELOPE_KIND.to_string(),
@@ -801,27 +795,26 @@ fn seal_pre_commit_phase2(
                     let sealed_sector_path = as_path_buf(&sealed_sector_path)?;
                     let sector_size = zigzag_registered_sector_size(registered_proof);
                     let replica_id = read_zigzag_replica_id_manifest(&cache_dir)?;
-                    let mut data = read_curio_tree_d_sector(&cache_dir, sector_size)?;
                     let porep_config = zigzag_porep_config(registered_proof)?;
-
-                    let (output, _state) =
-                        zigzag::zigzag_pre_commit_phase1_with_replica_id::<zigzag::ZigZagTree>(
-                            &porep_config,
-                            &cache_dir,
-                            replica_id,
-                            comm_d,
-                            &mut data,
-                        )?;
-                    fs::write(&sealed_sector_path, &data).with_context(|| {
-                        format!(
-                            "failed to write ZigZag sealed sector at {:?}",
-                            sealed_sector_path
-                        )
+                    let mut replica = FileReplica::new(&cache_dir, &sealed_sector_path, sector_size)?;
+                    replica.copy_from(&cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE), true)?;
+                    let output = replica.encode(|data, work_cache| {
+                        let (output, state) =
+                            zigzag::zigzag_pre_commit_phase1_with_replica_id::<zigzag::ZigZagTree>(
+                                &porep_config,
+                                work_cache,
+                                replica_id,
+                                comm_d,
+                                data,
+                            )?;
+                        drop(state);
+                        Ok(output)
                     })?;
                     ensure!(
                         output.comm_d == comm_d,
                         "ZigZag split pre-commit comm_d does not match Curio TreeD output"
                     );
+                    replica.publish()?;
 
                     return Ok(SealPreCommitPhase2 {
                         comm_r: zigzag::zigzag_comm_r_bound(&output.comm_r, &output.comm_r_star),
@@ -2375,6 +2368,175 @@ pub mod tests {
     use crate::util::types::as_bytes;
 
     use super::*;
+
+    #[cfg(feature = "zigzag-stage3")]
+    #[test]
+    #[ignore = "Remote only: real ZigZag pre-commit, C1 and unseal; set FIL_PROOFS_USE_ZIGZAG=1"]
+    fn test_zigzag_file_replica_ffi_matches_vec_and_retries() -> Result<()> {
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let root = tempfile::tempdir()?;
+        let registered = RegisteredSealProof::StackedDrg2KiBV1;
+        let config = zigzag_porep_config(registered)?;
+        let prover_id = [4u8; 32];
+        let ticket = [7u8; 32];
+        let seed = [0xffu8; 32];
+        let sector_id = 9;
+        let mut padded = Vec::new();
+        let (piece, _) = zigzag::add_piece(
+            std::io::Cursor::new(vec![17u8; 2032]),
+            &mut padded,
+            zigzag::UnpaddedBytesAmount(2032),
+            &[],
+        )?;
+        let pieces = [PublicPieceInfo {
+            num_bytes: 2032,
+            comm_p: piece.commitment,
+        }];
+        let reference_cache = root.path().join("reference");
+        let mut expected_replica = padded.clone();
+        let (expected, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::ZigZagTree>(
+            &config,
+            &reference_cache,
+            prover_id,
+            zigzag_sector_id(sector_id),
+            ticket,
+            &mut expected_replica,
+            &[piece],
+        )?;
+        drop(state);
+        let expected_aux = zigzag::zigzag_load_aux(&reference_cache)?;
+        let reference_tree = fs::read_dir(&reference_cache)?
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with("zigzag-tree-d.dat")
+            })
+            .context("reference TreeD is missing")?
+            .path();
+
+        // Run pre-commit in a child process, then reopen its files in this
+        // process. This exercises the Curio task boundary, including retries.
+        let precommit = |cache: &Path, split: bool| -> Result<()> {
+            let staged = cache.join("staged");
+            let sealed = cache.join("sealed");
+            let output = if split {
+                let phase1 = serde_json::to_vec(&serde_json::json!({
+                    "comm_d": expected.comm_d,
+                    "registered_proof": "StackedDrg2KiBV1",
+                }))?;
+                seal_pre_commit_phase2(
+                    phase1.as_slice().into(),
+                    as_bytes(&cache).into(),
+                    as_bytes(&sealed).into(),
+                )
+            } else {
+                let phase1 = seal_pre_commit_phase1(
+                    registered,
+                    as_bytes(&cache).into(),
+                    as_bytes(&staged).into(),
+                    as_bytes(&sealed).into(),
+                    sector_id,
+                    &prover_id,
+                    &ticket,
+                    pieces[..].into(),
+                );
+                ensure!(
+                    phase1.status_code == FCPResponseStatus::NoError,
+                    "FFI pre-commit 1: {}",
+                    String::from_utf8_lossy(&phase1.error_msg)
+                );
+                seal_pre_commit_phase2(
+                    phase1.as_ref(),
+                    as_bytes(&cache).into(),
+                    as_bytes(&sealed).into(),
+                )
+            };
+            ensure!(
+                output.status_code == FCPResponseStatus::NoError,
+                "FFI pre-commit 2: {}",
+                String::from_utf8_lossy(&output.error_msg)
+            );
+            assert_eq!(output.comm_d, expected.comm_d);
+            assert_eq!(
+                output.comm_r,
+                zigzag::zigzag_comm_r_bound(&expected.comm_r, &expected.comm_r_star)
+            );
+            fs::write(cache.join("stage1-child-completed"), expected.comm_r)?;
+            Ok(())
+        };
+        if let Some(cache) = std::env::var_os("ZIGZAG_STAGE1_CHILD_CACHE") {
+            return precommit(
+                Path::new(&cache),
+                std::env::var("ZIGZAG_STAGE1_CHILD_SPLIT")? == "1",
+            );
+        }
+
+        for split in [false, true] {
+            let cache = root.path().join(if split { "split" } else { "ordinary" });
+            fs::create_dir(&cache)?;
+            let staged = cache.join("staged");
+            let sealed = cache.join("sealed");
+            fs::write(&staged, &padded)?;
+            let tree_d = cache.join(ZIGZAG_CURIO_TREE_D_FILE);
+            fs::copy(&reference_tree, &tree_d)?;
+            let tree_d_before = fs::read(&tree_d)?;
+            write_zigzag_replica_id_manifest(&cache, expected_aux.replica_id)?;
+            for _ in 0..2 {
+                let completed = cache.join("stage1-child-completed");
+                if completed.exists() {
+                    fs::remove_file(&completed)?;
+                }
+                let child = std::process::Command::new(std::env::current_exe()?)
+                    .args([
+                        "test_zigzag_file_replica_ffi_matches_vec_and_retries",
+                        "--ignored",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env("ZIGZAG_STAGE1_CHILD_CACHE", &cache)
+                    .env("ZIGZAG_STAGE1_CHILD_SPLIT", if split { "1" } else { "0" })
+                    .output()?;
+                ensure!(
+                    child.status.success(),
+                    "FFI pre-commit child failed: {}\n{}",
+                    String::from_utf8_lossy(&child.stdout),
+                    String::from_utf8_lossy(&child.stderr)
+                );
+                assert_eq!(fs::read(&completed)?, expected.comm_r);
+                assert_eq!(fs::read(&sealed)?, expected_replica);
+                assert_eq!(fs::read(&staged)?, padded);
+                assert_eq!(fs::read(&tree_d)?, tree_d_before);
+                // Reopens all published stores; catches incorrect store paths
+                // or mixed cache generations after publication and retry.
+                let c1 = zigzag::zigzag_commit_phase1_from_cache::<zigzag::ZigZagTree>(
+                    &config,
+                    &cache,
+                    expected.comm_d,
+                    expected.comm_r,
+                    expected.comm_r_star,
+                    prover_id,
+                    zigzag_sector_id(sector_id),
+                    ticket,
+                    Some(seed),
+                )?;
+                assert_eq!(c1.partitions, c1.vanilla_proofs.len());
+                let mut unsealed = fs::read(&sealed)?;
+                zigzag::zigzag_unseal::<zigzag::ZigZagTree>(
+                    &config,
+                    prover_id,
+                    zigzag_sector_id(sector_id),
+                    ticket,
+                    expected.comm_d,
+                    &mut unsealed,
+                )?;
+                assert_eq!(unsealed, padded);
+            }
+        }
+        Ok(())
+    }
 
     #[cfg(feature = "zigzag-stage3")]
     #[test]

@@ -1005,6 +1005,7 @@ devnet_zigzag_stage3_ffi_overrides_sha256() {
   for path in \
     install-filcrypto \
     rust/Cargo.toml \
+    rust/src/zigzag_replica.rs \
     rust/src/bin/porep-proof-microbench.rs \
     rust/src/proofs/api.rs; do
     [[ -f "${root}/${path}" && ! -L "${root}/${path}" ]] ||

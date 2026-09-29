@@ -42,6 +42,7 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/filecoin-ffi/rust/Cargo.lock
     source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto
     source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml
+    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/zigzag_replica.rs
     source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
     source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/filecoin-ffi/rust/Cargo.toml

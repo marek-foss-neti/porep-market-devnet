@@ -31,6 +31,10 @@ use storage_proofs_porep_zigzag::{
 mod microbench_io;
 use microbench_io::{DeterministicReader, DeterministicVerifySink};
 
+#[path = "../zigzag_replica.rs"]
+mod zigzag_replica;
+use zigzag_replica::FileReplica;
+
 #[path = "support/porep_microbench_telemetry.rs"]
 mod microbench_telemetry;
 use microbench_telemetry::{PhaseGuard, TelemetrySession};
@@ -1206,36 +1210,38 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
 
     let porep_config = zigzag_porep_config(args, registered_proof);
     let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
-    // This is the mutable sector required by the ZZ API, not a retained copy of raw input.
-    let mut staged = Vec::with_capacity(
-        usize::try_from(args.sector_size_bytes).context("sector size exceeds address space")?,
-    );
-    let (piece_info, _written) = zigzag::add_piece(
-        DeterministicReader::new(0, raw_len),
-        &mut staged,
-        zigzag::UnpaddedBytesAmount(raw_len),
-        &[],
-    )?;
+    let mut phases = Vec::new();
+    let mut replica = FileReplica::new(&cache_dir, &sealed_path, args.sector_size_bytes)?;
+    let (piece_info, _written) = measure(&mut phases, "prepare_replica", || {
+        replica.prepare(|file| {
+            zigzag::add_piece(
+                DeterministicReader::new(0, raw_len),
+                file,
+                zigzag::UnpaddedBytesAmount(raw_len),
+                &[],
+            )
+        })
+    })?;
     let piece_infos = vec![piece_info];
 
-    let mut phases = Vec::new();
     let sector_id = ZigZagSectorId::from(0);
 
-    let (phase1_out, state) = measure(&mut phases, "pre_commit_phase1", || {
-        zigzag::zigzag_pre_commit_phase1::<zigzag::constants::ZigZagTree>(
-            &porep_config,
-            &cache_dir,
-            PROVER_ID,
-            sector_id,
-            TICKET,
-            &mut staged,
-            &piece_infos,
-        )
+    let phase1_out = measure(&mut phases, "pre_commit_phase1", || {
+        replica.encode(|data, work_cache| {
+            let (output, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::constants::ZigZagTree>(
+                &porep_config,
+                work_cache,
+                PROVER_ID,
+                sector_id,
+                TICKET,
+                data,
+                &piece_infos,
+            )?;
+            drop(state);
+            Ok(output)
+        })
     })?;
-    drop(state);
-    fs::write(&sealed_path, &staged).context("write ZigZag sealed sector")?;
-    // Proving reopens its cache; the runner no longer needs this sector buffer.
-    drop(staged);
+    measure(&mut phases, "publish_replica", || replica.publish())?;
 
     let pre_commit = measure(&mut phases, "pre_commit_phase2", || {
         zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)

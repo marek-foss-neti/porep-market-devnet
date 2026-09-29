@@ -196,6 +196,7 @@ const stage3OverrideInputs = [
   "source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go",
   "source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto",
   "source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml",
+  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/zigzag_replica.rs",
   "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
   "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs",
 ] as const;
