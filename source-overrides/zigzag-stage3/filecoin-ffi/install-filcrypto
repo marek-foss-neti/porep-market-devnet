@@ -248,6 +248,7 @@ build_from_source() {
     # The dedicated ZigZag Curio build opts into the split C1/C2 FFI. The
     # standard Curio/Lotus build never sets this flag.
     [ "${FFI_USE_ZIGZAG_STAGE3:-0}" == "1" ] && features+=("zigzag-stage3")
+    [ "${FFI_USE_ZIGZAG_STAGE2:-0}" == "1" ] && features+=("zigzag-stage2")
     if [ "${FFI_USE_BLST_PORTABLE}" == "1" ] || [ "${FFI_PORTABLE}" == "1" ]; then
         features+=("blst-portable")
     fi

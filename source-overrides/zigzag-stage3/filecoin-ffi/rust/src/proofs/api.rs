@@ -796,20 +796,31 @@ fn seal_pre_commit_phase2(
                     let sector_size = zigzag_registered_sector_size(registered_proof);
                     let replica_id = read_zigzag_replica_id_manifest(&cache_dir)?;
                     let porep_config = zigzag_porep_config(registered_proof)?;
-                    let mut replica = FileReplica::new(&cache_dir, &sealed_sector_path, sector_size)?;
+                    let mut replica =
+                        FileReplica::new(&cache_dir, &sealed_sector_path, sector_size)?;
                     replica.copy_from(&cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE), true)?;
-                    let output = replica.encode(|data, work_cache| {
-                        let (output, state) =
-                            zigzag::zigzag_pre_commit_phase1_with_replica_id::<zigzag::ZigZagTree>(
-                                &porep_config,
-                                work_cache,
-                                replica_id,
-                                comm_d,
-                                data,
-                            )?;
-                        drop(state);
-                        Ok(output)
-                    })?;
+                    let output =
+                        replica.encode(|data, work_cache| {
+                            #[cfg(feature = "zigzag-stage2")]
+                            let (output, state) =
+                                zigzag::zigzag_pre_commit_phase1_with_tree_d::<zigzag::ZigZagTree>(
+                                    &porep_config,
+                                    work_cache,
+                                    replica_id,
+                                    comm_d,
+                                    data,
+                                    cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE),
+                                )?;
+                            #[cfg(not(feature = "zigzag-stage2"))]
+                            let (output, state) =
+                                zigzag::zigzag_pre_commit_phase1_with_replica_id::<
+                                    zigzag::ZigZagTree,
+                                >(
+                                    &porep_config, work_cache, replica_id, comm_d, data
+                                )?;
+                            drop(state);
+                            Ok(output)
+                        })?;
                     ensure!(
                         output.comm_d == comm_d,
                         "ZigZag split pre-commit comm_d does not match Curio TreeD output"
@@ -2533,6 +2544,44 @@ pub mod tests {
                     &mut unsealed,
                 )?;
                 assert_eq!(unsealed, padded);
+            }
+            #[cfg(feature = "zigzag-stage2")]
+            if split {
+                let published_aux = fs::read(cache.join("zigzag-aux.json"))?;
+                // A valid stored root cannot hide a corrupt internal node. Failed retries must
+                // preserve the complete published generation and leave the caller's TreeD alone.
+                for offset in [0, padded.len(), tree_d_before.len() - 32] {
+                    let mut corrupt = tree_d_before.clone();
+                    corrupt[offset] ^= 1;
+                    fs::write(&tree_d, &corrupt)?;
+                    let phase1 = serde_json::to_vec(&serde_json::json!({
+                        "comm_d": expected.comm_d,
+                        "registered_proof": "StackedDrg2KiBV1",
+                    }))?;
+                    let response = seal_pre_commit_phase2(
+                        phase1.as_slice().into(),
+                        as_bytes(&cache).into(),
+                        as_bytes(&sealed).into(),
+                    );
+                    assert_ne!(response.status_code, FCPResponseStatus::NoError);
+                    assert_eq!(fs::read(&sealed)?, expected_replica);
+                    assert_eq!(fs::read(cache.join("zigzag-aux.json"))?, published_aux);
+                    assert_eq!(fs::read(&tree_d)?, corrupt);
+                    assert!(!cache.join(".zigzag-precommit-stage1").exists());
+                }
+                fs::remove_file(&tree_d)?;
+                // Published ZigZag TreeD is independent of the original Curio file's lifetime.
+                let _c1 = zigzag::zigzag_commit_phase1_from_cache::<zigzag::ZigZagTree>(
+                    &config,
+                    &cache,
+                    expected.comm_d,
+                    expected.comm_r,
+                    expected.comm_r_star,
+                    prover_id,
+                    zigzag_sector_id(sector_id),
+                    ticket,
+                    Some(seed),
+                )?;
             }
         }
         Ok(())

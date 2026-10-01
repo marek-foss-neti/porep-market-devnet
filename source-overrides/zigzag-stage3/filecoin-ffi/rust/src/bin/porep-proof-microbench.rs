@@ -201,6 +201,9 @@ struct ParamPrewarmResult {
 
 fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1).collect())?;
+    if matches!(args.backend, Backend::ZigZag) {
+        fil_logger::init();
+    }
     configure_microbench_layers(&args)?;
     fs::create_dir_all(&args.work_dir).context("create work directory")?;
 
@@ -1576,4 +1579,160 @@ fn max_rss_bytes() -> u64 {
     {
         (usage.ru_maxrss as u64) * 1024
     }
+}
+
+/// Acceptance measurement against a retained, previously verified zigzag-512 run. Deliberately
+/// excludes parameter generation and C2: this change only affects pre-commit. The full small-sector
+/// lifecycle separately checks Groth16. This test must be explicitly selected on the remote host.
+#[cfg(all(test, feature = "zigzag-stage2"))]
+#[test]
+#[ignore = "remote-only: 512 MiB precommit/C1/unseal and full artifact comparison"]
+fn stage2_precommit_reference_comparison() -> Result<()> {
+    use std::io::Read;
+    fil_logger::init();
+    let reference = PathBuf::from(std::env::var("ZIGZAG_STAGE2_REFERENCE_WORK")?);
+    let work = PathBuf::from(std::env::var("ZIGZAG_STAGE2_OUTPUT")?);
+    let import = std::env::var("ZIGZAG_STAGE2_IMPORT")? == "1";
+    fs::create_dir(&work).context("acceptance output must be a fresh directory")?;
+    let telemetry =
+        TelemetrySession::start(&work, &proof_parameter_cache_dir(), &parent_cache_dir())?;
+    let config = zigzag_512_profile::config();
+    let original_cache = reference.join("zigzag-cache");
+    let aux = zigzag::zigzag_load_aux(&original_cache)?;
+    let source_tree = original_cache.join("sc-02-data-zigzag-tree-d.dat");
+    let cache = work.join("zigzag-cache");
+    let sealed = work.join("zigzag-sealed.dat");
+    let mut replica = FileReplica::new(&cache, &sealed, 1 << 29)?;
+    let raw_len = unpadded_bytes_for_sector_size(1 << 29);
+    let mut phases = Vec::new();
+    let piece = measure(&mut phases, "prepare_replica", || {
+        if import {
+            replica.copy_from(&source_tree, true)?;
+            Ok(None)
+        } else {
+            replica
+                .prepare(|file| {
+                    zigzag::add_piece(
+                        DeterministicReader::new(0, raw_len),
+                        file,
+                        zigzag::UnpaddedBytesAmount(raw_len),
+                        &[],
+                    )
+                })
+                .map(|(piece, _)| Some(piece))
+        }
+    })?;
+    let output = measure(&mut phases, "pre_commit_phase1", || {
+        replica.encode(|data, work_cache| {
+            let (output, state) = if import {
+                zigzag::zigzag_pre_commit_phase1_with_tree_d::<zigzag::ZigZagTree>(
+                    &config,
+                    work_cache,
+                    aux.replica_id,
+                    aux.comm_d,
+                    data,
+                    &source_tree,
+                )?
+            } else {
+                zigzag::zigzag_pre_commit_phase1::<zigzag::ZigZagTree>(
+                    &config,
+                    work_cache,
+                    PROVER_ID,
+                    ZigZagSectorId::from(0),
+                    TICKET,
+                    data,
+                    std::slice::from_ref(piece.as_ref().expect("ordinary input has PieceInfo")),
+                )?
+            };
+            drop(state);
+            Ok(output)
+        })
+    })?;
+    measure(&mut phases, "publish_replica", || replica.publish())?;
+    ensure!(
+        output.comm_d == aux.comm_d
+            && output.comm_r == aux.comm_r
+            && output.comm_r_star == aux.comm_r_star,
+        "reference commitments differ"
+    );
+    let c1 = measure(&mut phases, "commit_phase1_vanilla", || {
+        zigzag::zigzag_commit_phase1_from_cache::<zigzag::ZigZagTree>(
+            &config,
+            &cache,
+            output.comm_d,
+            output.comm_r,
+            output.comm_r_star,
+            PROVER_ID,
+            ZigZagSectorId::from(0),
+            TICKET,
+            Some(SEED),
+        )
+    })?;
+    ensure!(c1.partitions == 10, "wrong partition count");
+    drop(c1);
+    // Compare all bytes, including every intermediate root/node, with bounded buffers.
+    let mut files = vec![(reference.join("zigzag-sealed.dat"), sealed.clone())];
+    for entry in fs::read_dir(&original_cache)? {
+        let entry = entry?;
+        if entry.path().extension().is_some_and(|ext| ext == "dat") {
+            files.push((entry.path(), cache.join(entry.file_name())));
+        }
+    }
+    ensure!(
+        files.len() == 13,
+        "reference must retain TreeD and all 11 TreeR stores"
+    );
+    measure(&mut phases, "compare_reference", || -> Result<()> {
+        let mut a = vec![0; 1024 * 1024];
+        let mut b = vec![0; a.len()];
+        for (original, actual) in &files {
+            let mut left = File::open(original)?;
+            let mut right = File::open(actual)?;
+            let mut remaining = left.metadata()?.len();
+            ensure!(
+                remaining == right.metadata()?.len(),
+                "artifact sizes differ"
+            );
+            while remaining > 0 {
+                let n = remaining.min(a.len() as u64) as usize;
+                left.read_exact(&mut a[..n])?;
+                right.read_exact(&mut b[..n])?;
+                ensure!(a[..n] == b[..n], "artifact differs: {}", actual.display());
+                remaining -= n as u64;
+            }
+        }
+        Ok(())
+    })?;
+    measure(&mut phases, "raw_unseal", || -> Result<()> {
+        let file = File::open(&sealed)?;
+        let mut data = unsafe { MmapOptions::new().map_copy(&file)? };
+        let mut sink = DeterministicVerifySink::new(0);
+        zigzag::zigzag_unseal_range::<zigzag::ZigZagTree, _>(
+            &config,
+            PROVER_ID,
+            ZigZagSectorId::from(0),
+            TICKET,
+            output.comm_d,
+            &mut data,
+            &mut sink,
+            zigzag::UnpaddedByteIndex(0),
+            zigzag::UnpaddedBytesAmount(raw_len),
+        )?;
+        ensure!(sink.matches_expected(raw_len), "unseal mismatch");
+        Ok(())
+    })?;
+    if let Some(telemetry) = telemetry {
+        telemetry.finish()?;
+    }
+    fs::write(
+        work.join("stage2-comparison.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "mode": if import { "curio-tree-d-import" } else { "ordinary" },
+            "profile": "zigzag-512", "reference_work": reference,
+            "replica_and_all_trees_equal": true, "compared_files": files.len(),
+            "commitments_equal": true, "vanilla_partitions": 10, "raw_unseal_bytes_match": true,
+            "phases": phases,
+        }))?,
+    )?;
+    Ok(())
 }

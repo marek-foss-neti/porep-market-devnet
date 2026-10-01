@@ -45,6 +45,10 @@ zigzag_stage3_cargo_feature=""
 if grep -q 'pub fn zigzag_commit_phase1_from_cache' "${zigzag_source}/filecoin-proofs/src/api/zigzag.rs"; then
   zigzag_stage3_cargo_feature=",zigzag-stage3"
 fi
+zigzag_stage2_cargo_feature=""
+if grep -q 'pub fn zigzag_pre_commit_phase1_with_tree_d' "${zigzag_source}/filecoin-proofs/src/api/zigzag.rs"; then
+  zigzag_stage2_cargo_feature=",zigzag-stage2"
+fi
 curio_source_relative=".cache/sources/curio/${curio_commit}"
 zigzag_source_sha256="$(devnet_rust_fil_proofs_content_sha256 "${zigzag_source}")"
 zigzag_overrides_sha256="$(devnet_zigzag_microbench_overrides_sha256)"
@@ -64,6 +68,7 @@ docker buildx build \
   --build-context "rust-fil-proofs=${zigzag_source_relative}" \
   --build-arg "ZIGZAG_RUST_TOOLCHAIN_IMAGE=${zigzag_toolchain_image}" \
   --build-arg "ZIGZAG_STAGE3_CARGO_FEATURE=${zigzag_stage3_cargo_feature}" \
+  --build-arg "ZIGZAG_STAGE2_CARGO_FEATURE=${zigzag_stage2_cargo_feature}" \
   --build-arg "RUST_FIL_PROOFS_COMMIT=${zigzag_source_commit}" \
   --build-arg "RUST_FIL_PROOFS_SOURCE_SHA256=${zigzag_source_sha256}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_overrides_sha256}" \
@@ -91,11 +96,12 @@ jq -n \
   --arg rustFilProofsSourceRelative "${zigzag_source_relative}" \
   --arg rustToolchainImage "${zigzag_toolchain_image}" \
   --arg stage3Feature "${zigzag_stage3_cargo_feature}" \
+  --arg stage2Feature "${zigzag_stage2_cargo_feature}" \
   --arg zigzagSourceOverridesSha256 "${zigzag_overrides_sha256}" \
   --arg dockerfileSha256 "${dockerfile_sha256}" \
   --arg imageReference "${image}" \
   --arg imageId "${image_id}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(if $stage3Feature == ",zigzag-stage3" then ["multicore-sdr","zigzag-bench","zigzag-setup-status","zigzag-stage3"] else ["multicore-sdr","zigzag-bench","zigzag-setup-status"] end),imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
+  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(["multicore-sdr","zigzag-bench","zigzag-setup-status"] + (if $stage3Feature == ",zigzag-stage3" then ["zigzag-stage3"] else [] end) + (if $stage2Feature == ",zigzag-stage2" then ["zigzag-stage2"] else [] end)),imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
   > "${temporary}"
 mv -f -- "${temporary}" "${manifest}"
 printf 'ZigZag microbench image=%s manifest=%s\n' "${image}" "${manifest}"

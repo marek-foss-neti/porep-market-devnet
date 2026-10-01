@@ -166,6 +166,9 @@ docker_common_args=(
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+if [[ "${backend}" == "zigzag" ]]; then
+  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info")
+fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-110000000000}"
   [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0)) ||

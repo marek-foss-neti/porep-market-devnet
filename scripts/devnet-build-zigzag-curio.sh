@@ -23,6 +23,10 @@ proofs_commit="$(git -C "${proofs_source}" rev-parse HEAD)"
 [[ "${proofs_commit}" =~ ^[0-9a-f]{40}$ ]] || devnet_die "invalid ZigZag source HEAD"
 grep -q 'pub fn zigzag_commit_phase1_from_cache' "${proofs_source}/filecoin-proofs/src/api/zigzag.rs" ||
   devnet_die "ZigZag Curio source lacks the stage 3 C1/C2 API"
+zigzag_stage2=0
+if grep -q 'pub fn zigzag_pre_commit_phase1_with_tree_d' "${proofs_source}/filecoin-proofs/src/api/zigzag.rs"; then
+  zigzag_stage2=1
+fi
 if [[ -z "${DEVNET_RUST_FIL_PROOFS_SOURCE:-}" ]]; then
   [[ "${proofs_commit}" == "${locked_proofs_commit}" ]] ||
     devnet_die "managed ZigZag source differs from the lock"
@@ -57,6 +61,7 @@ docker buildx build --load --provenance=false --progress plain \
   --build-context "rust-fil-proofs=${proofs_source_relative}" \
   --build-context "harness-overlay=." \
   --build-arg "ZIGZAG_RUST_TOOLCHAIN_IMAGE=${toolchain_image}" \
+  --build-arg "ZIGZAG_STAGE2=${zigzag_stage2}" \
   --build-arg "BASE_CURIO_IMAGE=${base_image}" \
   --build-arg "CURIO_COMMIT=${curio_commit}" \
   --build-arg "CURIO_FFI_COMMIT=fbe802089480458d730cbce8a3ca83dcd84a4cd1" \
@@ -88,7 +93,8 @@ jq -n \
   --arg dockerfileSha256 "${dockerfile_sha}" --arg toolchainImage "${toolchain_image}" \
   --arg baseImage "${base_image}" --arg baseImageId "${base_id}" \
   --arg imageReference "${image}" --arg imageId "${image_id}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId}' \
+  --argjson zigzagStage2 "${zigzag_stage2}" \
+  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId,zigzagStage2:($zigzagStage2 == 1)}' \
   > "${temporary}"
 mv -- "${temporary}" "${manifest}"
 printf 'ZigZag Curio image=%s manifest=%s\n' "${image}" "${manifest}"
