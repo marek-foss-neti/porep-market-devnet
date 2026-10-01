@@ -38,6 +38,9 @@ use zigzag_replica::FileReplica;
 #[path = "../zigzag_unseal.rs"]
 mod zigzag_unseal;
 
+#[path = "../zigzag_storage.rs"]
+mod zigzag_storage;
+
 #[path = "support/porep_microbench_telemetry.rs"]
 mod microbench_telemetry;
 use microbench_telemetry::{PhaseGuard, TelemetrySession};

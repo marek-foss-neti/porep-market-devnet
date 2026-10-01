@@ -29,6 +29,9 @@ use zigzag_replica::FileReplica;
 #[path = "../zigzag_unseal.rs"]
 mod zigzag_unseal;
 
+#[path = "../zigzag_storage.rs"]
+mod zigzag_storage;
+
 #[ffi_export]
 fn alloc_boxed_slice(size: usize) -> c_slice::Box<u8> {
     vec![0u8; size].into_boxed_slice().into()
@@ -1206,19 +1209,23 @@ unsafe fn unseal_range(
                 "ZigZag unseal output must not overwrite the sealed replica"
             );
             let porep_config = zigzag_porep_config(registered_proof)?;
-            let mut scratch_dir = as_path_buf(&cache_dir_path)?;
-            if scratch_dir.as_os_str().is_empty() {
-                // Curio's ZigZag decode deliberately passes no proof cache. Place scratch
-                // next to its unsealed output, on the storage filesystem already selected
-                // by Curio, rather than the container's cwd or possibly memory-backed /tmp.
-                ensure!(
-                    output_metadata.is_file(),
-                    "ZigZag unseal needs a scratch directory for non-file output"
-                );
+            if unpadded_bytes_amount == 0 {
+                zigzag_unseal::validate_range(
+                    &porep_config,
+                    &sealed_sector,
+                    zigzag::UnpaddedByteIndex(unpadded_byte_index),
+                    zigzag::UnpaddedBytesAmount(0),
+                )?;
+                return Ok(());
+            }
+            let scratch_dir = if output_metadata.is_file() {
+                // Scratch belongs on the output storage filesystem, independently of
+                // whether the proof cache is present or mounted read-only. Never use /tmp
+                // implicitly: it may be memory-backed or on the container's root volume.
                 let output_path = unseal_output
                     .path()
                     .context("locate ZigZag unseal output")?;
-                scratch_dir = output_path
+                let scratch_dir = output_path
                     .parent()
                     .context("ZigZag unseal output has no parent")?
                     .to_path_buf();
@@ -1226,7 +1233,17 @@ unsafe fn unseal_range(
                     scratch_dir.is_absolute(),
                     "ZigZag unseal scratch path must be absolute"
                 );
-            }
+                scratch_dir
+            } else {
+                // Non-file writers have no output directory; retain the caller-supplied
+                // writable directory as their explicit scratch location.
+                let scratch_dir = as_path_buf(&cache_dir_path)?;
+                ensure!(
+                    !scratch_dir.as_os_str().is_empty(),
+                    "ZigZag unseal needs a scratch directory for non-file output"
+                );
+                scratch_dir
+            };
             zigzag_unseal::unseal_range(
                 &porep_config,
                 &sealed_sector,
@@ -2361,6 +2378,133 @@ pub mod tests {
     use super::*;
 
     #[test]
+    fn test_zigzag_empty_unseal_does_not_access_scratch() -> Result<()> {
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let root = tempfile::tempdir()?;
+        let blocked = root.path().join("not-a-directory");
+        fs::write(&blocked, b"unchanged")?;
+        let registered = RegisteredSealProof::StackedDrg32GiBV1;
+        let config = zigzag_porep_config(registered)?;
+        // A sparse, unencoded fixture is sufficient: no byte may be read or decoded.
+        let mut sealed = tempfile::tempfile()?;
+        sealed.set_len(32 << 30)?;
+        sealed.seek(std::io::SeekFrom::Start(17))?;
+        let output = OpenOptions::new().write(true).open("/dev/null")?;
+        let capacity = zigzag::UnpaddedBytesAmount::from(config.padded_bytes_amount()).0;
+        for offset in [0, capacity, capacity + 1, u64::MAX] {
+            let response = unsafe {
+                unseal_range(
+                    registered,
+                    as_bytes(&blocked).into(),
+                    sealed.as_raw_fd(),
+                    output.as_raw_fd(),
+                    0,
+                    &[4; 32],
+                    &[7; 32],
+                    &[1; 32],
+                    offset,
+                    0,
+                )
+            };
+            assert_eq!(
+                response.status_code == FCPResponseStatus::NoError,
+                offset <= capacity
+            );
+            let mut bytes = Vec::new();
+            let result = zigzag_unseal::unseal_range(
+                &config,
+                &sealed,
+                &blocked,
+                &mut bytes,
+                [4; 32],
+                zigzag_sector_id(0),
+                [7; 32],
+                [1; 32],
+                zigzag::UnpaddedByteIndex(offset),
+                zigzag::UnpaddedBytesAmount(0),
+            );
+            assert_eq!(result.is_ok(), offset <= capacity);
+            assert!(bytes.is_empty());
+            assert_eq!(sealed.stream_position()?, 17);
+        }
+        sealed.set_len(2048)?;
+        assert!(
+            zigzag_unseal::validate_range(
+                &config,
+                &sealed,
+                zigzag::UnpaddedByteIndex(0),
+                zigzag::UnpaddedBytesAmount(0),
+            )
+            .is_err(),
+            "empty requests still validate sealed file size"
+        );
+        assert_eq!(fs::read(&blocked)?, b"unchanged");
+        assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "remote-only: requires a read-only mount at ZIGZAG_READONLY_CACHE_DIR"]
+    fn test_zigzag_unseal_readonly_cache() -> Result<()> {
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let cache = std::path::PathBuf::from(std::env::var("ZIGZAG_READONLY_CACHE_DIR")?);
+        let error = tempfile::tempfile_in(&cache).expect_err("fixture must be mounted read-only");
+        assert_eq!(error.raw_os_error(), Some(libc::EROFS));
+        let root = tempfile::tempdir()?;
+        let registered = RegisteredSealProof::StackedDrg2KiBV1;
+        let config = zigzag_porep_config(registered)?;
+        let raw = vec![42u8; 2032];
+        let mut data = Vec::new();
+        let (piece, _) = zigzag::add_piece(
+            std::io::Cursor::new(&raw),
+            &mut data,
+            zigzag::UnpaddedBytesAmount(2032),
+            &[],
+        )?;
+        let (comm, state) = zigzag::zigzag_pre_commit::<zigzag::ZigZagTree>(
+            &config,
+            [4; 32],
+            zigzag_sector_id(0),
+            [7; 32],
+            &mut data,
+            &[piece],
+            None,
+        )?;
+        drop(state);
+        let path = root.path().join("sealed");
+        fs::write(&path, &data)?;
+        let sealed = fs::File::open(&path)?;
+        let mut output = tempfile::NamedTempFile::new_in(root.path())?;
+        let response = unsafe {
+            unseal_range(
+                registered,
+                as_bytes(&cache).into(),
+                sealed.as_raw_fd(),
+                output.as_raw_fd(),
+                0,
+                &[4; 32],
+                &[7; 32],
+                &comm.comm_d,
+                0,
+                2032,
+            )
+        };
+        ensure!(
+            response.status_code == FCPResponseStatus::NoError,
+            "{}",
+            String::from_utf8_lossy(&response.error_msg)
+        );
+        output.rewind()?;
+        let mut recovered = Vec::new();
+        output.read_to_end(&mut recovered)?;
+        assert_eq!(recovered, raw);
+        assert_eq!(fs::read(path)?, data);
+        assert_eq!(fs::read_dir(root.path())?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "remote-only: ZigZag FFI unseal, scratch cleanup and descriptor ownership"]
     fn test_zigzag_file_backed_ffi_unseal() -> Result<()> {
         ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
@@ -2788,11 +2932,12 @@ pub mod tests {
             allocate(&filler, available(&disk)? - space)?;
             let before = available(&disk)?;
             for _ in 0..2 {
-                let output = tempfile::tempfile()?;
+                // Regular-file output determines the scratch filesystem, not proof cache.
+                let output = tempfile::tempfile_in(&scratch)?;
                 let response = unsafe {
                     unseal_range(
                         RegisteredSealProof::StackedDrg8MiBV1,
-                        as_bytes(&scratch).into(),
+                        as_bytes(std::path::Path::new("")).into(),
                         sealed.as_raw_fd(),
                         output.as_raw_fd(),
                         0,

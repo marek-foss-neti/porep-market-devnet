@@ -44,6 +44,7 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/zigzag/filecoin-ffi/rust/Cargo.toml
     source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_replica.rs
     source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_unseal.rs
+    source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_storage.rs
     source-overrides/zigzag/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
     source-overrides/zigzag/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/filecoin-ffi/rust/Cargo.toml

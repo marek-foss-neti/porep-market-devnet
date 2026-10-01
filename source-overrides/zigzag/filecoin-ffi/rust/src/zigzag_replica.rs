@@ -7,12 +7,14 @@
 //! the replica and its historical Merkle trees are durable.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use storage_proofs_core_zigzag::data::Data;
+
+use super::zigzag_storage::{copy_exact, reserve_file};
 
 const AUX: &str = "zigzag-aux.json";
 const WORK: &str = ".zigzag-precommit-work";
@@ -89,6 +91,7 @@ impl FileReplica {
         ensure!(!self.encoded, "cannot replace an encoded ZigZag replica");
         self.file.set_len(0)?;
         self.file.seek(SeekFrom::Start(0))?;
+        reserve_file(&self.file, self.sector_size).context("preallocate ZigZag replica")?;
         let result = write(&mut self.file)?;
         ensure!(
             self.file.metadata()?.len() == self.sector_size,
@@ -106,7 +109,7 @@ impl FileReplica {
                 "ZigZag source and replica must be separate files"
             );
         }
-        let input =
+        let mut input =
             File::open(source).with_context(|| format!("open ZigZag input {:?}", source))?;
         let size = input.metadata()?.len();
         ensure!(
@@ -119,8 +122,7 @@ impl FileReplica {
         );
         let sector_size = self.sector_size;
         self.prepare(|output| {
-            let copied = io::copy(&mut input.take(sector_size), output)?;
-            ensure!(copied == sector_size, "short ZigZag input");
+            copy_exact(&mut input, output, sector_size).context("copy ZigZag input to replica")?;
             Ok(())
         })
     }
@@ -229,6 +231,125 @@ mod tests {
     fn artifacts(cache: &Path) -> Result<()> {
         fs::write(cache.join("tree.dat"), b"tree")?;
         fs::write(cache.join(AUX), b"completed aux")?;
+        Ok(())
+    }
+
+    #[test]
+    fn preallocation_does_not_hide_a_short_writer() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut replica =
+            FileReplica::new(&root.path().join("cache"), &root.path().join("sealed"), 8)?;
+        assert!(replica
+            .prepare(|file| Ok(file.write_all(b"short")?))
+            .is_err());
+        assert_eq!(replica.file.metadata()?.len(), 5);
+        replica.prepare(|file| Ok(file.write_all(b"complete")?))?;
+        replica.encode(|data, work| {
+            assert_eq!(data, b"complete");
+            artifacts(work)
+        })?;
+        replica.publish()?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "remote-only: private small reflink filesystem at ZIGZAG_REPLICA_TEST_DIR"]
+    fn replica_copy_reserves_private_blocks_before_mmap() -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let scratch = PathBuf::from(std::env::var("ZIGZAG_REPLICA_TEST_DIR")?);
+        let disk = File::open(&scratch)?;
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        ensure!(
+            unsafe { libc::fstatvfs(disk.as_raw_fd(), stat.as_mut_ptr()) } == 0,
+            "fstatvfs: {}",
+            io::Error::last_os_error()
+        );
+        let stat = unsafe { stat.assume_init() };
+        let capacity = stat.f_blocks as u64 * stat.f_frsize as u64;
+        ensure!(
+            (128 << 20..=1024 << 20).contains(&capacity),
+            "refuse to fill a non-test filesystem"
+        );
+        ensure!(
+            fs::read_dir(&scratch)?.next().is_none(),
+            "test filesystem must be empty"
+        );
+        let root = tempfile::tempdir_in(&scratch)?;
+        // Cache metadata stays on a separate filesystem so this test isolates replica mmap.
+        let cache = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let sealed = root.path().join("sealed");
+        let sector_size = 8 << 20;
+        let original = vec![0x31; sector_size as usize];
+        fs::write(&source, &original)?;
+        let input = File::open(&source)?;
+        input.sync_all()?;
+        let cloned = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(root.path().join("reflink-control"))?;
+        // Positive control: the test must really run on a filesystem supporting shared extents.
+        ensure!(
+            unsafe { libc::ioctl(cloned.as_raw_fd(), libc::FICLONE, input.as_raw_fd()) } == 0,
+            "filesystem must support reflinks: {}",
+            io::Error::last_os_error()
+        );
+        cloned.sync_all()?;
+
+        let fill_remaining = || -> Result<File> {
+            let file = tempfile::tempfile_in(root.path())?;
+            let mut offset: libc::off_t = 0;
+            let mut chunk: libc::off_t = 8 << 20;
+            while chunk >= 4096 {
+                if unsafe { libc::fallocate(file.as_raw_fd(), 0, offset, chunk) } == 0 {
+                    offset += chunk;
+                } else {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    ensure!(error.raw_os_error() == Some(libc::ENOSPC), "{error}");
+                    chunk /= 2;
+                }
+            }
+            file.sync_all()?;
+            Ok(file)
+        };
+
+        // Insufficient capacity must be a Result before encoding, with a clean retry.
+        let mut replica = FileReplica::new(cache.path(), &sealed, sector_size)?;
+        let filler = fill_remaining()?;
+        let error = replica.copy_from(&source, false).unwrap_err();
+        assert!(format!("{error:#}").contains("preallocate ZigZag replica"));
+        assert_eq!(
+            error
+                .root_cause()
+                .downcast_ref::<io::Error>()
+                .and_then(|e| e.raw_os_error()),
+            Some(libc::ENOSPC)
+        );
+        drop(replica);
+        drop(filler);
+
+        let mut replica = FileReplica::new(cache.path(), &sealed, sector_size)?;
+        replica.copy_from(&source, false)?;
+        replica.file.sync_all()?;
+        assert!(replica.file.metadata()?.blocks() * 512 >= sector_size);
+        let filler = fill_remaining()?;
+        // Touch every byte after exhausting allocatable space. A shared copy would need CoW
+        // blocks here and could kill this isolated test process with SIGBUS.
+        replica.encode(|data, work| {
+            assert_eq!(data, original);
+            data.fill(0x5a);
+            artifacts(work)
+        })?;
+        assert!(fs::read(&replica.pending)?.iter().all(|b| *b == 0x5a));
+        assert_eq!(fs::read(&source)?, original);
+        assert_eq!(fs::read(root.path().join("reflink-control"))?, original);
+        drop(filler);
+        drop(replica);
         Ok(())
     }
 

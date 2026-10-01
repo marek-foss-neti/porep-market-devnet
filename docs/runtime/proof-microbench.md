@@ -148,11 +148,15 @@ functions recover the requested unpadded range and write it to a verification
 sink that checks the deterministic bytes without writing another large output
 file.
 
-The ZigZag scratch files live on the work directory's filesystem (the sector
-cache directory for the dedicated FFI adapter, or the output file's parent
-directory when Curio supplies an empty cache path). Budget two sector sizes of
-additional disk space per concurrent unseal, including range requests: decode
-still visits the entire sector. Scratch files are unnamed and removed when the
+The microbench places ZigZag scratch on the work directory's filesystem. The
+dedicated FFI adapter always uses the output file's parent directory for regular
+file output, independently of the proof cache; a nonempty read-only cache is
+supported. Non-file output requires an explicit writable scratch directory in
+the cache-path argument. Budget two sector sizes of additional disk space per
+concurrent nonempty unseal, including range requests: decode still visits the
+entire sector. A valid zero-length request checks the sealed file and range
+bounds, then returns without scratch allocation, copying or decode. Scratch
+files are unnamed and removed when the
 call's descriptors close, including after an error or process termination. They
 are not durable checkpoints. Both files reserve disk blocks with Linux
 `fallocate` before copying or mapping, so insufficient capacity returns an FFI
@@ -245,6 +249,20 @@ including every leaf and internal SHA-256 node, before encoding. This avoids
 rebuilding the store but still requires hashing, reads and a private file copy.
 The pinned Rust revision supplies all required APIs. Dedicated builds reject
 older sources instead of falling back to the previous TreeD/unseal/proving paths.
+
+The dedicated replica adapter preallocates disk space before writing either
+streamed `add_piece` output or a copied input. Copies use a bounded read/write
+buffer to avoid reflinks that could require fresh allocation during mmap encode.
+Reservation keeps the logical length unchanged, so short writers still fail
+the sector-length check. These allocation helpers are shared only by the
+dedicated ZigZag replica and unseal adapters; SDR remains unchanged.
+
+In the pinned Rust revision, invalid pieces or a mismatched `comm_d` remove
+only the newly built TreeD, allowing corrected input to retry in the same
+cache. Existing stores are still rejected without being deleted. Failures
+after encoding starts still require original data and a fresh private cache;
+the FFI transaction supplies both. See the [storage correctness review](../review/zigzag-storage-correctness.md)
+for validation and dependency rollout details.
 
 For ZigZag, the wrapper enables `RUST_LOG=zigzag_precommit=info`. With TreeD reuse,
 `stderr.log` contains `phase=tree_d_build`, or `tree_d_copy` and

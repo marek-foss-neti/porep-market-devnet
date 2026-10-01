@@ -1023,6 +1023,7 @@ devnet_zigzag_ffi_overrides_sha256() {
     rust/Cargo.toml \
     rust/src/zigzag_replica.rs \
     rust/src/zigzag_unseal.rs \
+    rust/src/zigzag_storage.rs \
     rust/src/bin/porep-proof-microbench.rs \
     rust/src/proofs/api.rs; do
     [[ -f "${root}/${path}" && ! -L "${root}/${path}" ]] ||

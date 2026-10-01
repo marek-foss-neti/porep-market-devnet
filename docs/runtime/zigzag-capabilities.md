@@ -5,7 +5,9 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`56f94dddfbe6146623abd1caf7174ebe707085a6`. Every dedicated ZigZag build includes:
+`ec49d9188fa893fd9401a0cc9bfe8c0251907547`. This revision also removes newly
+created TreeD stores when pre-encoding validation rejects the input and skips
+decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 
 | Required capability | Required Rust API |
 | --- | --- |
@@ -22,7 +24,8 @@ remains available for development, but also requires the complete API.
 Compilation independently enforces the Rust signatures through direct calls.
 
 Validation of this always-on policy on 2026-10-01 used the clean managed
-checkout of the pinned revision on the remote machine. Both dedicated images
+checkout of the then-pinned revision
+`56f94dddfbe6146623abd1caf7174ebe707085a6` on the remote machine. Both dedicated images
 built successfully. Nine FFI tests, 85 devnet/lock tests, TypeScript checking
 and static checks passed. The full 2 KiB cycle passed proof verification and
 byte-for-byte unseal verification; `curio` and `sptool` version checks passed.
