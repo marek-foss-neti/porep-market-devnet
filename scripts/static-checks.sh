@@ -36,15 +36,16 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/curio/lib/ffi/unseal_funcs.go
     source-overrides/curio/market/mk20/ddo_v1.go
     source-overrides/curio/tasks/piece/task_park_piece.go
-    source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go
+    source-overrides/zigzag/curio/tasks/seal/task_porep.go
     source-overrides/curio/tasks/unseal/task_unseal_decode.go
     source-overrides/curio/tasks/unseal/task_unseal_sdr.go
     source-overrides/filecoin-ffi/rust/Cargo.lock
-    source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto
-    source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml
-    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/zigzag_replica.rs
-    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
-    source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs
+    source-overrides/zigzag/filecoin-ffi/install-filcrypto
+    source-overrides/zigzag/filecoin-ffi/rust/Cargo.toml
+    source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_replica.rs
+    source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_unseal.rs
+    source-overrides/zigzag/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
+    source-overrides/zigzag/filecoin-ffi/rust/src/proofs/api.rs
     source-overrides/filecoin-ffi/rust/Cargo.toml
     source-overrides/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs
     source-overrides/filecoin-ffi/rust/src/bin/support/porep_microbench_io.rs

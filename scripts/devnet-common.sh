@@ -922,6 +922,22 @@ devnet_rust_fil_proofs_source_path() {
   printf '%s\n' "${resolved}"
 }
 
+devnet_require_zigzag_apis() {
+  local source="$1" api
+  local api_file="${source}/filecoin-proofs/src/api/zigzag.rs"
+  [[ -f "${api_file}" && ! -L "${api_file}" ]] ||
+    devnet_die "required ZigZag API file is missing or symbolic: ${api_file}"
+  for api in \
+    zigzag_commit_phase1_from_cache \
+    zigzag_commit_phase2 \
+    zigzag_pre_commit_phase1_with_tree_d \
+    zigzag_unseal_range_with_scratch \
+    zigzag_validate_commit_phase1; do
+    grep -Eq "^[[:space:]]*pub fn ${api}[<(]" "${api_file}" ||
+      devnet_die "ZigZag source lacks required API ${api}; select the Rust revision pinned in versions.lock.yaml or a compatible newer source. Optimization fallbacks are no longer supported."
+  done
+}
+
 devnet_rust_fil_proofs_content_sha256() {
   local source="$1"
   [[ -d "${source}" && ! -L "${source}" ]] ||
@@ -994,28 +1010,29 @@ devnet_zigzag_microbench_overrides_sha256() {
     devnet_die "dedicated ZigZag benchmark Cargo.lock is missing"
   {
     devnet_zigzag_source_overrides_sha256
-    devnet_zigzag_stage3_ffi_overrides_sha256
+    devnet_zigzag_ffi_overrides_sha256
     shasum -a 256 "${zigzag_lock}" | awk '{print $1}'
   } | shasum -a 256 | awk '{print $1}'
 }
 
-devnet_zigzag_stage3_ffi_overrides_sha256() {
-  local root="${DEVNET_ROOT}/source-overrides/zigzag-stage3/filecoin-ffi"
+devnet_zigzag_ffi_overrides_sha256() {
+  local root="${DEVNET_ROOT}/source-overrides/zigzag/filecoin-ffi"
   local path
   for path in \
     install-filcrypto \
     rust/Cargo.toml \
     rust/src/zigzag_replica.rs \
+    rust/src/zigzag_unseal.rs \
     rust/src/bin/porep-proof-microbench.rs \
     rust/src/proofs/api.rs; do
     [[ -f "${root}/${path}" && ! -L "${root}/${path}" ]] ||
-      devnet_die "dedicated ZigZag stage 3 override is missing: ${path}"
+      devnet_die "dedicated ZigZag override is missing: ${path}"
   done
   (
     cd "${root}"
     find . \( -type f -o -type l \) -print | LC_ALL=C sort | while IFS= read -r path; do
       [[ -f "${path}" && ! -L "${path}" ]] ||
-        devnet_die "dedicated ZigZag stage 3 override is symbolic: ${path}"
+        devnet_die "dedicated ZigZag override is symbolic: ${path}"
       printf '%s\n' "${path}"
       shasum -a 256 "${path}" | awk '{print $1}'
     done
@@ -1023,7 +1040,7 @@ devnet_zigzag_stage3_ffi_overrides_sha256() {
 }
 
 devnet_zigzag_curio_overrides_sha256() {
-  local task="${DEVNET_ROOT}/source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go"
+  local task="${DEVNET_ROOT}/source-overrides/zigzag/curio/tasks/seal/task_porep.go"
   [[ -f "${task}" && ! -L "${task}" ]] ||
     devnet_die "dedicated ZigZag Curio task override is missing or symbolic"
   {
@@ -1059,7 +1076,7 @@ devnet_zigzag_curio_image() {
   [[ "${image}" == "${DEVNET_IMAGE_NAMESPACE}/curio-zigzag:"* && "${expected_id}" == sha256:* ]] ||
     devnet_die "ZigZag Curio image identity is invalid"
   [[ "$(docker image inspect "${image}" --format '{{.Id}}')" == "${expected_id}" &&
-     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.stage3"}}')" == 1 &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.split-proving"}}')" == 1 &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.source-sha256"}}')" == "${source_sha}" &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.source-overrides.sha256"}}')" == "$(jq -r '.sourceOverridesSha256' "${manifest}")" &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.dockerfile.sha256"}}')" == "$(jq -r '.dockerfileSha256' "${manifest}")" &&

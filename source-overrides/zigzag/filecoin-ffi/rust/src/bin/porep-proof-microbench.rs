@@ -35,6 +35,9 @@ use microbench_io::{DeterministicReader, DeterministicVerifySink};
 mod zigzag_replica;
 use zigzag_replica::FileReplica;
 
+#[path = "../zigzag_unseal.rs"]
+mod zigzag_unseal;
+
 #[path = "support/porep_microbench_telemetry.rs"]
 mod microbench_telemetry;
 use microbench_telemetry::{PhaseGuard, TelemetrySession};
@@ -1008,26 +1011,15 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
                     .read(true)
                     .open(&sealed_path)
                     .with_context(|| format!("open ZigZag sealed fixture {}", sealed_path))?;
-                eprintln!(
-                    "running ZigZag raw unseal/retrieval: copy-mmap sealed sector {}",
-                    sealed_path
-                );
-                let mut data = unsafe {
-                    MmapOptions::new().map_copy(&sealed).with_context(|| {
-                        format!("copy-mmap ZigZag sealed fixture {}", sealed_path)
-                    })?
-                };
-                eprintln!(
-                    "running ZigZag raw unseal/retrieval: decoding full sealed sector before writing requested range"
-                );
-                zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
+                zigzag_unseal::unseal_range(
                     &porep_config,
+                    &sealed,
+                    &args.work_dir,
+                    &mut verifier,
                     prover_id,
                     ZigZagSectorId::from(sector_id),
                     ticket,
                     comm_d,
-                    &mut data[..],
-                    &mut verifier,
                     zigzag::UnpaddedByteIndex(range_offset),
                     zigzag::UnpaddedBytesAmount(range_size),
                 )
@@ -1199,14 +1191,12 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         .map_or(current_porep_layers(args.sector_size_bytes)?, |p| p.layers);
     let (porep_partitions, minimum_total_challenges, challenges_per_layer_per_partition) =
         proof_configuration(args, registered_proof);
-    #[cfg(feature = "zigzag-stage3")]
     let zigzag_groth16_batch_size = Some(
         storage_proofs_porep_zigzag::zigzag::circuit::groth16_batch_size_for_sector_size(
             args.sector_size_bytes,
         )?,
     );
-    #[cfg(not(feature = "zigzag-stage3"))]
-    let zigzag_groth16_batch_size = None;
+
     let cache_dir = args.work_dir.join("zigzag-cache");
     fs::create_dir_all(&cache_dir).context("create ZigZag cache")?;
     let sealed_path = args.work_dir.join("zigzag-sealed.dat");
@@ -1250,7 +1240,6 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         zigzag::zigzag_pre_commit_phase2(&cache_dir, &phase1_out)
     })?;
 
-    #[cfg(feature = "zigzag-stage3")]
     let commit = {
         let commit_phase1 = measure(&mut phases, "commit_phase1_vanilla", || {
             zigzag::zigzag_commit_phase1_from_cache::<zigzag::constants::ZigZagTree>(
@@ -1283,20 +1272,7 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         })?;
         commit
     };
-    #[cfg(not(feature = "zigzag-stage3"))]
-    let commit = measure(&mut phases, "prove_from_cache", || {
-        zigzag::zigzag_prove_from_cache::<zigzag::constants::ZigZagTree>(
-            &porep_config,
-            &cache_dir,
-            pre_commit.comm_d,
-            pre_commit.comm_r,
-            pre_commit.comm_r_star,
-            PROVER_ID,
-            sector_id,
-            TICKET,
-            Some(SEED),
-        )
-    })?;
+
     if profile.is_some() {
         ensure!(
             commit.proof.len() == 10 * 192,
@@ -1318,18 +1294,20 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         )
     })?;
 
-    // Check the persisted replica, using one sector buffer for in-place decoding.
-    let mut sealed = fs::read(&sealed_path).context("read ZigZag sealed sector")?;
+    // Check the persisted replica without overwriting it. The file-backed path includes
+    // preparation of both scratch files in the timed phase.
+
     let mut verifier = DeterministicVerifySink::new(0);
     let unsealed = measure(&mut phases, "raw_unseal", || {
-        zigzag::zigzag_unseal_range::<zigzag::constants::ZigZagTree, _>(
+        zigzag_unseal::unseal_range(
             &porep_config,
+            &File::open(&sealed_path)?,
+            &args.work_dir,
+            &mut verifier,
             PROVER_ID,
             sector_id,
             TICKET,
             pre_commit.comm_d,
-            &mut sealed,
-            &mut verifier,
             zigzag::UnpaddedByteIndex(0),
             zigzag::UnpaddedBytesAmount(raw_len),
         )
@@ -1584,15 +1562,15 @@ fn max_rss_bytes() -> u64 {
 /// Acceptance measurement against a retained, previously verified zigzag-512 run. Deliberately
 /// excludes parameter generation and C2: this change only affects pre-commit. The full small-sector
 /// lifecycle separately checks Groth16. This test must be explicitly selected on the remote host.
-#[cfg(all(test, feature = "zigzag-stage2"))]
+#[cfg(test)]
 #[test]
 #[ignore = "remote-only: 512 MiB precommit/C1/unseal and full artifact comparison"]
-fn stage2_precommit_reference_comparison() -> Result<()> {
+fn precommit_reference_comparison() -> Result<()> {
     use std::io::Read;
     fil_logger::init();
-    let reference = PathBuf::from(std::env::var("ZIGZAG_STAGE2_REFERENCE_WORK")?);
-    let work = PathBuf::from(std::env::var("ZIGZAG_STAGE2_OUTPUT")?);
-    let import = std::env::var("ZIGZAG_STAGE2_IMPORT")? == "1";
+    let reference = PathBuf::from(std::env::var("ZIGZAG_PRECOMMIT_REFERENCE_WORK")?);
+    let work = PathBuf::from(std::env::var("ZIGZAG_PRECOMMIT_OUTPUT")?);
+    let import = std::env::var("ZIGZAG_PRECOMMIT_IMPORT_TREE_D")? == "1";
     fs::create_dir(&work).context("acceptance output must be a fresh directory")?;
     let telemetry =
         TelemetrySession::start(&work, &proof_parameter_cache_dir(), &parent_cache_dir())?;
@@ -1725,13 +1703,90 @@ fn stage2_precommit_reference_comparison() -> Result<()> {
         telemetry.finish()?;
     }
     fs::write(
-        work.join("stage2-comparison.json"),
+        work.join("precommit-comparison.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "mode": if import { "curio-tree-d-import" } else { "ordinary" },
             "profile": "zigzag-512", "reference_work": reference,
             "replica_and_all_trees_equal": true, "compared_files": files.len(),
             "commitments_equal": true, "vanilla_partitions": 10, "raw_unseal_bytes_match": true,
             "phases": phases,
+        }))?,
+    )?;
+    Ok(())
+}
+
+/// Compare the current heap and file-backed APIs using an already verified replica.
+/// Every mode includes input preparation. Historical baseline builds remain separate
+/// artifacts; this adapter requires the complete current ZigZag API.
+#[cfg(test)]
+#[test]
+#[ignore = "remote-only: isolated 512 MiB decode comparison against a retained replica"]
+fn unseal_reference_comparison() -> Result<()> {
+    fil_logger::init();
+    let reference = PathBuf::from(std::env::var("ZIGZAG_UNSEAL_REFERENCE_WORK")?);
+    let work = PathBuf::from(std::env::var("ZIGZAG_UNSEAL_OUTPUT")?);
+    let mode = std::env::var("ZIGZAG_UNSEAL_MODE")?;
+
+    ensure!(
+        mode == "heap" || mode == "mapped",
+        "Scratch-buffer unseal API requires heap or mapped mode"
+    );
+    let raw_len = unpadded_bytes_for_sector_size(1 << 29);
+    let offset: u64 = std::env::var("ZIGZAG_UNSEAL_RANGE_OFFSET")
+        .unwrap_or_else(|_| "0".into())
+        .parse()?;
+    let count: u64 = std::env::var("ZIGZAG_UNSEAL_RANGE_SIZE")
+        .unwrap_or_else(|_| raw_len.to_string())
+        .parse()?;
+    fs::create_dir(&work).context("acceptance output must be a fresh directory")?;
+    let telemetry =
+        TelemetrySession::start(&work, &proof_parameter_cache_dir(), &parent_cache_dir())?;
+    let config = zigzag_512_profile::config();
+    let aux = zigzag::zigzag_load_aux(reference.join("zigzag-cache"))?;
+    let mut verifier = DeterministicVerifySink::new(offset);
+    let mut phases = Vec::new();
+    let written = measure(&mut phases, "raw_unseal_retrieval", || {
+        let sealed = File::open(reference.join("zigzag-sealed.dat"))?;
+        if mode == "mapped" {
+            return zigzag_unseal::unseal_range(
+                &config,
+                &sealed,
+                &work,
+                &mut verifier,
+                PROVER_ID,
+                ZigZagSectorId::from(0),
+                TICKET,
+                aux.comm_d,
+                zigzag::UnpaddedByteIndex(offset),
+                zigzag::UnpaddedBytesAmount(count),
+            );
+        }
+        let mut data = unsafe { MmapOptions::new().map_copy(&sealed)? };
+        zigzag::zigzag_unseal_range::<zigzag::ZigZagTree, _>(
+            &config,
+            PROVER_ID,
+            ZigZagSectorId::from(0),
+            TICKET,
+            aux.comm_d,
+            &mut data,
+            &mut verifier,
+            zigzag::UnpaddedByteIndex(offset),
+            zigzag::UnpaddedBytesAmount(count),
+        )
+    })?;
+    ensure!(
+        written.0 == count && verifier.matches_expected(count),
+        "unseal bytes differ from reference"
+    );
+    if let Some(telemetry) = telemetry {
+        telemetry.finish()?;
+    }
+    fs::write(
+        work.join("unseal-comparison.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "mode": mode, "profile": "zigzag-512", "layers": 11,
+            "reference_work": reference, "range_offset": offset, "range_size": count,
+            "raw_unseal_bytes_match": true, "phases": phases,
         }))?,
     )?;
     Ok(())

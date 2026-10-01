@@ -59,6 +59,7 @@ filecoin-proofs-zigzag = { package = "filecoin-proofs", version = "19.1", defaul
 storage-proofs-core-zigzag = { package = "storage-proofs-core", version = "19.1", default-features = false }
 storage-proofs-porep-zigzag = { package = "storage-proofs-porep", version = "19.1", default-features = false }
 yastl = "0.1.2"
+tempfile = "3.19.1"
 
 [patch.crates-io]
 filecoin-hashers = { path = "../../rust-fil-proofs/filecoin-hashers" }
@@ -70,14 +71,9 @@ storage-proofs-porep = { path = "../../rust-fil-proofs/storage-proofs-porep" }
 storage-proofs-post = { path = "../../rust-fil-proofs/storage-proofs-post" }
 storage-proofs-update = { path = "../../rust-fil-proofs/storage-proofs-update" }
 
-[dev-dependencies]
-tempfile = "3.19.1"
-
 [features]
 zigzag-bench = ["filecoin-proofs-zigzag/zigzag-bench"]
 zigzag-setup-status = []
-zigzag-stage3 = []
-zigzag-stage2 = []
 default = ["cuda", "multicore-sdr", "fvm"]
 fvm = [
   "fvm2",

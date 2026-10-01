@@ -167,7 +167,7 @@ docker_common_args=(
   "${docker_parent_cache_args[@]}"
 )
 if [[ "${backend}" == "zigzag" ]]; then
-  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info,zigzag_unseal=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-110000000000}"
@@ -976,8 +976,7 @@ if [[ "${bench_profile}" == "zigzag-512" ]]; then
     and .unsealed_bytes == 532676608
   ' "${summary_json}" >/dev/null || devnet_die "zigzag-512 seal/prove/verify/unseal parameters differ from prewarm"
 fi
-if [[ "${backend}" == "zigzag" ]] &&
-  jq -e '.cargoFeatures | index("zigzag-stage3") != null' "${image_manifest}" >/dev/null; then
+if [[ "${backend}" == "zigzag" ]]; then
   jq -e --argjson batch "${zigzag_groth16_batch_size}" \
     '.zigzag_groth16_batch_size == $batch' "${summary_json}" >/dev/null ||
     devnet_die "ZigZag C2 used a different Groth16 batch size; see ${summary_json}"

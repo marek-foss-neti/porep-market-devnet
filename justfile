@@ -8,7 +8,7 @@ build:
     @bash scripts/devnet-build-zigzag-microbench.sh
     @bash scripts/devnet-build-zigzag-curio.sh
 
-build-zigzag-stage3:
+build-zigzag:
     @bash scripts/devnet-build-zigzag-microbench.sh
     @bash scripts/devnet-build-zigzag-curio.sh
 

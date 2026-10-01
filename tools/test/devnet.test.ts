@@ -192,13 +192,14 @@ const sourceOverrideInputs = [
   "source-overrides/lotus/build/buildconstants/devnet_network_bundle.go",
   "source-overrides/lotus/entrypoint.sh",
 ] as const;
-const stage3OverrideInputs = [
-  "source-overrides/zigzag-stage3/curio/tasks/seal/task_porep.go",
-  "source-overrides/zigzag-stage3/filecoin-ffi/install-filcrypto",
-  "source-overrides/zigzag-stage3/filecoin-ffi/rust/Cargo.toml",
-  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/zigzag_replica.rs",
-  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
-  "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/proofs/api.rs",
+const zigzagOverrideInputs = [
+  "source-overrides/zigzag/curio/tasks/seal/task_porep.go",
+  "source-overrides/zigzag/filecoin-ffi/install-filcrypto",
+  "source-overrides/zigzag/filecoin-ffi/rust/Cargo.toml",
+  "source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_replica.rs",
+  "source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_unseal.rs",
+  "source-overrides/zigzag/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs",
+  "source-overrides/zigzag/filecoin-ffi/rust/src/proofs/api.rs",
 ] as const;
 
 async function sha256File(path: string): Promise<string> {
@@ -802,7 +803,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(provenanceWriter, /tracked_patch_sha256/);
   assert.match(provenanceWriter, /zigzag_source_overrides_sha256/);
   assert.match(provenanceWriter, /imageManifest\.cargoFeatures/);
-  assert.match(provenanceWriter, /zigzag-stage3/);
+  assert.match(provenanceWriter, /backend === "zigzag" \? \["zigzag"\]/);
   assert.match(script, /BENCH_BACKEND_ORDER:-zigzag,stacked/);
   assert.match(script, /BENCH_REPETITIONS:-1/);
   assert.match(script, /prewarm_backend_params/);
@@ -907,6 +908,35 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
   }
 });
 
+test("dedicated ZigZag builds reject sources missing mandatory APIs", async () => {
+  const source = await mkdtemp(join(tmpdir(), "zigzag-required-api-"));
+  const apiPath = join(source, "filecoin-proofs/src/api/zigzag.rs");
+  const apis = [
+    "zigzag_commit_phase1_from_cache", "zigzag_commit_phase2",
+    "zigzag_pre_commit_phase1_with_tree_d", "zigzag_unseal_range_with_scratch",
+    "zigzag_validate_commit_phase1",
+  ];
+  try {
+    await mkdir(dirname(apiPath), { recursive: true });
+    for (const missing of [null, ...apis]) {
+      await writeFile(apiPath, apis.map((api) =>
+        `${api === missing ? "// " : ""}pub fn ${api}<T>() {}\n`).join(""));
+      const result = spawnSync("bash", [
+        "-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check",
+        join(repositoryRoot, "scripts/devnet-common.sh"), source,
+      ], { encoding: "utf8" });
+      if (missing === null) {
+        assert.equal(result.status, 0, result.stderr);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.ok(result.stderr.includes(`lacks required API ${missing}`), result.stderr);
+      }
+    }
+  } finally {
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
 test("proof provenance uses managed or explicitly configured Rust sources", async () => {
   const fixture = await createLifecycleFixture();
   try {
@@ -914,7 +944,7 @@ test("proof provenance uses managed or explicitly configured Rust sources", asyn
     const summaryPath = join(fixture.root, "summary.json");
     await writeFile(imageManifestPath, JSON.stringify({
       rustFilProofsCommit: rustFilProofsSourceCommit,
-      cargoFeatures: ["multicore-sdr", "zigzag-bench", "zigzag-setup-status", "zigzag-stage3"],
+      cargoFeatures: ["multicore-sdr", "zigzag-bench", "zigzag-setup-status"],
     }));
     await writeFile(summaryPath, "{}");
     for (const name of ["bench-proof-micro.sh", "summarize-proof-micro-telemetry.mjs", "write-proof-micro-provenance.mjs", "compose-proof-micro-report.mjs"]) {
@@ -959,9 +989,9 @@ test("proof provenance uses managed or explicitly configured Rust sources", asyn
       const provenance = JSON.parse(result.stdout);
       assert.equal(provenance.build.manifest.rust_fil_proofs_commit, rustFilProofsSourceCommit);
       assert.deepEqual(provenance.build.benchmark_binary.cargo_features,
-        ["multicore-sdr", "zigzag-bench", "zigzag-setup-status", "zigzag-stage3"]);
+        ["multicore-sdr", "zigzag-bench", "zigzag-setup-status"]);
       assert.equal(provenance.build.benchmark_binary.source_override_path,
-        join(fixture.root, "source-overrides/zigzag-stage3/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs"));
+        join(fixture.root, "source-overrides/zigzag/filecoin-ffi/rust/src/bin/porep-proof-microbench.rs"));
       assert.equal(provenance.workspaces.rust_fil_proofs_source_path, configured ? resolve(fixture.root, configured) : managed);
       if (configured) {
         assert.equal(provenance.workspaces.rust_fil_proofs, null);
@@ -1690,9 +1720,9 @@ async function createLifecycleFixture(): Promise<{
     await mkdir(dirname(join(root, path)), { recursive: true });
     await writeFile(join(root, path), `fixture source override ${path}\n`, "utf8");
   }
-  for (const path of stage3OverrideInputs) {
+  for (const path of zigzagOverrideInputs) {
     await mkdir(dirname(join(root, path)), { recursive: true });
-    await writeFile(join(root, path), `fixture stage 3 override ${path}\n`, "utf8");
+    await writeFile(join(root, path), `fixture ZigZag override ${path}\n`, "utf8");
   }
   for (const path of dockerSurfaceInputs) {
     await writeFile(join(root, path), "FROM scratch\n", "utf8");

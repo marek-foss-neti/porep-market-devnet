@@ -85,8 +85,9 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 32g
 
 `just build` prepares the standard DevNet images, the pinned Yugabyte image,
 and dedicated ZigZag microbench and Curio images. The standard images always
-use the managed locked Rust source. The lock includes the Stage 3 C1/C2 API,
-so the ZigZag builds also use managed sources by default. After updating the
+use the managed locked Rust source. Dedicated ZigZag images always include
+split C1/C2 proving, TreeD reuse, file-backed unseal and semantic C1 validation.
+Their builds require all corresponding Rust APIs. After updating the
 lock, run `npm --prefix tools run cli -- sources fetch` before `just build`.
 For development, `DEVNET_RUST_FIL_PROOFS_SOURCE` can select an absolute source
 directory inside this repository for the ZigZag builds.
@@ -94,7 +95,9 @@ The builds keep separate toolchains and manifests (`images.json`,
 `zigzag-microbench-images.json`, and `zigzag-curio-images.json`).
 The ZigZag build also runs when the standard images are reused from cache;
 Docker BuildKit can reuse its own cached layers. Building does not run a
-benchmark or generate proof parameters.
+benchmark or generate proof parameters. Use `just build-zigzag` to rebuild only
+the dedicated ZigZag images. Capability names and upgrade notes are described in
+[ZigZag build capabilities](docs/runtime/zigzag-capabilities.md).
 
 ## Canonical Run
 

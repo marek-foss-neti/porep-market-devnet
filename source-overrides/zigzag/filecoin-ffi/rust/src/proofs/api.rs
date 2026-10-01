@@ -1,8 +1,5 @@
 use std::fs;
-#[cfg(feature = "zigzag-stage3")]
 use std::io::Write;
-use std::io::{Read, Seek, SeekFrom};
-#[cfg(feature = "zigzag-stage3")]
 use std::os::fd::AsRawFd;
 
 use anyhow::{bail, ensure, Context, Result};
@@ -28,6 +25,9 @@ use crate::util::types::{
 #[path = "../zigzag_replica.rs"]
 mod zigzag_replica;
 use zigzag_replica::FileReplica;
+
+#[path = "../zigzag_unseal.rs"]
+mod zigzag_unseal;
 
 #[ffi_export]
 fn alloc_boxed_slice(size: usize) -> c_slice::Box<u8> {
@@ -75,7 +75,6 @@ struct ZigZagProofEnvelope {
     proof_hex: String,
 }
 
-#[cfg(feature = "zigzag-stage3")]
 #[derive(Serialize, Deserialize)]
 struct ZigZagCommitPhase1Envelope {
     zigzag: String,
@@ -84,7 +83,6 @@ struct ZigZagCommitPhase1Envelope {
     phase1: zigzag::ZigZagCommitPhase1Output<zigzag::ZigZagTree>,
 }
 
-#[cfg(feature = "zigzag-stage3")]
 const ZIGZAG_COMMIT_PHASE1_VERSION: u8 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -329,7 +327,6 @@ fn parse_zigzag_proof_envelope(bytes: &[u8]) -> Result<Option<(ZigZagProofEnvelo
     Ok(Some((envelope, proof)))
 }
 
-#[cfg(feature = "zigzag-stage3")]
 fn parse_zigzag_commit_phase1(bytes: &[u8]) -> Result<Option<ZigZagCommitPhase1Envelope>> {
     // C1 is emitted with serde_json::to_vec and these fields first. Checking
     // the fixed prefix avoids materializing a second full copy of the large
@@ -343,12 +340,10 @@ fn parse_zigzag_commit_phase1(bytes: &[u8]) -> Result<Option<ZigZagCommitPhase1E
     Ok(Some(envelope))
 }
 
-#[cfg(feature = "zigzag-stage3")]
 fn zigzag_commit_phase1_path(cache_dir: &std::path::Path) -> std::path::PathBuf {
     cache_dir.join("zigzag-commit-phase1-v2.json")
 }
 
-#[cfg(feature = "zigzag-stage3")]
 fn write_zigzag_commit_phase1(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("ZigZag C1 artifact has no parent")?;
     let pending_path = path.with_extension("json.pending");
@@ -375,7 +370,6 @@ fn write_zigzag_commit_phase1(path: &std::path::Path, bytes: &[u8]) -> Result<()
     Ok(())
 }
 
-#[cfg(feature = "zigzag-stage3")]
 fn lock_zigzag_commit_phase1(cache_dir: &std::path::Path) -> Result<fs::File> {
     let lock = fs::OpenOptions::new()
         .read(true)
@@ -391,7 +385,6 @@ fn lock_zigzag_commit_phase1(cache_dir: &std::path::Path) -> Result<fs::File> {
     Ok(lock)
 }
 
-#[cfg(feature = "zigzag-stage3")]
 fn prove_zigzag_commit_phase2(
     envelope: ZigZagCommitPhase1Envelope,
     sector_id: u64,
@@ -799,28 +792,20 @@ fn seal_pre_commit_phase2(
                     let mut replica =
                         FileReplica::new(&cache_dir, &sealed_sector_path, sector_size)?;
                     replica.copy_from(&cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE), true)?;
-                    let output =
-                        replica.encode(|data, work_cache| {
-                            #[cfg(feature = "zigzag-stage2")]
-                            let (output, state) =
-                                zigzag::zigzag_pre_commit_phase1_with_tree_d::<zigzag::ZigZagTree>(
-                                    &porep_config,
-                                    work_cache,
-                                    replica_id,
-                                    comm_d,
-                                    data,
-                                    cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE),
-                                )?;
-                            #[cfg(not(feature = "zigzag-stage2"))]
-                            let (output, state) =
-                                zigzag::zigzag_pre_commit_phase1_with_replica_id::<
-                                    zigzag::ZigZagTree,
-                                >(
-                                    &porep_config, work_cache, replica_id, comm_d, data
-                                )?;
-                            drop(state);
-                            Ok(output)
-                        })?;
+                    let output = replica.encode(|data, work_cache| {
+                        let (output, state) =
+                            zigzag::zigzag_pre_commit_phase1_with_tree_d::<zigzag::ZigZagTree>(
+                                &porep_config,
+                                work_cache,
+                                replica_id,
+                                comm_d,
+                                data,
+                                cache_dir.join(ZIGZAG_CURIO_TREE_D_FILE),
+                            )?;
+
+                        drop(state);
+                        Ok(output)
+                    })?;
                     ensure!(
                         output.comm_d == comm_d,
                         "ZigZag split pre-commit comm_d does not match Curio TreeD output"
@@ -926,90 +911,66 @@ fn seal_commit_phase1(
                 "ZigZag bound comm_r does not match commit input"
             );
 
-            #[cfg(feature = "zigzag-stage3")]
-            {
-                let porep_config = zigzag_porep_config(registered_proof)?;
-                let c1_path = zigzag_commit_phase1_path(&cache_dir);
-                let _c1_lock = lock_zigzag_commit_phase1(&cache_dir)?;
-                if c1_path.is_file() {
-                    let saved = fs::read(&c1_path).context("read saved ZigZag C1 result")?;
-                    if let Ok(Some(saved_output)) = parse_zigzag_commit_phase1(&saved) {
-                        if saved_output.registered_proof
-                            == registered_seal_proof_as_i32(registered_proof)
-                            && saved_output.phase1.sector_id == sector_id
-                            && saved_output.phase1.comm_d == *comm_d
-                            && saved_output.phase1.comm_r == aux.comm_r
-                            && saved_output.phase1.comm_r_star == aux.comm_r_star
-                            && saved_output.phase1.replica_id == aux.replica_id
-                            && saved_output.phase1.layer_comm_rs.len() == aux.layers
-                            && saved_output.phase1.prover_id == *prover_id
-                            && saved_output.phase1.ticket == *ticket
-                            && saved_output.phase1.seed == Some(*seed)
-                            && saved_output.phase1.sector_size
-                                == u64::from(porep_config.padded_bytes_amount())
-                            && saved_output.phase1.porep_id == porep_config.porep_id
-                            && saved_output.phase1.partitions
-                                == usize::from(porep_config.partitions)
-                            && saved_output.phase1.vanilla_proofs.len()
-                                == saved_output.phase1.partitions
-                        {
-                            return Ok(saved.into_boxed_slice().into());
+            let porep_config = zigzag_porep_config(registered_proof)?;
+            let c1_path = zigzag_commit_phase1_path(&cache_dir);
+            let _c1_lock = lock_zigzag_commit_phase1(&cache_dir)?;
+            if c1_path.is_file() {
+                let saved = fs::read(&c1_path).context("read saved ZigZag C1 result")?;
+                if let Ok(Some(saved_output)) = parse_zigzag_commit_phase1(&saved) {
+                    if saved_output.registered_proof
+                        == registered_seal_proof_as_i32(registered_proof)
+                        && saved_output.phase1.sector_id == sector_id
+                        && saved_output.phase1.comm_d == *comm_d
+                        && saved_output.phase1.comm_r == aux.comm_r
+                        && saved_output.phase1.comm_r_star == aux.comm_r_star
+                        && saved_output.phase1.replica_id == aux.replica_id
+                        && saved_output.phase1.layer_comm_rs.len() == aux.layers
+                        && saved_output.phase1.prover_id == *prover_id
+                        && saved_output.phase1.ticket == *ticket
+                        && saved_output.phase1.seed == Some(*seed)
+                        && saved_output.phase1.sector_size
+                            == u64::from(porep_config.padded_bytes_amount())
+                        && saved_output.phase1.porep_id == porep_config.porep_id
+                        && saved_output.phase1.partitions == usize::from(porep_config.partitions)
+                        && saved_output.phase1.vanilla_proofs.len()
+                            == saved_output.phase1.partitions
+                    {
+                        match zigzag::zigzag_validate_commit_phase1::<zigzag::ZigZagTree>(
+                            &porep_config,
+                            &saved_output.phase1,
+                            *prover_id,
+                            zigzag_sector_id(sector_id),
+                        ) {
+                            Ok(()) => return Ok(saved.into_boxed_slice().into()),
+                            Err(error) => {
+                                log::warn!("regenerating invalid saved ZigZag C1: {:#}", error)
+                            }
                         }
                     }
-                    // A different seed, stale context or interrupted publication
-                    // must be regenerated against the current validated cache.
-                    fs::remove_file(&c1_path).context("remove stale ZigZag C1 result")?;
                 }
-
-                let phase1 = zigzag::zigzag_commit_phase1_from_cache::<zigzag::ZigZagTree>(
-                    &porep_config,
-                    &cache_dir,
-                    aux.comm_d,
-                    aux.comm_r,
-                    aux.comm_r_star,
-                    *prover_id,
-                    zigzag_sector_id(sector_id),
-                    *ticket,
-                    Some(*seed),
-                )?;
-                let result = serde_json::to_vec(&ZigZagCommitPhase1Envelope {
-                    zigzag: ZIGZAG_ENVELOPE_KIND.to_string(),
-                    version: ZIGZAG_COMMIT_PHASE1_VERSION,
-                    registered_proof: registered_seal_proof_as_i32(registered_proof),
-                    phase1,
-                })?;
-                write_zigzag_commit_phase1(&c1_path, &result)?;
-                return Ok(result.into_boxed_slice().into());
+                // Regenerate stale or semantically corrupt C1 under the same lock.
+                fs::remove_file(&c1_path).context("remove stale ZigZag C1 result")?;
             }
 
-            #[cfg(not(feature = "zigzag-stage3"))]
-            {
-                let porep_config = zigzag_porep_config(registered_proof)?;
-                let output = zigzag::zigzag_prove_from_cache::<zigzag::ZigZagTree>(
-                    &porep_config,
-                    &cache_dir,
-                    aux.comm_d,
-                    aux.comm_r,
-                    aux.comm_r_star,
-                    *prover_id,
-                    zigzag_sector_id(sector_id),
-                    *ticket,
-                    Some(*seed),
-                )?;
-                write_zigzag_proof_sidecar(
-                    registered_proof,
-                    sector_id,
-                    aux.comm_d,
-                    bound_comm_r,
-                    aux.comm_r,
-                    aux.comm_r_star,
-                    *prover_id,
-                    *ticket,
-                    *seed,
-                    &output.proof,
-                )?;
-                return Ok(output.proof.into_boxed_slice().into());
-            }
+            let phase1 = zigzag::zigzag_commit_phase1_from_cache::<zigzag::ZigZagTree>(
+                &porep_config,
+                &cache_dir,
+                aux.comm_d,
+                aux.comm_r,
+                aux.comm_r_star,
+                *prover_id,
+                zigzag_sector_id(sector_id),
+                *ticket,
+                Some(*seed),
+            )?;
+            let result = serde_json::to_vec(&ZigZagCommitPhase1Envelope {
+                zigzag: ZIGZAG_ENVELOPE_KIND.to_string(),
+                version: ZIGZAG_COMMIT_PHASE1_VERSION,
+                registered_proof: registered_seal_proof_as_i32(registered_proof),
+                phase1,
+            })?;
+            write_zigzag_commit_phase1(&c1_path, &result)?;
+            return Ok(result.into_boxed_slice().into());
         }
 
         let spcp2o = seal::SealPreCommitPhase2Output {
@@ -1043,7 +1004,6 @@ fn seal_commit_phase2(
     prover_id: &[u8; 32],
 ) -> repr_c::Box<SealCommitPhase2Response> {
     catch_panic_response("seal_commit_phase2", || {
-        #[cfg(feature = "zigzag-stage3")]
         if let Some(envelope) = parse_zigzag_commit_phase1(&seal_commit_phase1_output)? {
             let proof = prove_zigzag_commit_phase2(envelope, sector_id, *prover_id)?;
             return Ok(proof.into_boxed_slice().into());
@@ -1084,7 +1044,6 @@ fn seal_commit_phase2_circuit_proofs(
     sector_id: u64,
 ) -> repr_c::Box<SealCommitPhase2Response> {
     catch_panic_response("seal_commit_phase2_circuit_proofs", || {
-        #[cfg(feature = "zigzag-stage3")]
         if let Some(envelope) = parse_zigzag_commit_phase1(&seal_commit_phase1_output)? {
             let prover_id = envelope.phase1.prover_id;
             let proof = prove_zigzag_commit_phase2(envelope, sector_id, prover_id)?;
@@ -1233,37 +1192,58 @@ unsafe fn unseal_range(
         use filepath::FilePath;
         use std::os::unix::io::{FromRawFd, IntoRawFd};
 
-        let mut sealed_sector = fs::File::from_raw_fd(sealed_sector_fd_raw);
-        let mut unseal_output = fs::File::from_raw_fd(unseal_output_fd_raw);
-
         if zigzag_devnet_proof(registered_proof) {
+            use std::mem::ManuallyDrop;
+            use std::os::unix::fs::MetadataExt;
+            // These descriptors belong to the caller, including on validation/I/O errors.
+            let sealed_sector = ManuallyDrop::new(fs::File::from_raw_fd(sealed_sector_fd_raw));
+            let mut unseal_output = ManuallyDrop::new(fs::File::from_raw_fd(unseal_output_fd_raw));
+            let source_metadata = sealed_sector.metadata()?;
+            let output_metadata = unseal_output.metadata()?;
+            ensure!(
+                (source_metadata.dev(), source_metadata.ino())
+                    != (output_metadata.dev(), output_metadata.ino()),
+                "ZigZag unseal output must not overwrite the sealed replica"
+            );
             let porep_config = zigzag_porep_config(registered_proof)?;
-            sealed_sector
-                .seek(SeekFrom::Start(0))
-                .context("failed to seek ZigZag sealed sector")?;
-            let mut data = Vec::new();
-            sealed_sector
-                .read_to_end(&mut data)
-                .context("failed to read ZigZag sealed sector")?;
-
-            zigzag::zigzag_unseal_range::<zigzag::ZigZagTree, _>(
+            let mut scratch_dir = as_path_buf(&cache_dir_path)?;
+            if scratch_dir.as_os_str().is_empty() {
+                // Curio's ZigZag decode deliberately passes no proof cache. Place scratch
+                // next to its unsealed output, on the storage filesystem already selected
+                // by Curio, rather than the container's cwd or possibly memory-backed /tmp.
+                ensure!(
+                    output_metadata.is_file(),
+                    "ZigZag unseal needs a scratch directory for non-file output"
+                );
+                let output_path = unseal_output
+                    .path()
+                    .context("locate ZigZag unseal output")?;
+                scratch_dir = output_path
+                    .parent()
+                    .context("ZigZag unseal output has no parent")?
+                    .to_path_buf();
+                ensure!(
+                    scratch_dir.is_absolute(),
+                    "ZigZag unseal scratch path must be absolute"
+                );
+            }
+            zigzag_unseal::unseal_range(
                 &porep_config,
+                &sealed_sector,
+                &scratch_dir,
+                &mut *unseal_output,
                 *prover_id,
                 zigzag_sector_id(sector_id),
                 *ticket,
                 *comm_d,
-                &mut data,
-                &mut unseal_output,
                 zigzag::UnpaddedByteIndex(unpadded_byte_index),
                 zigzag::UnpaddedBytesAmount(unpadded_bytes_amount),
             )?;
-
-            // keep all file descriptors alive until unseal_range returns
-            let _ = sealed_sector.into_raw_fd();
-            let _ = unseal_output.into_raw_fd();
-
             return Ok(());
         }
+
+        let sealed_sector = fs::File::from_raw_fd(sealed_sector_fd_raw);
+        let mut unseal_output = fs::File::from_raw_fd(unseal_output_fd_raw);
 
         filecoin_proofs_api::seal::get_unsealed_range_mapped(
             registered_proof.into(),
@@ -2380,7 +2360,181 @@ pub mod tests {
 
     use super::*;
 
-    #[cfg(feature = "zigzag-stage3")]
+    #[test]
+    #[ignore = "remote-only: ZigZag FFI unseal, scratch cleanup and descriptor ownership"]
+    fn test_zigzag_file_backed_ffi_unseal() -> Result<()> {
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let root = tempfile::tempdir()?;
+        let registered = RegisteredSealProof::StackedDrg2KiBV1;
+        let config = zigzag_porep_config(registered)?;
+        let raw: Vec<u8> = (0..2032).map(|i| (i * 19 + i / 3) as u8).collect();
+        let mut data = Vec::new();
+        let (piece, _) = zigzag::add_piece(
+            std::io::Cursor::new(&raw),
+            &mut data,
+            zigzag::UnpaddedBytesAmount(2032),
+            &[],
+        )?;
+        let prover = [4; 32];
+        let ticket = [7; 32];
+        let (comm, state) = zigzag::zigzag_pre_commit::<zigzag::ZigZagTree>(
+            &config,
+            prover,
+            zigzag_sector_id(0),
+            ticket,
+            &mut data,
+            &[piece],
+            None,
+        )?;
+        drop(state);
+        let path = root.path().join("sealed");
+        fs::write(&path, &data)?;
+        let sealed = fs::File::open(&path)?;
+        for (offset, len) in [
+            (0, 2032),
+            (1, 130),
+            (126, 4),
+            (2031, 1),
+            (2032, 0),
+            (2032, 1),
+            (u64::MAX, 2),
+        ] {
+            let mut output = tempfile::tempfile()?;
+            let response = unsafe {
+                unseal_range(
+                    registered,
+                    as_bytes(root.path()).into(),
+                    sealed.as_raw_fd(),
+                    output.as_raw_fd(),
+                    0,
+                    &prover,
+                    &ticket,
+                    &comm.comm_d,
+                    offset,
+                    len,
+                )
+            };
+            let valid = offset.checked_add(len).is_some_and(|end| end <= 2032);
+            assert_eq!(response.status_code == FCPResponseStatus::NoError, valid);
+            // Error responses must not close either descriptor supplied by the caller.
+            assert_eq!(sealed.metadata()?.len(), 2048);
+            output.seek(std::io::SeekFrom::Start(0))?;
+            let mut recovered = Vec::new();
+            output.read_to_end(&mut recovered)?;
+            if valid {
+                assert_eq!(recovered, raw[offset as usize..(offset + len) as usize]);
+            } else {
+                assert!(recovered.is_empty());
+            }
+            assert_eq!(fs::read(&path)?, data);
+            assert_eq!(
+                fs::read_dir(root.path())?.count(),
+                1,
+                "scratch files must not survive return"
+            );
+        }
+        // Exact Curio calling convention: an empty cache path and a regular output file.
+        // Scratch must work on that output filesystem without needing a proof cache.
+        {
+            let mut output = tempfile::NamedTempFile::new_in(root.path())?;
+            let response = unsafe {
+                unseal_range(
+                    registered,
+                    as_bytes(std::path::Path::new("")).into(),
+                    sealed.as_raw_fd(),
+                    output.as_raw_fd(),
+                    0,
+                    &prover,
+                    &ticket,
+                    &comm.comm_d,
+                    0,
+                    2032,
+                )
+            };
+            assert_eq!(response.status_code, FCPResponseStatus::NoError);
+            output.seek(std::io::SeekFrom::Start(0))?;
+            let mut recovered = Vec::new();
+            output.read_to_end(&mut recovered)?;
+            assert_eq!(recovered, raw);
+            assert_eq!(fs::read_dir(root.path())?.count(), 2);
+        }
+        assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        assert_eq!(fs::read(&path)?, data);
+        let response = unsafe {
+            unseal_range(
+                registered,
+                as_bytes(root.path()).into(),
+                sealed.as_raw_fd(),
+                sealed.as_raw_fd(),
+                0,
+                &prover,
+                &ticket,
+                &comm.comm_d,
+                0,
+                2032,
+            )
+        };
+        assert_ne!(response.status_code, FCPResponseStatus::NoError);
+        assert_eq!(fs::read(&path)?, data);
+        assert_eq!(sealed.metadata()?.len(), 2048);
+
+        struct BrokenWriter;
+        impl std::io::Write for BrokenWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("injected output failure"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(zigzag_unseal::unseal_range(
+            &config,
+            &sealed,
+            root.path(),
+            BrokenWriter,
+            prover,
+            zigzag_sector_id(0),
+            ticket,
+            comm.comm_d,
+            zigzag::UnpaddedByteIndex(0),
+            zigzag::UnpaddedBytesAmount(2032),
+        )
+        .is_err());
+        assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        assert_eq!(fs::read(&path)?, data);
+        // Retry after a failed writer starts from the original sealed sector.
+        let mut recovered = Vec::new();
+        zigzag_unseal::unseal_range(
+            &config,
+            &sealed,
+            root.path(),
+            &mut recovered,
+            prover,
+            zigzag_sector_id(0),
+            ticket,
+            comm.comm_d,
+            zigzag::UnpaddedByteIndex(0),
+            zigzag::UnpaddedBytesAmount(2032),
+        )?;
+        assert_eq!(recovered, raw);
+        fs::write(&path, &data[..2047])?;
+        assert!(zigzag_unseal::unseal_range(
+            &config,
+            &sealed,
+            root.path(),
+            Vec::new(),
+            prover,
+            zigzag_sector_id(0),
+            ticket,
+            comm.comm_d,
+            zigzag::UnpaddedByteIndex(0),
+            zigzag::UnpaddedBytesAmount(2032),
+        )
+        .is_err());
+        assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        Ok(())
+    }
+
     #[test]
     #[ignore = "Remote only: real ZigZag pre-commit, C1 and unseal; set FIL_PROOFS_USE_ZIGZAG=1"]
     fn test_zigzag_file_replica_ffi_matches_vec_and_retries() -> Result<()> {
@@ -2475,13 +2629,13 @@ pub mod tests {
                 output.comm_r,
                 zigzag::zigzag_comm_r_bound(&expected.comm_r, &expected.comm_r_star)
             );
-            fs::write(cache.join("stage1-child-completed"), expected.comm_r)?;
+            fs::write(cache.join("precommit-child-completed"), expected.comm_r)?;
             Ok(())
         };
-        if let Some(cache) = std::env::var_os("ZIGZAG_STAGE1_CHILD_CACHE") {
+        if let Some(cache) = std::env::var_os("ZIGZAG_PRECOMMIT_CHILD_CACHE") {
             return precommit(
                 Path::new(&cache),
-                std::env::var("ZIGZAG_STAGE1_CHILD_SPLIT")? == "1",
+                std::env::var("ZIGZAG_PRECOMMIT_CHILD_SPLIT")? == "1",
             );
         }
 
@@ -2496,7 +2650,7 @@ pub mod tests {
             let tree_d_before = fs::read(&tree_d)?;
             write_zigzag_replica_id_manifest(&cache, expected_aux.replica_id)?;
             for _ in 0..2 {
-                let completed = cache.join("stage1-child-completed");
+                let completed = cache.join("precommit-child-completed");
                 if completed.exists() {
                     fs::remove_file(&completed)?;
                 }
@@ -2507,8 +2661,11 @@ pub mod tests {
                         "--nocapture",
                         "--test-threads=1",
                     ])
-                    .env("ZIGZAG_STAGE1_CHILD_CACHE", &cache)
-                    .env("ZIGZAG_STAGE1_CHILD_SPLIT", if split { "1" } else { "0" })
+                    .env("ZIGZAG_PRECOMMIT_CHILD_CACHE", &cache)
+                    .env(
+                        "ZIGZAG_PRECOMMIT_CHILD_SPLIT",
+                        if split { "1" } else { "0" },
+                    )
                     .output()?;
                 ensure!(
                     child.status.success(),
@@ -2545,7 +2702,6 @@ pub mod tests {
                 )?;
                 assert_eq!(unsealed, padded);
             }
-            #[cfg(feature = "zigzag-stage2")]
             if split {
                 let published_aux = fs::read(cache.join("zigzag-aux.json"))?;
                 // A valid stored root cannot hide a corrupt internal node. Failed retries must
@@ -2567,7 +2723,7 @@ pub mod tests {
                     assert_eq!(fs::read(&sealed)?, expected_replica);
                     assert_eq!(fs::read(cache.join("zigzag-aux.json"))?, published_aux);
                     assert_eq!(fs::read(&tree_d)?, corrupt);
-                    assert!(!cache.join(".zigzag-precommit-stage1").exists());
+                    assert!(!cache.join(".zigzag-precommit-work").exists());
                 }
                 fs::remove_file(&tree_d)?;
                 // Published ZigZag TreeD is independent of the original Curio file's lifetime.
@@ -2587,7 +2743,277 @@ pub mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "zigzag-stage3")]
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "remote-only: requires a private small ext4 filesystem at ZIGZAG_SCRATCH_TEST_DIR"]
+    fn test_zigzag_scratch_enospc_is_ffi_error() -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let scratch = std::path::PathBuf::from(std::env::var("ZIGZAG_SCRATCH_TEST_DIR")?);
+        ensure!(
+            fs::read_dir(&scratch)?.next().is_none(),
+            "test filesystem must be empty"
+        );
+        let available = |file: &fs::File| -> Result<u64> {
+            let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            ensure!(
+                unsafe { libc::fstatvfs(file.as_raw_fd(), stat.as_mut_ptr()) } == 0,
+                "fstatvfs: {}",
+                std::io::Error::last_os_error()
+            );
+            let stat = unsafe { stat.assume_init() };
+            Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
+        };
+        let allocate = |file: &fs::File, bytes: u64| -> Result<()> {
+            ensure!(
+                unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, bytes as libc::off_t) } == 0,
+                "fallocate: {}",
+                std::io::Error::last_os_error()
+            );
+            Ok(())
+        };
+        let disk = fs::File::open(&scratch)?;
+        let initial_free = available(&disk)?;
+        ensure!(
+            (32 << 20..=256 << 20).contains(&initial_free),
+            "refuse to fill a non-test filesystem"
+        );
+        let sector_bytes = 8 << 20;
+        let mut sealed = tempfile::tempfile()?;
+        sealed.set_len(sector_bytes)?;
+        sealed.seek(std::io::SeekFrom::Start(17))?;
+        // The 8 MiB input is intentionally not encoded: ENOSPC must be handled before decode.
+        for (space, which) in [(4 << 20, "input"), (12 << 20, "output")] {
+            let filler = tempfile::tempfile_in(&scratch)?;
+            allocate(&filler, available(&disk)? - space)?;
+            let before = available(&disk)?;
+            for _ in 0..2 {
+                let output = tempfile::tempfile()?;
+                let response = unsafe {
+                    unseal_range(
+                        RegisteredSealProof::StackedDrg8MiBV1,
+                        as_bytes(&scratch).into(),
+                        sealed.as_raw_fd(),
+                        output.as_raw_fd(),
+                        0,
+                        &[4; 32],
+                        &[7; 32],
+                        &[1; 32],
+                        0,
+                        127,
+                    )
+                };
+                assert_ne!(response.status_code, FCPResponseStatus::NoError);
+                let message = String::from_utf8_lossy(&response.error_msg);
+                assert!(
+                    message.contains(&format!("preallocate ZigZag unseal {which} scratch")),
+                    "{message}"
+                );
+                assert!(message.contains("No space left on device"), "{message}");
+                assert_eq!(sealed.metadata()?.len(), sector_bytes);
+                assert_eq!(
+                    sealed.stream_position()?,
+                    17,
+                    "input was read before both allocations succeeded"
+                );
+                assert_eq!(output.metadata()?.len(), 0);
+                assert_eq!(fs::read_dir(&scratch)?.count(), 0);
+                assert!(
+                    available(&disk)? >= before,
+                    "failed attempt leaked disk blocks"
+                );
+            }
+            drop(filler);
+        }
+        // After freeing capacity, reserve both real buffers, fill all remaining space,
+        // and touch every mapped page: already reserved writes must not SIGBUS at ENOSPC.
+        let (left, right) = zigzag_unseal::prepare_scratch(&sealed, &scratch, sector_bytes)?;
+        assert!(left.metadata()?.blocks() * 512 >= sector_bytes);
+        assert!(right.metadata()?.blocks() * 512 >= sector_bytes);
+        let filler = tempfile::tempfile_in(&scratch)?;
+        allocate(&filler, available(&disk)?)?;
+        assert_eq!(available(&disk)?, 0);
+        for file in [&left, &right] {
+            let mut map = unsafe { MmapOptions::new().map_mut(file)? };
+            for (i, byte) in map.iter_mut().enumerate() {
+                *byte = i as u8;
+            }
+            map.flush()?;
+            assert!(map.iter().enumerate().all(|(i, byte)| *byte == i as u8));
+        }
+        drop((left, right, filler));
+        assert_eq!(fs::read_dir(&scratch)?.count(), 0);
+        assert!(available(&disk)? >= initial_free);
+        sealed.rewind()?;
+        let mut check = vec![0u8; sector_bytes as usize];
+        sealed.read_exact(&mut check)?;
+        assert!(check.iter().all(|b| *b == 0), "sealed input changed");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "remote-only: real ZigZag C1 semantic corruption and retry"]
+    fn test_zigzag_c1_rejects_semantic_corruption_and_recovers() -> Result<()> {
+        ensure!(zigzag_devnet_enabled(), "set FIL_PROOFS_USE_ZIGZAG=1");
+        let cache = tempfile::tempdir()?;
+        let registered = RegisteredSealProof::StackedDrg2KiBV1;
+        let config = zigzag_porep_config(registered)?;
+        let prover = [4; 32];
+        let ticket = [7; 32];
+        let seed = [0xff; 32];
+        let sector = 9;
+        let mut replica = Vec::new();
+        let (piece, _) = zigzag::add_piece(
+            std::io::Cursor::new(vec![17; 2032]),
+            &mut replica,
+            zigzag::UnpaddedBytesAmount(2032),
+            &[],
+        )?;
+        let (comm, state) = zigzag::zigzag_pre_commit_phase1::<zigzag::ZigZagTree>(
+            &config,
+            cache.path(),
+            prover,
+            zigzag_sector_id(sector),
+            ticket,
+            &mut replica,
+            &[piece],
+        )?;
+        drop(state);
+        let sealed = cache.path().join("sealed");
+        fs::write(&sealed, &replica)?;
+        let bound = zigzag::zigzag_comm_r_bound(&comm.comm_r, &comm.comm_r_star);
+        let invoke = || {
+            seal_commit_phase1(
+                registered,
+                &bound,
+                &comm.comm_d,
+                as_bytes(cache.path()).into(),
+                as_bytes(&sealed).into(),
+                sector,
+                &prover,
+                &ticket,
+                &seed,
+                (&[][..]).into(),
+            )
+        };
+        let first = invoke();
+        ensure!(
+            first.status_code == FCPResponseStatus::NoError,
+            "{}",
+            String::from_utf8_lossy(&first.error_msg)
+        );
+        let good = first.as_ref().to_vec();
+        let path = zigzag_commit_phase1_path(cache.path());
+        for kind in [
+            "envelope-root",
+            "vanilla-parent",
+            "vanilla-data",
+            "inner-length",
+            "merkle-index",
+        ] {
+            let mut damaged = parse_zigzag_commit_phase1(&good)?.unwrap();
+            match kind {
+                "envelope-root" => damaged.phase1.layer_comm_rs[0][0] ^= 1,
+                "vanilla-parent" => {
+                    damaged.phase1.vanilla_proofs[0].encoding_proofs[0].replica_parents[0][0].0 ^= 1
+                }
+                "vanilla-data" => {
+                    damaged.phase1.vanilla_proofs[0].encoding_proofs[0].replica_nodes[0].data =
+                        Default::default()
+                }
+                "inner-length" => damaged.phase1.vanilla_proofs[0].encoding_proofs[0]
+                    .replica_nodes
+                    .clear(),
+                "merkle-index" => {
+                    fn corrupt_index(value: &mut serde_json::Value) -> bool {
+                        match value {
+                            serde_json::Value::Object(fields) => {
+                                if let Some(index) = fields.get_mut("index") {
+                                    *index = serde_json::json!(u64::MAX);
+                                    true
+                                } else {
+                                    fields.values_mut().any(corrupt_index)
+                                }
+                            }
+                            serde_json::Value::Array(items) => items.iter_mut().any(corrupt_index),
+                            _ => false,
+                        }
+                    }
+                    let mut value = serde_json::to_value(&damaged)?;
+                    assert!(corrupt_index(&mut value));
+                    damaged = serde_json::from_value(value)?;
+                }
+                _ => unreachable!(),
+            }
+            let bad = serde_json::to_vec(&damaged)?;
+            assert!(
+                parse_zigzag_commit_phase1(&bad)?.is_some(),
+                "must be valid JSON"
+            );
+            assert!(
+                zigzag::zigzag_validate_commit_phase1(
+                    &config,
+                    &damaged.phase1,
+                    prover,
+                    zigzag_sector_id(sector)
+                )
+                .is_err(),
+                "{kind}"
+            );
+            assert!(
+                zigzag::zigzag_commit_phase2(
+                    &config,
+                    damaged.phase1,
+                    prover,
+                    zigzag_sector_id(sector)
+                )
+                .is_err(),
+                "C2 must use the same validator: {kind}"
+            );
+            fs::write(&path, bad)?;
+            let recovered = invoke();
+            ensure!(
+                recovered.status_code == FCPResponseStatus::NoError,
+                "{kind}: {}",
+                String::from_utf8_lossy(&recovered.error_msg)
+            );
+            assert_eq!(recovered.as_ref().to_vec(), good, "{kind}");
+            assert_eq!(fs::read(&path)?, good);
+        }
+        // Valid reuse must work with trees unavailable. Invalid C1 must instead fail
+        // regeneration, then recover on the next attempt after the stores return.
+        let trees = fs::read_dir(cache.path())?
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "dat"))
+            .collect::<Vec<_>>();
+        ensure!(!trees.is_empty(), "expected Merkle stores");
+        for tree in &trees {
+            fs::rename(tree, tree.with_extension("hidden"))?;
+        }
+        let reused = invoke();
+        assert_eq!(reused.status_code, FCPResponseStatus::NoError);
+        assert_eq!(reused.as_ref().to_vec(), good);
+        let mut damaged = parse_zigzag_commit_phase1(&good)?.unwrap();
+        damaged.phase1.layer_comm_rs[0][0] ^= 1;
+        fs::write(&path, serde_json::to_vec(&damaged)?)?;
+        let failed = invoke();
+        assert_ne!(failed.status_code, FCPResponseStatus::NoError);
+        assert!(
+            !path.exists(),
+            "corrupt C1 must not survive a failed regeneration"
+        );
+        for tree in &trees {
+            fs::rename(tree.with_extension("hidden"), tree)?;
+        }
+        let recovered = invoke();
+        assert_eq!(recovered.status_code, FCPResponseStatus::NoError);
+        assert_eq!(recovered.as_ref().to_vec(), good);
+        assert_eq!(fs::read(sealed)?, replica);
+        Ok(())
+    }
+
     #[test]
     fn test_zigzag_c1_recovers_interrupted_publication() -> Result<()> {
         let cache = tempfile::tempdir()?;

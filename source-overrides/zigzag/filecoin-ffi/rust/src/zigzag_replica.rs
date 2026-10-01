@@ -15,7 +15,7 @@ use anyhow::{ensure, Context, Result};
 use storage_proofs_core_zigzag::data::Data;
 
 const AUX: &str = "zigzag-aux.json";
-const WORK: &str = ".zigzag-precommit-stage1";
+const WORK: &str = ".zigzag-precommit-work";
 
 /// A retry always starts with fresh input, never with a partially encoded file.
 /// Writers for one cache are serialized. As with the seal API, callers must not
@@ -63,7 +63,7 @@ impl FileReplica {
             .file_name()
             .context("replica has no file name")?
             .to_os_string();
-        pending_name.push(".zigzag-stage1-pending");
+        pending_name.push(".zigzag-precommit-pending");
         let pending = sealed.with_file_name(pending_name);
         remove_regular_file(&pending)?;
         fs::create_dir(&work)?;
@@ -280,7 +280,7 @@ mod tests {
         fs::create_dir(cache.join(WORK))?;
         fs::write(cache.join(WORK).join(AUX), b"partial")?;
         fs::write(
-            sealed.with_file_name("sealed.zigzag-stage1-pending"),
+            sealed.with_file_name("sealed.zigzag-precommit-pending"),
             b"partial",
         )?;
         let mut replica = FileReplica::new(&cache, &sealed, 4)?;

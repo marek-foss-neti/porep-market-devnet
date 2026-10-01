@@ -58,16 +58,20 @@ The full runner generates the deterministic input on demand and checks unsealed
 bytes as they are written, without retaining full input/output copies. The check
 is byte-for-byte and requires both the actual and API-reported output lengths to
 match the requested length. ZigZag keeps one mutable sector buffer during
-pre-commit, releases it after persisting the replica and before proving, then
-reads the persisted replica into one buffer for in-place unsealing. This reduces
-runner overhead; it does not change PoRep or its internal allocations.
+pre-commit and releases it after persisting the replica and before proving.
+With the dedicated ZigZag build, unseal copies the sealed file into a
+private temporary file and alternates two writable file mappings between layers.
+It writes the requested raw bytes directly from the final mapping. The sealed
+replica is never modified. Builds against older Rust sources retain heap-based
+full unseal and copy-on-write mmap in unseal-only mode.
 
 `raw_unseal` includes the streaming byte check for both backends, as
 `raw_unseal_retrieval` already does in `unseal-only` mode. Older full-run reports
 compared retained buffers after the timed phase, so establish a fresh baseline
-with this runner before evaluating PoRep optimizations. The separate read of the
-ZZ replica remains outside `raw_unseal`, as before. Source hashes in provenance
-include the runner's streaming I/O module.
+with this runner before evaluating PoRep optimizations. File-backed unseal includes the
+initial replica copy and scratch preparation inside `raw_unseal`; older full-run
+reports excluded the initial read. Compare equivalent timed intervals. Source
+hashes in provenance include the runner's streaming I/O and unseal modules.
 
 The streaming I/O correctness tests can also run without proof dependencies:
 
@@ -135,14 +139,38 @@ BENCH_UNSEAL_RANGE_SIZE=1048576 just bench-proof-micro-unseal-backends 8mib
 ```
 
 The unseal-only measured path intentionally skips the proof-parameter cache and
-does not read or create `.meta`, `.params`, or `.vk` files. ZigZag uses
-`zigzag_unseal_range` over a copy-on-write mmap of the encoded sector and relies
+does not read or create `.meta`, `.params`, or `.vk` files. The ZigZag file-backed unseal adapter uses
+`zigzag_unseal_range_with_scratch` over two temporary file mappings and relies
 on the backend parent cache, not a per-sector proof cache. Stacked/SDR uses
 Filecoin proofs' `get_unsealed_range_mapped`, which is the mapped raw unseal
 helper used by the Stacked path and requires the per-sector seal cache. Both
 functions recover the requested unpadded range and write it to a verification
 sink that checks the deterministic bytes without writing another large output
 file.
+
+The ZigZag scratch files live on the work directory's filesystem (the sector
+cache directory for the dedicated FFI adapter, or the output file's parent
+directory when Curio supplies an empty cache path). Budget two sector sizes of
+additional disk space per concurrent unseal, including range requests: decode
+still visits the entire sector. Scratch files are unnamed and removed when the
+call's descriptors close, including after an error or process termination. They
+are not durable checkpoints. Both files reserve disk blocks with Linux
+`fallocate` before copying or mapping, so insufficient capacity returns an FFI
+error before decode. Unsupported allocation returns an error; there is no sparse
+`set_len` fallback. The initial copy uses a bounded 1 MiB read/write buffer,
+avoiding reflinks that could undo the reservation. This adapter requires Linux
+and a filesystem supporting `fallocate`.
+The adapter does not force a flush after each layer;
+the kernel may still write dirty pages under memory pressure. File-backed pages
+count toward the cgroup memory limit, so this removes sector-sized anonymous
+allocations without guaranteeing a lower total peak. Use a disk filesystem,
+not tmpfs, if the purpose is to make these pages reclaimable through writeback.
+
+The `zigzag_unseal` log target reports the initial copy, each decoded layer, and
+`scratch_logical_bytes` / `scratch_allocated_bytes` before cleanup. Directory
+size telemetry cannot see these unnamed files; include those log values and
+cgroup I/O in disk/memory comparisons. See the
+[Decode buffer implementation review](../review/zigzag-stage4-implementation.md).
 
 Large fixtures and parent caches can live outside the repository by passing
 host paths:
@@ -203,11 +231,33 @@ The measured phases are:
 | `prove_from_cache` | `zigzag_prove_from_cache` | N/A |
 | `prove_from_cache_equivalent_phase1/2` | N/A | `seal_commit_phase1` + `seal_commit_phase2` |
 | `verify` | `zigzag_verify_seal` | `verify_seal` |
-| `raw_unseal` | `zigzag_unseal_range` | `get_unsealed_range_mapped` |
+| `raw_unseal` | `zigzag_unseal_range_with_scratch` (file-backed buffers) | `get_unsealed_range_mapped` |
 
 The SDR proof path does not have an exact `prove_from_cache` function. Its
 closest comparable scope is commit phase 1 plus commit phase 2, both operating
 from persisted pre-commit cache and the sealed replica.
+
+The dedicated ZigZag runner additionally times `prepare_replica` and
+`publish_replica`; with split proving its proof phases are `commit_phase1_vanilla`
+and `commit_phase2_groth16`. TreeD reuse builds TreeD once in ordinary pre-commit.
+For split Curio pre-commit it copies and validates the existing full TreeD,
+including every leaf and internal SHA-256 node, before encoding. This avoids
+rebuilding the store but still requires hashing, reads and a private file copy.
+The pinned Rust revision supplies all required APIs. Dedicated builds reject
+older sources instead of falling back to the previous TreeD/unseal/proving paths.
+
+For ZigZag, the wrapper enables `RUST_LOG=zigzag_precommit=info`. With TreeD reuse,
+`stderr.log` contains `phase=tree_d_build`, or `tree_d_copy` and
+`tree_d_validate` for imported trees, followed by `phase=encode layer=N` and
+`phase=tree_r layer=N`, each with `elapsed_ms`. These are sub-operation wall
+times, not separate memory measurements. The enclosing `pre_commit_phase1`
+also includes validation and replica flush/unmap/sync. Compare preparation,
+PC1 and publication together when evaluating pre-commit cost.
+
+See [TreeD reuse implementation and validation](../review/zigzag-stage2-implementation.md)
+for source provenance, correctness checks and the bounded-memory TreeD import
+contract. Builds, benchmarks and full proof tests for this RAM optimization
+plan run only on the remote machine, from `~/filecoin/porep-market-devnet`.
 
 The report includes wall time, process CPU time, max RSS, proof length,
 registered seal proof, verify result, raw byte recovery, parent-cache directory,

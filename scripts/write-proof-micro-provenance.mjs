@@ -170,7 +170,7 @@ export function buildProvenance({
   const microbenchSourcePath = resolve(
     repositoryRoot,
     "source-overrides",
-    ...(backend === "zigzag" ? ["zigzag-stage3"] : []),
+    ...(backend === "zigzag" ? ["zigzag"] : []),
     "filecoin-ffi",
     "rust",
     "src",
@@ -224,6 +224,12 @@ export function buildProvenance({
         zigzag_source_overrides_sha256: imageManifest.zigzagSourceOverridesSha256,
         zigzag_rust_fil_proofs_api_sha256: imageManifest.zigzagRustFilProofsApiSha256,
         cargo_features: cargoFeatures,
+        zigzag_capabilities: backend === "zigzag" ? {
+          split_proving: imageManifest.zigzagSplitProving,
+          tree_d_reuse: imageManifest.zigzagTreeDReuse,
+          file_backed_unseal: imageManifest.zigzagFileBackedUnseal,
+          c1_validation: imageManifest.zigzagC1Validation,
+        } : null,
       },
       image: filteredImageInspect(repositoryRoot, imageReference),
       benchmark_binary: {

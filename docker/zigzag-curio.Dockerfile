@@ -33,9 +33,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN cargo fetch --manifest-path extern/filecoin-ffi/rust/Cargo.toml
 COPY --from=rust-fil-proofs / /opt/curio/extern/rust-fil-proofs/
 COPY --from=harness-overlay source-overrides/curio/ /opt/curio/
-COPY --from=harness-overlay source-overrides/zigzag-stage3/curio/ /opt/curio/
+COPY --from=harness-overlay source-overrides/zigzag/curio/ /opt/curio/
 COPY --from=harness-overlay source-overrides/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
-COPY --from=harness-overlay source-overrides/zigzag-stage3/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
+COPY --from=harness-overlay source-overrides/zigzag/filecoin-ffi/ /opt/curio/extern/filecoin-ffi/
 COPY --from=harness-overlay source-overrides/zigzag-bench/Cargo.lock /opt/curio/extern/filecoin-ffi/rust/Cargo.lock
 RUN set -eu; \
     fvm_source="$(find "${CARGO_HOME}/registry/src" -path '*/fvm-4.8.2' -type d -print -quit)"; \
@@ -56,7 +56,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     touch build/.update-modules build/.blst-install; \
     RUSTUP_TOOLCHAIN="${toolchain}" \
     FFI_BUILD_FROM_SOURCE=1 FFI_GIT_COMMIT="${CURIO_FFI_COMMIT}" \
-    FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 FFI_USE_ZIGZAG_STAGE3=1 \
+    FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 \
     CARGO_BUILD_JOBS=2 GOMAXPROCS=2 \
     make build CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
       CURIO_TAGS="cunative debug nosupraseal"
@@ -71,7 +71,7 @@ ARG ZIGZAG_SOURCE_OVERRIDES_SHA256
 ARG ZIGZAG_DOCKERFILE_SHA256
 ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE
 LABEL io.porep-market.curio.commit="${CURIO_COMMIT}" \
-      io.porep-market.zigzag.stage3="1" \
+      io.porep-market.zigzag.split-proving="1" \
       io.porep-market.zigzag.rust-fil-proofs.commit="${RUST_FIL_PROOFS_COMMIT}" \
       io.porep-market.zigzag.rust-fil-proofs.source-sha256="${RUST_FIL_PROOFS_SOURCE_SHA256}" \
       io.porep-market.zigzag.source-overrides.sha256="${ZIGZAG_SOURCE_OVERRIDES_SHA256}" \
