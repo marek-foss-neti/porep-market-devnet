@@ -5,7 +5,12 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`ec49d9188fa893fd9401a0cc9bfe8c0251907547`. This revision also removes newly
+`32606c15e6b39573639dc3c5217f1748255af6d4`. This revision adds shared-L3 CPU
+affinity for the ZigZag encoder and feeders on Linux with `hwloc` (enabled by
+the existing `multicore-sdr` Cargo feature). Affinity defaults to enabled and
+can be disabled with `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY=false` in the
+encoder process environment. If no suitable group of allowed physical cores
+shares L3, encoding continues without pinning. It retains cleanup of newly
 created TreeD stores when pre-encoding validation rejects the input and skips
 decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 

@@ -24,10 +24,12 @@ no changes to SDR, graph parameters, proof format or parameter-cache identity.
 
 ## Dependency rollout
 
-`versions.lock.yaml` references the published Rust revision
+This rollout pinned `versions.lock.yaml` to the published Rust revision
 `ec49d9188fa893fd9401a0cc9bfe8c0251907547`, which contains the library fixes.
-After deploying this lock, fetch the managed sources and rebuild the dedicated
-images so their provenance records the new pin.
+The current pin is recorded in `versions.lock.yaml` and
+[`zigzag-capabilities.md`](../runtime/zigzag-capabilities.md). After updating
+the lock, fetch the managed sources and rebuild the dedicated images so their
+provenance records the selected pin.
 
 The review builds below used a private copy based on
 `56f94dddfbe6146623abd1caf7174ebe707085a6` through
