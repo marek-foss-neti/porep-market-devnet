@@ -26,15 +26,16 @@ just bench-zigzag-512
 
 No sibling `../rust-fil-proofs` checkout is required. The baseline records the
 Rust commit from `.runtime/devnet/build/images.json`, identifying the code in the
-built image, and checks that all three reports use that commit. Detailed
+built image, and checks that the report uses that commit. Detailed
 provenance records the local source state from
 `.cache/sources/rust_fil_proofs/<image-commit>` or `DEVNET_RUST_FIL_PROOFS_SOURCE`
 when explicitly set. If that checkout is absent, its Git state is `null`; the
 image manifest still supplies the built revision.
 
 The command creates a dedicated parameter and parent-cache directory and runs
-three full seal → prove → verify → unseal cycles. The first parameter prewarm
-starts with an empty directory; later prewarms reuse those files. The runner
+one full seal → prove → verify → unseal cycle. Parameter prewarm
+starts with an empty directory unless `BENCH_ZIGZAG_512_PARAMETER_DIR` points to
+a prepared cache. The runner
 does not force the operating system page cache to a cold state, so the labels
 in the reports describe the parameter directory, not a guaranteed cold RAM
 cache. Parameter preparation and loading are recorded separately from the
@@ -47,7 +48,7 @@ byte recovery of the full 532,676,608 unpadded bytes. Data uses the fixed
 `((byte_index * 31) + (byte_index >> 3) + 17) & 0xff` pattern; prover ID,
 ticket, and seed are recorded in `summary.json`.
 
-The aggregate `baseline.json` points to three reports. Each individual report
+The aggregate `baseline.json` points to one report. The individual report
 contains phase times, total container wall time, process and cgroup memory,
 swap, CPU and disk series, parameter-preparation time, cache identifier,
 build provenance, and image metadata. The aggregate directory also captures

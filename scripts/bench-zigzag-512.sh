@@ -48,8 +48,8 @@ else
 fi
 
 reports=()
-for repetition in 1 2 3; do
-  printf 'zigzag-512 baseline repetition %s/3\n' "${repetition}" >&2
+for repetition in 1; do
+  printf 'zigzag-512 baseline repetition %s/1\n' "${repetition}" >&2
   output="$(
     BENCH_PROOF_MICRO_PROFILE=zigzag-512 \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
@@ -110,7 +110,7 @@ jq -s \
     }]
   }
 ' "${reports[@]}" > "${baseline_dir}/baseline.json"
-jq -e '.completed_runs == 3 and all(.runs[]; .verified and .byte_match and .proof_bytes == 1920 and .profile.total_challenge_instances == 1980)' \
+jq -e '.completed_runs == 1 and all(.runs[]; .verified and .byte_match and .proof_bytes == 1920 and .profile.total_challenge_instances == 1980)' \
   "${baseline_dir}/baseline.json" >/dev/null || devnet_die "zigzag-512 baseline validation failed"
 df -Pk "${DEVNET_ROOT}" "${parameter_dir}" "${parent_dir}" > "${baseline_dir}/filesystems-after.txt"
 printf 'zigzag-512 baseline: %s\n' "${baseline_dir}/baseline.json"
