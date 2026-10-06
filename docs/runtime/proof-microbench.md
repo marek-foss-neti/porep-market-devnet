@@ -43,16 +43,18 @@ time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
 Full ZigZag runs for `512mib` and `32gib` limit both their prewarm and measured
-containers to 110,000,000,000 bytes of RAM, with swap disabled. Override this
+containers to 85,899,345,920 bytes (80 GiB) of RAM, with swap disabled. Override this
 with `BENCH_ZIGZAG_FULL_MEMORY_BYTES`. Standalone `prewarm-only` uses
 `BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same default. The remote 32 GiB run
 `2026-09-29T21-03-21-645Z-bench-proof-micro-zigzag-32gib` completed successfully
 with seal verification and raw-unseal byte comparison passing, no OOM events
 or OOM kills, and zero swap usage. Its kernel cgroup memory peak reached the
 effective limit of 109,999,996,928 bytes (approximately 102.45 GiB), corresponding
-to the requested 110 GB limit. This validates that run at the configured limit;
-it does not establish memory headroom or guarantee success with a lower limit
-or concurrent runs.
+to the former 110 GB limit. This validates that historical run at its configured limit;
+it does not establish memory headroom or guarantee success with the current 80 GiB
+default or concurrent runs. The default setup allocation budget is 70 GiB
+(`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=75161927680`); it checks an allocation lower
+bound and is not a runtime memory limit.
 
 The full runner generates the deterministic input on demand and checks unsealed
 bytes as they are written, without retaining full input/output copies. The check

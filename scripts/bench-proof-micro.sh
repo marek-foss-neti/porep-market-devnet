@@ -170,7 +170,7 @@ if [[ "${backend}" == "zigzag" ]]; then
   docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info,zigzag_unseal=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
-  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-110000000000}"
+  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}"
   [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0)) ||
     devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be a positive integer"
   docker_common_args+=(--memory "${full_memory_bytes}" --memory-swap "${full_memory_bytes}")
@@ -191,7 +191,7 @@ if [[ "${backend}" == "zigzag" ]]; then
   )
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
   setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
-  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-100000000000}"
+  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-75161927680}"
   for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
     [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
       devnet_die "ZigZag setup batch, workers, and budget must be positive integers"
@@ -205,7 +205,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     -e "FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE=/bench-run/zigzag-setup-phase.txt"
   )
   if [[ "${mode}" == "prewarm-only" ]]; then
-    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-110000000000}"
+    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-85899345920}"
     [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 )) ||
       devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be a positive integer"
     prewarm_limit_args=(--memory "${setup_memory_bytes}" --memory-swap "${setup_memory_bytes}")

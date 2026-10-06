@@ -220,13 +220,14 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
 bash scripts/bench-proof-micro.sh zigzag 512mib prewarm-only
 ```
 
-The setup container uses `--memory=110000000000` and
-`--memory-swap=110000000000`. Its report records the kernel `memory.peak`,
-actual cgroup limits, swap, setup phases, disk use, image provenance, and
+The setup container uses `--memory=85899345920` and
+`--memory-swap=85899345920` (80 GiB RAM, with swap disabled). Its report records
+the kernel `memory.peak`, actual cgroup limits, swap, setup phases, disk use, image provenance, and
 SHA-256 digests of `.params/.vk/.meta`. The default generator limits are
 `BENCH_ZIGZAG_SETUP_BATCH_POINTS=65536`, `BENCH_ZIGZAG_SETUP_WORKERS=16`, and
-`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=100000000000`. The parameter directory is
-persistent and may be used for a second `prewarm-only` call with
+`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=75161927680` (70 GiB), leaving 10 GiB between
+the setup allocation estimate and the container limit for overhead and file cache.
+The parameter directory is persistent and may be used for a second `prewarm-only` call with
 `BENCH_ZIGZAG_SETUP_REQUIRE_MISS` unset; its summary must report a cache hit.
 Scratch is reused under that parameter directory's `zigzag-setup-scratch`.
 New scratch and publication workspaces hold an OS file lock. The next writable
