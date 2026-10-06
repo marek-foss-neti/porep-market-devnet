@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "tsx --test test/*.test.ts",
+    "test:measurements": "node --test ../scripts/test/proof-micro-measurements.test.mjs",
     "typecheck": "tsc --noEmit",
     "cli": "tsx src/cli.ts"
   },

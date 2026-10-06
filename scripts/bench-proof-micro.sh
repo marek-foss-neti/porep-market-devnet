@@ -167,7 +167,7 @@ docker_common_args=(
   "${docker_parent_cache_args[@]}"
 )
 if [[ "${backend}" == "zigzag" ]]; then
-  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info,zigzag_unseal=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}"
@@ -308,6 +308,8 @@ bench_compose_report() {
   local telemetry_summary="$3"
   local prewarm_summary="$4"
   local prewarm_telemetry_summary="$5"
+  local measured_log="-"
+  [[ "${measured_mode}" != "full" ]] || measured_log="${stderr_log}"
   node "${DEVNET_ROOT}/scripts/compose-proof-micro-report.mjs" \
     "${report_json}" \
     "${measured_mode}" \
@@ -315,7 +317,8 @@ bench_compose_report() {
     "${telemetry_summary}" \
     "${provenance_json}" \
     "${prewarm_summary}" \
-    "${prewarm_telemetry_summary}"
+    "${prewarm_telemetry_summary}" \
+    "${measured_log}"
   jq -e '
     .schema_version == 1
     and (.telemetry.schema_version == 1)
@@ -382,6 +385,7 @@ bench_cleanup_successful_run() {
 bench_append_telemetry_markdown() {
   local report="$1"
   local markdown="$2"
+  node "${DEVNET_ROOT}/scripts/compose-proof-micro-report.mjs" --phase-markdown "${report}" >> "${markdown}"
   jq -r '
     def bytes($raw):
       ($raw | tonumber? // null) as $bytes
@@ -414,12 +418,12 @@ bench_append_telemetry_markdown() {
         + (if .telemetry.overall.cgroup.cpu_quota_unlimited then "unlimited"
            else ((.telemetry.overall.cgroup.cpu_quota_usec // "unavailable") | tostring) end)
         + " / " + ((.telemetry.overall.cgroup.cpu_period_usec // "unavailable") | tostring) + " us |",
-      "| Cgroup CPU quota cores | " + ((.derived.cpu_quota_cores // "unlimited") | tostring) + " |",
+      "| Cgroup CPU quota cores | " + ((.derived.cpu_quota_cores // (if .telemetry.overall.cgroup.cpu_quota_unlimited then "unlimited" else "unavailable" end)) | tostring) + " |",
       "| Cgroup CPU throttled | " + ((.derived.cpu_throttled_usec // "unavailable") | tostring) + " us |",
-      "| OOM / OOM-kill delta | " + ((.derived.oom_delta // 0) | tostring) + " / " + ((.derived.oom_kill_delta // 0) | tostring) + " |",
+      "| OOM / OOM-kill delta | " + ((.derived.oom_delta // "unavailable") | tostring) + " / " + ((.derived.oom_kill_delta // "unavailable") | tostring) + " |",
       "| Sampling | " + (.telemetry.sample_count | tostring) + " samples at " + (.telemetry.sampling_interval_ms | tostring) + " ms; maximum observed gap " + (.telemetry.maximum_observed_sample_gap_ms | tostring) + " ms |",
       "",
-      "Per-phase cgroup and disk values below are sampled maxima. The cgroup kernel memory peak above is the exact container-wide `memory.peak` value.",
+      "Per-phase cgroup and disk values below are sampled maxima. Kernel `memory.peak` is a cumulative high-water mark since cgroup start.",
       "",
       "| Phase | Samples | Process RSS peak | Cgroup current peak | Allocated disk peak |",
       "| --- | ---: | ---: | ---: | ---: |"
@@ -712,7 +716,7 @@ if [[ "${mode}" == "prepare-fixture" ]]; then
         "| Proof cache artifacts | `" + ((.fixture.proof_cache_artifacts // []) | join(", ")) + "` |",
         "| Unpadded bytes | " + bytes(.fixture.unpadded_bytes) + " |",
         "",
-        "| Phase | Wall | CPU | Max RSS |",
+        "| Phase | Wall | CPU | Cumulative max RSS |",
         "| --- | ---: | ---: | ---: |"
       ][],
       (.phases[] | "| `" + .name + "` | " + ms(.wall_ms) + " | " + ms(.cpu_ms) + " | " + bytes(.max_rss_bytes) + " |"),
@@ -816,7 +820,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
         "| Mismatch at | `" + ((.mismatch_at // "none") | tostring) + "` |",
         "| Throughput | `" + ((.throughput_mib_per_s // 0) | tostring) + " MiB/s` |",
         "",
-        "| Phase | Wall | CPU | Max RSS |",
+        "| Phase | Wall | CPU | Cumulative max RSS |",
         "| --- | ---: | ---: | ---: |"
       ][],
       (.phases[] | "| `" + .name + "` | " + ms(.wall_ms) + " | " + ms(.cpu_ms) + " | " + bytes(.max_rss_bytes) + " |"),
@@ -1039,12 +1043,8 @@ summary_md="${run_dir}/summary.md"
       "| Parameter cache metadata | `" + ($prewarm[0].parameter_cache_metadata_path // "unknown") + "` |",
       "| Verifying key matches params | `" + (($prewarm[0].verifying_key_matches_params // false) | tostring) + "` |",
       "| Verifying key rewritten during prewarm | `" + (($prewarm[0].verifying_key_rewritten // false) | tostring) + "` |",
-      "| Parameter prewarm | wall " + ms($prewarm[0].wall_ms) + ", CPU " + ms($prewarm[0].cpu_ms) + ", max RSS " + bytes($prewarm[0].max_rss_bytes) + " |",
-      "",
-      "| Phase | Wall | CPU | Max RSS |",
-      "| --- | ---: | ---: | ---: |"
+      "| Parameter prewarm (separate process) | wall " + ms($prewarm[0].wall_ms) + ", CPU " + ms($prewarm[0].cpu_ms) + ", cumulative max RSS " + bytes($prewarm[0].max_rss_bytes) + " |"
     ][],
-    (.phases[] | "| `" + .name + "` | " + ms(.wall_ms) + " | " + ms(.cpu_ms) + " | " + bytes(.max_rss_bytes) + " |"),
     "",
     "Full machine-readable summary: [`summary.json`](./summary.json)."
   ' "${summary_json}"

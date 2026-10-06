@@ -43,7 +43,7 @@ mod zigzag_storage;
 
 #[path = "support/porep_microbench_telemetry.rs"]
 mod microbench_telemetry;
-use microbench_telemetry::{PhaseGuard, TelemetrySession};
+use microbench_telemetry::{process_cpu_ms, PhaseGuard, TelemetrySession};
 
 const PROVER_ID: [u8; 32] = [4u8; 32];
 const TICKET: [u8; 32] = [7u8; 32];
@@ -76,9 +76,14 @@ enum Backend {
 #[derive(Debug, Serialize)]
 struct PhaseMetric {
     name: &'static str,
+    phase_id: Option<u64>,
     wall_ms: u128,
-    cpu_ms: u128,
-    max_rss_bytes: u64,
+    cpu_ms: Option<u128>,
+    max_rss_bytes: Option<u64>,
+    average_cpu_cores: Option<f64>,
+    start_elapsed_ms: Option<u128>,
+    end_elapsed_ms: Option<u128>,
+    completed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,8 +195,8 @@ struct ParamPrewarmSummary {
     verifying_key_rewritten: bool,
     parameter_cache_hit: Option<bool>,
     wall_ms: u128,
-    cpu_ms: u128,
-    max_rss_bytes: u64,
+    cpu_ms: Option<u128>,
+    max_rss_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -218,6 +223,23 @@ fn main() -> Result<()> {
         &proof_parameter_cache_dir(),
         &parent_cache_dir(),
     )?;
+    if telemetry.is_some() && matches!(args.backend, Backend::ZigZag) {
+        use storage_proofs_porep_zigzag::zigzag::measurements::{
+            set_operation_observer, OperationBoundary,
+        };
+        set_operation_observer(|event| {
+            microbench_telemetry::record_operation(
+                event.id,
+                event.name,
+                event.layer,
+                match event.boundary {
+                    OperationBoundary::Start => None,
+                    OperationBoundary::End { completed } => Some(completed),
+                },
+            );
+        })
+        .map_err(|_| anyhow::anyhow!("ZigZag operation observer already installed"))?;
+    }
 
     let output = match args.mode {
         Mode::PrewarmOnly => {
@@ -531,7 +553,9 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         verifying_key_rewritten: prewarm.verifying_key_rewritten,
         parameter_cache_hit: prewarm.parameter_cache_hit,
         wall_ms: started.elapsed().as_millis(),
-        cpu_ms: process_cpu_ms().saturating_sub(cpu_before),
+        cpu_ms: process_cpu_ms()
+            .zip(cpu_before)
+            .and_then(|(after, before)| after.checked_sub(before)),
         max_rss_bytes: max_rss_bytes(),
     };
     eprintln!(
@@ -1371,18 +1395,31 @@ fn measure<T>(
     name: &'static str,
     action: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let _phase = PhaseGuard::enter(name);
-    let cpu_before = process_cpu_ms();
+    let phase = PhaseGuard::enter(name);
+    let phase_id = phase.id();
+    let cpu_before = microbench_telemetry::process_cpu_ms();
+    let start_elapsed_ms = microbench_telemetry::elapsed_ms();
     let started = Instant::now();
     let result = action();
     let wall_ms = started.elapsed().as_millis();
-    let cpu_ms = process_cpu_ms().saturating_sub(cpu_before);
+    let cpu_ms = microbench_telemetry::process_cpu_ms()
+        .zip(cpu_before)
+        .and_then(|(after, before)| after.checked_sub(before));
+    let end_elapsed_ms = microbench_telemetry::elapsed_ms();
     phases.push(PhaseMetric {
         name,
+        phase_id,
         wall_ms,
         cpu_ms,
         max_rss_bytes: max_rss_bytes(),
+        average_cpu_cores: cpu_ms
+            .filter(|_| wall_ms > 0)
+            .map(|cpu| cpu as f64 / wall_ms as f64),
+        start_elapsed_ms,
+        end_elapsed_ms,
+        completed: result.is_ok(),
     });
+    phase.finish(result.is_ok());
     result
 }
 
@@ -1531,34 +1568,20 @@ fn parent_cache_window_nodes(backend: Backend) -> u32 {
         .unwrap_or(2_048)
 }
 
-fn process_cpu_ms() -> u128 {
+fn max_rss_bytes() -> Option<u64> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if rc != 0 {
-        return 0;
-    }
-    let usage = unsafe { usage.assume_init() };
-    timeval_ms(usage.ru_utime) + timeval_ms(usage.ru_stime)
-}
-
-fn timeval_ms(value: libc::timeval) -> u128 {
-    (value.tv_sec as u128) * 1000 + (value.tv_usec as u128) / 1000
-}
-
-fn max_rss_bytes() -> u64 {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-    if rc != 0 {
-        return 0;
+        return None;
     }
     let usage = unsafe { usage.assume_init() };
     #[cfg(target_os = "macos")]
     {
-        usage.ru_maxrss as u64
+        Some(usage.ru_maxrss as u64)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        (usage.ru_maxrss as u64) * 1024
+        Some((usage.ru_maxrss as u64) * 1024)
     }
 }
 

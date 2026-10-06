@@ -43,16 +43,18 @@ time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
 Full ZigZag runs for `512mib` and `32gib` limit both their prewarm and measured
-containers to 85,899,345,920 bytes (80 GiB) of RAM, with swap disabled. Override this
-with `BENCH_ZIGZAG_FULL_MEMORY_BYTES`. Standalone `prewarm-only` uses
-`BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same default. The remote 32 GiB run
+containers to 85,899,345,920 bytes (80 GiB) of RAM, with swap disabled. Override
+this with `BENCH_ZIGZAG_FULL_MEMORY_BYTES`. The full-run prewarm inherits the same
+limit as sealing, C2 and unseal. Standalone `prewarm-only` uses
+`BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same 80 GiB default. The remote 32 GiB run
 `2026-09-29T21-03-21-645Z-bench-proof-micro-zigzag-32gib` completed successfully
 with seal verification and raw-unseal byte comparison passing, no OOM events
 or OOM kills, and zero swap usage. Its kernel cgroup memory peak reached the
 effective limit of 109,999,996,928 bytes (approximately 102.45 GiB), corresponding
-to the former 110 GB limit. This validates that historical run at its configured limit;
-it does not establish memory headroom or guarantee success with the current 80 GiB
-default or concurrent runs. The default setup allocation budget is 70 GiB
+to the former 110 GB limit. This validates that historical run at its configured
+limit; it does not establish memory headroom or guarantee success with the
+current 80 GiB default or concurrent runs.
+The default setup allocation budget is 70 GiB
 (`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=75161927680`); it checks an allocation lower
 bound and is not a runtime memory limit.
 
@@ -101,6 +103,64 @@ container to generate or load the exact PoRep Groth parameters and backend
 parent cache for the selected backend and sector size. The prewarm output is
 written to `param-prewarm.json`. This keeps first-run parameter/cache generation
 and its memory peak out of the measured proof phases in `summary.json`.
+
+## Full-run CPU, timing and memory measurements
+
+`report.json` and `summary.md` join the native phase timers with the existing
+telemetry sampler. The report schema remains version 1; fields are additive.
+`benchmark` still contains the original `summary.json`, and raw samples remain
+in `telemetry.ndjson`. The new top-level `phases` contains process CPU deltas,
+`wall_ms`, `average_cpu_cores`, elapsed intervals, sampled cgroup/RSS/anon/file
+peaks and sampling quality for preparation, PC1, publication, PC2, C1,
+serialization/deserialization, full Groth16 C2, verification and raw unseal.
+One average logical core means one fully occupied core. A zero wall time has
+`average_cpu_cores: null`; missing measurements are `null`, not fabricated zeros.
+
+`pc1_suboperations` records TreeD build (or imported TreeD copy/validation),
+encode and TreeR for each zero-based layer. The ZigZag Rust APIs emit optional
+operation boundaries, and the dedicated runner connects them to the same
+sampler. Periodic and synchronous boundary samples contribute to sampled phase
+peaks; their interval, counts and maximum gaps are recorded per window. A short
+spike between samples may still be missed. `ru_maxrss` and kernel `memory.peak`
+are cumulative high-water marks since process/cgroup start, never independent
+phase peaks. The historical sampled `process_peak.cpu_ms` field remains a
+cumulative counter and is explicitly labelled as such; it is not phase CPU use.
+
+Operation IDs, layer numbers, completion status and observed overlaps remain in
+JSON even when boundaries share a millisecond. CPU and RAM in an operation
+window describe the whole process. Do not sum overlapping windows or interpret
+them as exclusive worker usage. `derived.sealing_wall_ms` and
+`derived.sealing_cpu_ms` count main phases once and exclude prewarm, raw unseal,
+suboperations and auxiliary timers. Bellperson synthesis/prover timers from
+the measured `stderr.log` appear in `auxiliary_c2_timings` when available; full
+C2 is always measured independently. I/O, swap, OOM, PSI and provenance remain
+in the existing telemetry and report fields.
+
+`just bench-zigzag-512` still runs one full cycle. It reuses exact-profile
+parameters in `.cache/zigzag-512-parameters`, or the directory selected by
+`BENCH_ZIGZAG_512_PARAMETER_DIR`, with prewarm validation outside measured phases.
+Normal and split Curio precommit use the same instrumented Rust paths through
+the dedicated FFI. The observer is only installed by the benchmark; ordinary
+Curio workers do not start this benchmark sampler. Existing source and overlay
+digests include these changes without a new capability flag.
+
+Lightweight report checks, without proof generation or Git staging, run with:
+
+```bash
+npm --prefix tools run test:measurements
+bash scripts/static-checks.sh
+```
+
+Rust builds, proof tests and full benchmark acceptance run only on the
+authorized remote machine in `~/filecoin/porep-market-devnet`. The lock now pins
+the measurement observer at `b5237df450a6daa17dbfd0f953349dd177923e14`.
+Fetch the managed sources after updating the lock, then rebuild both dedicated
+images. For development, an isolated source copy inside this repository can be
+selected with `DEVNET_RUST_FIL_PROOFS_SOURCE` for the builds and run. Include
+`storage-proofs-porep/src/zigzag/measurements.rs` in that copy. The existing image
+manifest records its content digest. Local report
+checks do not establish proof correctness or telemetry overhead for the new
+build; acceptance still requires the full remote cycle.
 
 Stacked/SDR microbench runs use an isolated parameter cache under the run
 directory, because local Groth parameter generation is not the official

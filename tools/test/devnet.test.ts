@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "7996df427bb3d497677b3b5f8db58c65d6e6ab4b";
+const rustFilProofsSourceCommit = "b5237df450a6daa17dbfd0f953349dd177923e14";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -888,7 +888,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
     assert.equal(baseline.rust_fil_proofs_head, commit);
     assert.equal(baseline.rust_fil_proofs_commit_source, "image manifest");
-    assert.equal(baseline.completed_runs, 3);
+    assert.equal(baseline.completed_runs, 1);
     const mismatch = run("b".repeat(40));
     assert.notEqual(mismatch.status, 0);
     assert.match(mismatch.stderr, /used a different ZigZag image or source/);
@@ -1890,7 +1890,7 @@ elif [[ "$1" == run && "$*" != *'--entrypoint sh'* ]]; then
 elif [[ "$1" == inspect ]]; then
   [[ "$DEVNET_TEST_SCENARIO" != inspect-unavailable ]] || exit 1
   oom=true; [[ "$DEVNET_TEST_SCENARIO" != killed ]] || oom=false
-  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":110000000000,"memory_swap_limit_bytes":110000000000}\\n' "$oom"
+  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":85899345920,"memory_swap_limit_bytes":85899345920}\\n' "$oom"
 elif [[ "$1" == rm ]]; then
   run_dir="$(cat "$DEVNET_TEST_RUN_DIRECTORY_FILE")"
   [[ -s "$run_dir/prewarm-container.json" ]] || exit 97

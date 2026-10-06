@@ -22,8 +22,8 @@ devnet_require_safe_write_path "${baseline_dir}" directory
 mkdir -p "${baseline_dir}"
 
 # A prepared profile cache can be reused after the separate setup acceptance.
-# With no override the original fresh-cache behaviour remains available.
-parameter_dir="${BENCH_ZIGZAG_512_PARAMETER_DIR:-${baseline_dir}/proof-parameters}"
+# Keep exact-profile parameters between full runs; prewarm still validates the cache.
+parameter_dir="${BENCH_ZIGZAG_512_PARAMETER_DIR:-${DEVNET_ROOT}/.cache/zigzag-512-parameters}"
 if [[ "${parameter_dir}" == "${DEVNET_ROOT}/"* ]]; then
   devnet_require_safe_write_path "${parameter_dir}" directory
 fi
@@ -52,6 +52,7 @@ for repetition in 1; do
   printf 'zigzag-512 baseline repetition %s/1\n' "${repetition}" >&2
   output="$(
     BENCH_PROOF_MICRO_PROFILE=zigzag-512 \
+    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}" \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \
     BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1 \

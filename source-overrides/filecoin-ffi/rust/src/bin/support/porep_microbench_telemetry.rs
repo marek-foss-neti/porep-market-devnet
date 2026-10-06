@@ -29,10 +29,29 @@ struct TelemetrySample {
     elapsed_ms: u128,
     trigger: &'static str,
     phase: &'static str,
+    phase_id: Option<u64>,
+    phase_completed: Option<bool>,
+    operation: Option<OperationSample>,
+    active_operation_ids: Vec<u64>,
     process: ProcessSample,
     cgroup: CgroupSample,
     disk: DiskSample,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OperationSample {
+    id: u64,
+    name: &'static str,
+    layer: Option<usize>,
+    boundary: &'static str,
+    completed: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct PhaseState {
+    name: &'static str,
+    id: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -44,7 +63,7 @@ struct ProcessSample {
     rss_shmem_bytes: Option<u64>,
     vm_swap_bytes: Option<u64>,
     threads: Option<u64>,
-    cpu_ms: u128,
+    cpu_ms: Option<u128>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -113,7 +132,10 @@ struct TelemetryRecorder {
     cgroup_root: PathBuf,
     disk_paths: Vec<DiskPath>,
     writer: Mutex<BufWriter<File>>,
-    phase: Mutex<&'static str>,
+    phase: Mutex<PhaseState>,
+    sampling: Mutex<()>,
+    active_operations: Mutex<HashSet<u64>>,
+    next_phase_id: AtomicU64,
     zigzag_setup_phase_file: Option<PathBuf>,
     sequence: AtomicU64,
     stopping: AtomicBool,
@@ -128,7 +150,8 @@ pub struct TelemetrySession {
 
 pub struct PhaseGuard {
     recorder: Option<Arc<TelemetryRecorder>>,
-    previous: &'static str,
+    previous: PhaseState,
+    completed: Option<bool>,
 }
 
 impl TelemetrySession {
@@ -165,7 +188,13 @@ impl TelemetrySession {
                 .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup")),
             disk_paths: telemetry_disk_paths(work_dir, proof_parameter_cache, parent_cache),
             writer: Mutex::new(BufWriter::new(output)),
-            phase: Mutex::new("unattributed"),
+            phase: Mutex::new(PhaseState {
+                name: "unattributed",
+                id: None,
+            }),
+            sampling: Mutex::new(()),
+            active_operations: Mutex::new(HashSet::new()),
+            next_phase_id: AtomicU64::new(1),
             zigzag_setup_phase_file: std::env::var_os("FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE")
                 .map(PathBuf::from),
             sequence: AtomicU64::new(0),
@@ -237,7 +266,10 @@ impl TelemetrySession {
             .recorder
             .phase
             .lock()
-            .unwrap_or_else(|lock| lock.into_inner()) = "finalize";
+            .unwrap_or_else(|lock| lock.into_inner()) = PhaseState {
+            name: "finalize",
+            id: None,
+        };
         self.recorder.record_sample("session_end");
         if let Err(error) = self
             .recorder
@@ -259,34 +291,65 @@ impl Drop for TelemetrySession {
 }
 
 impl PhaseGuard {
+    pub fn id(&self) -> Option<u64> {
+        self.recorder.as_ref().and_then(|recorder| {
+            recorder
+                .phase
+                .lock()
+                .unwrap_or_else(|lock| lock.into_inner())
+                .id
+        })
+    }
+
     pub fn enter(name: &'static str) -> Self {
         let Some(recorder) = ACTIVE_RECORDER.get().cloned() else {
             return Self {
                 recorder: None,
-                previous: "unattributed",
+                previous: PhaseState {
+                    name: "unattributed",
+                    id: None,
+                },
+                completed: None,
             };
         };
+        let sampling = recorder
+            .sampling
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
         let previous = {
             let mut phase = recorder
                 .phase
                 .lock()
                 .unwrap_or_else(|lock| lock.into_inner());
             let previous = *phase;
-            *phase = name;
+            *phase = PhaseState {
+                name,
+                id: Some(recorder.next_phase_id.fetch_add(1, Ordering::Relaxed)),
+            };
             previous
         };
-        recorder.record_sample("phase_start");
+        recorder.record_sample_unlocked("phase_start", None, None);
+        drop(sampling);
         Self {
             recorder: Some(recorder),
             previous,
+            completed: None,
         }
+    }
+
+    pub fn finish(mut self, completed: bool) {
+        self.completed = Some(completed);
     }
 }
 
 impl Drop for PhaseGuard {
     fn drop(&mut self) {
         if let Some(recorder) = &self.recorder {
-            recorder.record_sample("phase_end");
+            let _sampling = recorder
+                .sampling
+                .lock()
+                .unwrap_or_else(|lock| lock.into_inner());
+            recorder.record_sample_unlocked("phase_end", None, self.completed);
             *recorder
                 .phase
                 .lock()
@@ -297,8 +360,22 @@ impl Drop for PhaseGuard {
 
 impl TelemetryRecorder {
     fn record_sample(&self, trigger: &'static str) {
+        let _sampling = self
+            .sampling
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
+        self.record_sample_unlocked(trigger, None, None);
+    }
+
+    fn record_sample_unlocked(
+        &self,
+        trigger: &'static str,
+        operation: Option<OperationSample>,
+        phase_completed: Option<bool>,
+    ) {
         let mut warnings = Vec::new();
-        let mut phase = *self.phase.lock().unwrap_or_else(|lock| lock.into_inner());
+        let state = *self.phase.lock().unwrap_or_else(|lock| lock.into_inner());
+        let mut phase = state.name;
         if phase == "parameter_prewarm" {
             if let Some(path) = &self.zigzag_setup_phase_file {
                 phase = match fs::read_to_string(path).ok().as_deref().map(str::trim) {
@@ -326,6 +403,20 @@ impl TelemetryRecorder {
             elapsed_ms: self.started.elapsed().as_millis(),
             trigger,
             phase,
+            phase_id: state.id,
+            phase_completed,
+            operation,
+            active_operation_ids: {
+                let mut ids: Vec<_> = self
+                    .active_operations
+                    .lock()
+                    .unwrap_or_else(|lock| lock.into_inner())
+                    .iter()
+                    .copied()
+                    .collect();
+                ids.sort_unstable();
+                ids
+            },
             process: process_sample(&mut warnings),
             cgroup: cgroup_sample(&self.cgroup_root, &mut warnings),
             disk: disk_sample(&self.disk_paths),
@@ -353,6 +444,58 @@ impl TelemetryRecorder {
             *stored = Some(error);
         }
     }
+}
+
+/// Called only by the dedicated ZigZag runner's observer. End samples still include the
+/// operation in the active set, so even operations shorter than one interval have coverage.
+pub fn record_operation(
+    id: u64,
+    name: &'static str,
+    layer: Option<usize>,
+    completed: Option<bool>,
+) {
+    let Some(recorder) = ACTIVE_RECORDER.get() else {
+        return;
+    };
+    let _sampling = recorder
+        .sampling
+        .lock()
+        .unwrap_or_else(|lock| lock.into_inner());
+    if completed.is_none() {
+        recorder
+            .active_operations
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner())
+            .insert(id);
+    }
+    recorder.record_sample_unlocked(
+        if completed.is_none() {
+            "operation_start"
+        } else {
+            "operation_end"
+        },
+        Some(OperationSample {
+            id,
+            name,
+            layer,
+            boundary: if completed.is_none() { "start" } else { "end" },
+            completed,
+        }),
+        None,
+    );
+    if completed.is_some() {
+        recorder
+            .active_operations
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner())
+            .remove(&id);
+    }
+}
+
+pub fn elapsed_ms() -> Option<u128> {
+    ACTIVE_RECORDER
+        .get()
+        .map(|recorder| recorder.started.elapsed().as_millis())
 }
 
 fn telemetry_interval_ms() -> Result<u64> {
@@ -694,14 +837,14 @@ fn disk_usage(root: &Path) -> Result<Option<(u64, u64)>> {
     Ok(Some((apparent, allocated)))
 }
 
-fn process_cpu_ms() -> u128 {
+pub fn process_cpu_ms() -> Option<u128> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
     if rc != 0 {
-        return 0;
+        return None;
     }
     let usage = unsafe { usage.assume_init() };
-    timeval_ms(usage.ru_utime) + timeval_ms(usage.ru_stime)
+    Some(timeval_ms(usage.ru_utime) + timeval_ms(usage.ru_stime))
 }
 
 fn timeval_ms(value: libc::timeval) -> u128 {

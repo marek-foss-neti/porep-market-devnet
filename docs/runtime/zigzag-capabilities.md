@@ -5,7 +5,10 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`32606c15e6b39573639dc3c5217f1748255af6d4`. This revision adds shared-L3 CPU
+`b5237df450a6daa17dbfd0f953349dd177923e14`. This revision adds optional
+TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
+report per-phase CPU, sampled memory and timing in the full cycle. Ordinary
+Curio workers leave the measurement observer unset. It retains shared-L3 CPU
 affinity for the ZigZag encoder and feeders on Linux with `hwloc` (enabled by
 the existing `multicore-sdr` Cargo feature). Affinity defaults to enabled and
 can be disabled with `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY=false` in the

@@ -7,12 +7,101 @@ function fail(message) {
 }
 
 function numeric(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function maximum(samples, select) {
-  const values = samples.map(select).map(numeric).filter((value) => value !== null);
-  return values.length === 0 ? null : Math.max(...values);
+  return samples.reduce((peak, sample) => {
+    const value = numeric(select(sample));
+    return value === null ? peak : peak === null ? value : Math.max(peak, value);
+  }, null);
+}
+
+function samplingQuality(samples, start = null, end = null) {
+  const interval = samples[0]?.sampling_interval_ms ?? null;
+  const times = samples.map((sample) => sample.elapsed_ms);
+  if (start !== null) times.push(start);
+  if (end !== null) times.push(end);
+  times.sort((a, b) => a - b);
+  const gaps = times.slice(1).map((time, index) => time - times[index]);
+  return {
+    sampling_interval_ms: interval,
+    sample_count: samples.length,
+    interval_sample_count: samples.filter((sample) => sample.trigger === "interval").length,
+    boundary_sample_count: samples.filter((sample) => /^(phase|operation)_(start|end)$/.test(sample.trigger)).length,
+    maximum_observed_sample_gap_ms: gaps.reduce((peak, gap) => Math.max(peak, gap), 0),
+    gaps_exceeding_interval_count: interval === null ? null : gaps.filter((gap) => gap > interval).length,
+    sampled_peak_may_miss_short_spikes: true,
+  };
+}
+
+function windowMetrics(samples, start, end) {
+  const before = numeric(start?.process?.cpu_ms);
+  const after = numeric(end?.process?.cpu_ms);
+  const wall = start && end ? end.elapsed_ms - start.elapsed_ms : null;
+  const cpu = before === null || after === null || after < before ? null : after - before;
+  return {
+    start_elapsed_ms: start?.elapsed_ms ?? null,
+    end_elapsed_ms: end?.elapsed_ms ?? null,
+    wall_ms: wall,
+    cpu_ms: cpu,
+    average_cpu_cores: wall > 0 && cpu !== null ? cpu / wall : null,
+    measurement_scope: "whole_process_during_interval",
+    sampling: samplingQuality(samples),
+  };
+}
+
+function operationSummaries(samples) {
+  const operations = new Map();
+  const active = new Set();
+  for (const sample of samples) {
+    const event = sample.operation;
+    if (event) {
+      if (!Number.isSafeInteger(event.id) || event.id < 1 || typeof event.name !== "string" ||
+          !["start", "end"].includes(event.boundary) ||
+          (event.layer !== null && (!Number.isSafeInteger(event.layer) || event.layer < 0))) {
+        fail(`invalid operation boundary on sample ${sample.sequence}`);
+      }
+      if (event.boundary === "start") {
+        if (operations.has(event.id)) fail(`duplicate operation start: ${event.id}`);
+        operations.set(event.id, { event, start: sample, end: null, samples: [], overlaps: new Set() });
+        active.add(event.id);
+      } else {
+        const operation = operations.get(event.id);
+        if (!operation || operation.end) fail(`unmatched operation end: ${event.id}`);
+        if (operation.event.name !== event.name || operation.event.layer !== event.layer ||
+            typeof event.completed !== "boolean") fail(`operation metadata changed: ${event.id}`);
+        operation.end = sample;
+      }
+    }
+    if (sample.active_operation_ids !== undefined) {
+      if (!Array.isArray(sample.active_operation_ids) ||
+          sample.active_operation_ids.length !== active.size ||
+          new Set(sample.active_operation_ids).size !== active.size ||
+          sample.active_operation_ids.some((id) => !active.has(id))) {
+        fail(`invalid active operations on sample ${sample.sequence}`);
+      }
+    }
+    for (const id of active) {
+      const operation = operations.get(id);
+      operation.samples.push(sample);
+      for (const other of active) if (other !== id) operation.overlaps.add(other);
+    }
+    if (event?.boundary === "end") active.delete(event.id);
+  }
+  return [...operations.values()].map(({ event, start, end, samples: window, overlaps }) => ({
+    id: event.id,
+    name: event.name,
+    layer: event.layer,
+    parent_phase: start.phase,
+    parent_phase_id: start.phase_id ?? null,
+    completed: end?.operation.completed ?? null,
+    boundary_coverage: end ? "complete" : "missing_end",
+    overlap_status: end ? "checked" : "unknown",
+    overlapping_operation_ids: [...overlaps].sort((a, b) => a - b),
+    ...windowMetrics(window, start, end),
+    ...aggregateSamples(window),
+  }));
 }
 
 function firstPresent(samples, select) {
@@ -111,6 +200,7 @@ function aggregateSamples(samples) {
       vm_swap_bytes: maximum(samples, (sample) => sample.process?.vm_swap_bytes),
       threads: maximum(samples, (sample) => sample.process?.threads),
       cpu_ms: maximum(samples, (sample) => sample.process?.cpu_ms),
+      cpu_ms_scope: "cumulative_counter_since_process_start",
     },
     cgroup: {
       sampled_memory_current_peak_bytes: maximum(
@@ -118,6 +208,7 @@ function aggregateSamples(samples) {
         (sample) => sample.cgroup?.memory_current_bytes,
       ),
       kernel_memory_peak_bytes: maximum(samples, (sample) => sample.cgroup?.memory_peak_bytes),
+      kernel_memory_peak_scope: "high_water_mark_since_cgroup_start",
       memory_max_bytes: firstPresent(samples, (sample) => sample.cgroup?.memory_max_bytes),
       memory_max_unlimited: samples.some((sample) => sample.cgroup?.memory_max_unlimited === true),
       sampled_swap_current_peak_bytes: maximum(
@@ -178,19 +269,22 @@ export function summarizeTelemetry(raw) {
   if (samples.length === 0) fail("no samples were recorded");
   const interval = samples[0].sampling_interval_ms;
   const pid = samples[0].pid;
+  if (!Number.isFinite(interval) || interval <= 0) fail("invalid sampling interval");
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
     if (sample.schema_version !== 1) fail(`unsupported sample schema on line ${index + 1}`);
     if (sample.sequence !== index) fail(`non-contiguous sequence on line ${index + 1}`);
     if (sample.pid !== pid) fail(`PID changed on line ${index + 1}`);
     if (sample.sampling_interval_ms !== interval) fail(`sampling interval changed on line ${index + 1}`);
+    if (numeric(sample.elapsed_ms) === null || sample.elapsed_ms < 0) fail(`invalid elapsed time on line ${index + 1}`);
+    if (typeof sample.phase !== "string" || sample.phase.length === 0) fail(`invalid phase on line ${index + 1}`);
+    if (sample.phase_id != null && (!Number.isSafeInteger(sample.phase_id) || sample.phase_id < 1)) fail(`invalid phase ID on line ${index + 1}`);
     if (index > 0 && sample.elapsed_ms < samples[index - 1].elapsed_ms) {
       fail(`elapsed time moved backwards on line ${index + 1}`);
     }
   }
 
   const phaseOrder = [...new Set(samples.map((sample) => sample.phase))];
-  const gaps = samples.slice(1).map((sample, index) => sample.elapsed_ms - samples[index].elapsed_ms);
   const warnings = [...new Set(samples.flatMap((sample) => sample.warnings ?? []))].sort();
   const diskErrors = [
     ...new Set(
@@ -212,11 +306,33 @@ export function summarizeTelemetry(raw) {
     elapsed_ms: samples.at(-1).elapsed_ms,
     sample_count: samples.length,
     interval_sample_count: samples.filter((sample) => sample.trigger === "interval").length,
-    maximum_observed_sample_gap_ms: gaps.length === 0 ? 0 : Math.max(...gaps),
-    phases: phaseOrder.map((phase) => ({
-      phase,
-      ...aggregateSamples(samples.filter((sample) => sample.phase === phase)),
-    })),
+    maximum_observed_sample_gap_ms: samplingQuality(samples).maximum_observed_sample_gap_ms,
+    phases: phaseOrder.map((phase) => {
+      const window = samples.filter((sample) => sample.phase === phase);
+      const starts = window.filter((sample) => sample.trigger === "phase_start");
+      const ends = window.filter((sample) => sample.trigger === "phase_end");
+      const singleInterval = starts.length === 1 && ends.length === 1;
+      return {
+        phase,
+        ...windowMetrics(window, singleInterval ? starts[0] : null, singleInterval ? ends[0] : null),
+        ...aggregateSamples(window),
+      };
+    }),
+    phase_intervals: [...new Set(samples.filter((sample) => sample.phase_id != null).map((sample) => sample.phase_id))]
+      .map((id) => {
+        const window = samples.filter((sample) => sample.phase_id === id);
+        const start = window.find((sample) => sample.trigger === "phase_start");
+        const end = window.find((sample) => sample.trigger === "phase_end");
+        return {
+          phase: window[0].phase, phase_id: id,
+          completed: end?.phase_completed ?? null,
+          boundary_coverage: start && end ? "complete" : "incomplete",
+          ...windowMetrics(window, start, end),
+          ...aggregateSamples(window),
+        };
+      }),
+    operations: operationSummaries(samples),
+    sampling: samplingQuality(samples),
     overall: aggregateSamples(samples),
     warnings,
     disk_errors: diskErrors,

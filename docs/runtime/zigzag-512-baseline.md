@@ -32,14 +32,20 @@ provenance records the local source state from
 when explicitly set. If that checkout is absent, its Git state is `null`; the
 image manifest still supplies the built revision.
 
-The command creates a dedicated parameter and parent-cache directory and runs
-one full seal → prove → verify → unseal cycle. Parameter prewarm
-starts with an empty directory unless `BENCH_ZIGZAG_512_PARAMETER_DIR` points to
-a prepared cache. The runner
+The command uses the persistent `.cache/zigzag-512-parameters` cache and a
+run-local parent-cache directory, then runs one full seal → prove → verify →
+unseal cycle. Set `BENCH_ZIGZAG_512_PARAMETER_DIR` to reuse another prepared
+cache. Prewarm validates existing parameters and generates them only on a miss. The runner
 does not force the operating system page cache to a cold state, so the labels
 in the reports describe the parameter directory, not a guaranteed cold RAM
 cache. Parameter preparation and loading are recorded separately from the
 measured cycle and remain visible in each report.
+
+The full-run prewarm and measured cycle, including sealing, C2 and unseal,
+default to 80 GiB (85,899,345,920 bytes) with no additional swap. The wrapper
+passes `BENCH_ZIGZAG_FULL_MEMORY_BYTES` to the full runner; an explicit override
+changes the limit for both containers. The separate setup command also defaults
+to 80 GiB. Its 70 GiB setup allocation budget remains below the container limit.
 
 Each run checks the effective setup before parameter generation, then verifies
 that the full run used the same cache identifier and profile. It requires a
@@ -51,7 +57,10 @@ ticket, and seed are recorded in `summary.json`.
 The aggregate `baseline.json` points to one report. The individual report
 contains phase times, total container wall time, process and cgroup memory,
 swap, CPU and disk series, parameter-preparation time, cache identifier,
-build provenance, and image metadata. The aggregate directory also captures
+build provenance, and image metadata. `report.json` and `summary.md` also include
+process CPU deltas, average logical cores, sampled RSS/anon/file/cgroup peaks,
+sampling coverage and TreeD/encode/TreeR suboperations for every PC1 layer.
+Suboperations are diagnostic windows, not extra sealing time. The aggregate directory also captures
 `lscpu`, memory, disks, filesystem free space, and `nvidia-smi`. Keep all raw
 reports and telemetry for comparison with later stages.
 
