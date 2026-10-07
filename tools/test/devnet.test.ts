@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "b5237df450a6daa17dbfd0f953349dd177923e14";
+const rustFilProofsSourceCommit = "9c954a9cae2ddc61110848fc348b92d04dddba36";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -194,6 +194,7 @@ const sourceOverrideInputs = [
 ] as const;
 const zigzagOverrideInputs = [
   "source-overrides/zigzag/curio/tasks/seal/task_porep.go",
+  "source-overrides/zigzag/curio/curio-cpu-launcher.sh",
   "source-overrides/zigzag/filecoin-ffi/install-filcrypto",
   "source-overrides/zigzag/filecoin-ffi/rust/Cargo.toml",
   "source-overrides/zigzag/filecoin-ffi/rust/src/zigzag_replica.rs",
@@ -1741,6 +1742,8 @@ async function createLifecycleFixture(): Promise<{
   );
   for (const name of [
     "devnet-common.sh",
+    "zigzag-cpu-settings.sh",
+    "zigzag-build-settings.sh",
     "devnet-up.sh",
     "devnet-down.sh",
     "devnet-reset.sh",
@@ -1749,6 +1752,7 @@ async function createLifecycleFixture(): Promise<{
     await cp(join(repositoryRoot, "scripts", name), join(root, "scripts", name));
   }
   await writeFile(join(root, "docker", "compose.curio-devnet.yaml"), "services: {}\n", "utf8");
+  await cp(join(repositoryRoot, "docker", "compose.zigzag-cpu.yaml"), join(root, "docker", "compose.zigzag-cpu.yaml"));
   const dockerStub = join(stubBin, "docker");
   const nodeStub = join(stubBin, "node");
   await writeFile(

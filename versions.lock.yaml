@@ -30,8 +30,8 @@ sources:
     repository: https://github.com/marek-foss-neti/rust-fil-proofs.git
     upstream_repository: https://github.com/filecoin-project/rust-fil-proofs.git
     branch: restore-zigzag
-    commit: b5237df450a6daa17dbfd0f953349dd177923e14
-    compatibility: restore-zigzag ZigZag API plus benchmark-only zigzag-512 profile, memory-bounded ZigZag Groth16 setup, split C1/C2 proving with bounded batches, validated TreeD reuse, file-backed unseal, semantic C1 validation, cleanup of rejected TreeD stores, empty-range unseal without decode, shared-L3 CPU affinity for the ZigZag encoder and feeders, and optional TreeD/encode/TreeR operation boundaries for per-phase CPU memory and timing in full benchmarks; baseline reference a169e1a00075287e3fd5645a565ea14c19b5dced
+    commit: 9c954a9cae2ddc61110848fc348b92d04dddba36
+    compatibility: restore-zigzag ZigZag API plus benchmark-only zigzag-512 profile, memory-bounded ZigZag Groth16 setup, split C1/C2 proving with bounded batches, validated TreeD reuse, file-backed unseal, semantic C1 validation, cleanup of rejected TreeD stores, empty-range unseal without decode, shared-L3 CPU affinity for the ZigZag encoder and feeders, optional TreeD/encode/TreeR operation boundaries for per-phase CPU memory and timing in full benchmarks, bounded encode parent-record buffers, opt-in synchronized TreeR and post-reader parent-cache residency advice, detailed affinity diagnostics, and optional ZigZag SHA assembly; baseline reference a169e1a00075287e3fd5645a565ea14c19b5dced
     submodules: {}
   curio:
     repository: https://github.com/CodeWarriorr/curio.git

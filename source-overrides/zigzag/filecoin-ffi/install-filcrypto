@@ -240,6 +240,9 @@ build_from_source() {
 
     # Collect features into an array, stripping leading commas as we go
     features=()
+    if [ "${FFI_ZIGZAG_SHA_ASM:-0}" == "1" ]; then
+        features+=("zigzag-sha-asm")
+    fi
     [ -n "${use_multicore_sdr}" ] && features+=("${use_multicore_sdr}")
 
     [ -n "${gpu_flags}" ] && features+=("${gpu_flags#,}")
@@ -259,8 +262,12 @@ build_from_source() {
     fi
 
     echo "Using additional build flags: ${additional_flags}"
+    if [ -n "${FFI_ZIGZAG_CARGO_FEATURES_FILE:-}" ]; then
+        # Use the same selected FFI feature flags as the immediately following build.
+        cargo tree --locked -e features ${additional_flags} > "${FFI_ZIGZAG_CARGO_FEATURES_FILE}"
+    fi
     if [ -n "${__release_flags}" ]; then
-        RUSTFLAGS="-C target-feature=${__release_flags}" ./scripts/build-release.sh ${build} "${additional_flags}"
+        RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=${__release_flags}" ./scripts/build-release.sh ${build} "${additional_flags}"
     else
         ./scripts/build-release.sh ${build} "${additional_flags}"
     fi

@@ -31,6 +31,10 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/summarize-proof-micro-telemetry.mjs
     scripts/write-proof-micro-provenance.mjs
     docker/compose.curio-devnet.yaml
+    docker/compose.zigzag-cpu.yaml
+    scripts/zigzag-build-settings.sh
+    scripts/zigzag-cpu-settings.sh
+    source-overrides/zigzag/curio/curio-cpu-launcher.sh
     source-overrides/curio/scripts/makefiles/10-deps.mk
     source-overrides/curio/cmd/sptool/toolbox_deal_client.go
     source-overrides/curio/lib/ffi/unseal_funcs.go
@@ -69,6 +73,8 @@ if [[ -f versions.lock.yaml ]]; then
 
   bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-build-zigzag-microbench.sh scripts/devnet-build-zigzag-curio.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
   node --check scripts/cleanup-proof-micro-artifacts.mjs
+  bash -n scripts/zigzag-build-settings.sh scripts/zigzag-cpu-settings.sh source-overrides/zigzag/curio/curio-cpu-launcher.sh
+  node --check scripts/write-proof-micro-provenance.mjs
   node --check scripts/compose-proof-micro-report.mjs
   node --check scripts/summarize-proof-micro-telemetry.mjs
   rg -q '^build:' justfile

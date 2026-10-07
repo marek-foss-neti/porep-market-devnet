@@ -1,5 +1,9 @@
 # ZigZag `zigzag-512` baseline
 
+Each invocation remains one full run. [CPU tuning](zigzag-cpu-tuning.md) describes
+explicit pool, feeder, cache and build options for conscious A/B comparisons;
+reports record the selected and effective settings without adding phase-only modes.
+
 This is one additional baseline benchmark profile. It runs ZigZag only,
 using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag configuration: 11 layers, 10 partitions, minimum 176 challenges, and 18
 challenges per layer in each partition (1,980 instances). The graph has
@@ -14,9 +18,11 @@ graph and 11-by-18 circuit. The 32 GiB SRS must not be substituted.
 The reference commits before the adapter are `a169e1a00075287e3fd5645a565ea14c19b5dced`
 for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
-`44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs` and
-pinned in `versions.lock.yaml`. Make that commit available to the remote
-machine's source checkout before bootstrapping. Then run:
+`44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
+`versions.lock.yaml` pins its successor
+`9c954a9cae2ddc61110848fc348b92d04dddba36`, including CPU/cache tuning controls.
+Fetch that revision into the remote machine's managed sources before building.
+Then run:
 
 ```bash
 just bootstrap

@@ -102,6 +102,10 @@ fixture_telemetry_ndjson="${run_dir}/fixture-telemetry.ndjson"
 fixture_telemetry_summary_json="${run_dir}/fixture-telemetry-summary.json"
 provenance_json="${run_dir}/provenance.json"
 report_json="${run_dir}/report.json"
+if [[ "${backend}" == zigzag && "$(jq -r '.cpuBuild.feature_graph_container_path // empty' "${image_manifest}")" == /usr/local/share/zigzag/cargo-features.txt ]]; then
+  docker run --rm --user "$(id -u):$(id -g)" --entrypoint cat "${image}" \
+    /usr/local/share/zigzag/cargo-features.txt > "${run_dir}/cargo-features.txt"
+fi
 fixture_stderr_log="${run_dir}/fixture.stderr.log"
 prewarm_stderr_log="${run_dir}/param-prewarm.stderr.log"
 stderr_log="${run_dir}/stderr.log"
@@ -144,11 +148,13 @@ fi
 mkdir -p "${parent_cache_host}"
 docker_parent_cache_args=(
   -e "FIL_PROOFS_PARENT_CACHE=/var/tmp/filecoin-parents"
-  -e "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=$(devnet_fil_proofs_use_zigzag "${backend}")"
   -e "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE=${parent_cache_window_nodes}"
   -e "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE=${parent_cache_window_nodes}"
   -v "${parent_cache_host}:/var/tmp/filecoin-parents:rw"
 )
+if [[ "${backend}" != zigzag ]]; then
+  docker_parent_cache_args+=(-e "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0")
+fi
 mkdir -p "${work_dir}"
 mkdir -p "${parameter_cache_host}"
 mkdir -p "${fixture_host}"
@@ -167,12 +173,19 @@ docker_common_args=(
   "${docker_parent_cache_args[@]}"
 )
 if [[ "${backend}" == "zigzag" ]]; then
-  docker_common_args+=(-e "RUST_LOG=zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  source "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh"
+  # Capture validation failures before constructing docker argv. A host export alone
+  # does not reach either the prewarm or measured container.
+  zigzag_cpu_environment="$(zigzag_bench_cpu_environment)"
+  while IFS= read -r setting; do
+    docker_common_args+=(-e "${setting}")
+  done <<<"${zigzag_cpu_environment}"
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}"
-  [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0)) ||
-    devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be a positive integer"
+  [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0 && full_memory_bytes <= 85899345920)) ||
+    devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be positive and at most 80 GiB"
   docker_common_args+=(--memory "${full_memory_bytes}" --memory-swap "${full_memory_bytes}")
 fi
 zigzag_setup_args=()
@@ -206,8 +219,8 @@ if [[ "${backend}" == "zigzag" ]]; then
   )
   if [[ "${mode}" == "prewarm-only" ]]; then
     setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-85899345920}"
-    [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 )) ||
-      devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be a positive integer"
+    [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 && setup_memory_bytes <= 85899345920 )) ||
+      devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be positive and at most 80 GiB"
     prewarm_limit_args=(--memory "${setup_memory_bytes}" --memory-swap "${setup_memory_bytes}")
     if [[ "${BENCH_ZIGZAG_SETUP_REQUIRE_MISS:-0}" == "1" ]]; then
       [[ -z "$(find "${parameter_cache_host}" -maxdepth 1 -type f -name 'v28-zigzag-proof-of-replication-*.params' -print -quit)" ]] ||

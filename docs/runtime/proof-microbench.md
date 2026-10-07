@@ -1,5 +1,9 @@
 # Proof Microbenchmarks
 
+Dedicated ZigZag pool, affinity, parent-cache, residency and build controls are
+documented in [CPU tuning](zigzag-cpu-tuning.md). Experimental buffering and
+DONTNEED remain off until full remote acceptance.
+
 `just bench-proof-micro` runs the proof code path without Curio scheduling,
 HarmonyDB, chain message waits, or HTTP retrieval. It is meant to explain where
 the backend cost comes from after the end-to-end devnet benchmark has already
@@ -153,11 +157,13 @@ bash scripts/static-checks.sh
 
 Rust builds, proof tests and full benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. The lock now pins
-the measurement observer at `b5237df450a6daa17dbfd0f953349dd177923e14`.
+the measurement observer and CPU/cache controls at
+`9c954a9cae2ddc61110848fc348b92d04dddba36`.
 Fetch the managed sources after updating the lock, then rebuild both dedicated
 images. For development, an isolated source copy inside this repository can be
 selected with `DEVNET_RUST_FIL_PROOFS_SOURCE` for the builds and run. Include
-`storage-proofs-porep/src/zigzag/measurements.rs` in that copy. The existing image
+`storage-proofs-porep/src/zigzag/measurements.rs` and `cache_policy.rs` in that copy.
+The existing image
 manifest records its content digest. Local report
 checks do not establish proof correctness or telemetry overhead for the new
 build; acceptance still requires the full remote cycle.

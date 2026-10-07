@@ -251,6 +251,10 @@ devnet_stop_prewarm_progress() {
 }
 
 devnet_compose() {
+  local compose_files=(--file "${DEVNET_COMPOSE}")
+  if [[ -f "${DEVNET_COMPOSE_ENV}" ]] && grep -qx 'DEVNET_PROOF_BACKEND=zigzag' "${DEVNET_COMPOSE_ENV}"; then
+    compose_files+=(--file "${DEVNET_ROOT}/docker/compose.zigzag-cpu.yaml")
+  fi
   env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_CURIO_IMAGE -u DEVNET_DATA_DIR \
     -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_PARENT_CACHE_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
     -u DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS \
@@ -258,7 +262,7 @@ devnet_compose() {
     -u DEVNET_YUGABYTE_IMAGE -u LOTUS_FIREHORSE_HEIGHT -u LOTUS_DEVNET_NETWORK_BUNDLE -u SECTOR_SIZE -u FIL_PROOFS_USE_ZIGZAG \
     -u FIL_PROOFS_ZIGZAG_GENERATE_MISSING_PARAMS -u FIL_PROOFS_ZIGZAG_SIDECAR_DIR -u FIL_PROOFS_PARENT_CACHE \
     -u FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE -u FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE -u FIL_PROOFS_SDR_PARENTS_CACHE_SIZE \
-    docker compose --env-file "${DEVNET_COMPOSE_ENV}" --project-name "${DEVNET_PROJECT}" --file "${DEVNET_COMPOSE}" "$@"
+    docker compose --env-file "${DEVNET_COMPOSE_ENV}" --project-name "${DEVNET_PROJECT}" "${compose_files[@]}" "$@"
 }
 
 devnet_normalize_proof_backend() {
@@ -1047,6 +1051,8 @@ devnet_zigzag_curio_overrides_sha256() {
   {
     devnet_zigzag_microbench_overrides_sha256
     shasum -a 256 "${task}" | awk '{print $1}'
+    shasum -a 256 "${DEVNET_ROOT}/source-overrides/zigzag/curio/curio-cpu-launcher.sh" | awk '{print $1}'
+    shasum -a 256 "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh" | awk '{print $1}'
   } | shasum -a 256 | awk '{print $1}'
 }
 

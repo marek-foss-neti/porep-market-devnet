@@ -1,12 +1,19 @@
 # ZigZag build capabilities
 
+The dedicated images also provide [CPU tuning controls](zigzag-cpu-tuning.md),
+including bounded parent reads and optional residency advice in the pinned shared
+Rust API. Fetch the updated managed sources and rebuild both dedicated images.
+No optimized default or remote speedup has been accepted yet.
+
 The dedicated adapters live under `source-overrides/zigzag`. `just build-zigzag`
 builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`b5237df450a6daa17dbfd0f953349dd177923e14`. This revision adds optional
-TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
+`9c954a9cae2ddc61110848fc348b92d04dddba36`. This revision adds bounded encode
+parent-record buffers, opt-in TreeR/parent-cache DONTNEED advice, affinity
+diagnostics and optional `zigzag-sha-asm`. Buffering and advice default to off.
+It retains optional TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
 report per-phase CPU, sampled memory and timing in the full cycle. Ordinary
 Curio workers leave the measurement observer unset. It retains shared-L3 CPU
 affinity for the ZigZag encoder and feeders on Linux with `hwloc` (enabled by

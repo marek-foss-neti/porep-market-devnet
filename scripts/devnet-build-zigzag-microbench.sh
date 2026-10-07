@@ -8,6 +8,7 @@ devnet_require_command jq
 devnet_require_command npm
 devnet_require_command grep
 devnet_require_command shasum
+source "${DEVNET_ROOT}/scripts/zigzag-build-settings.sh"
 
 [[ -z "${DEVNET_ZIGZAG_RUSTUP_TOOLCHAIN:-}" ]] ||
   devnet_die "the ZigZag toolchain is selected by its pinned image, not rustup"
@@ -47,7 +48,7 @@ zigzag_source_sha256="$(devnet_rust_fil_proofs_content_sha256 "${zigzag_source}"
 zigzag_overrides_sha256="$(devnet_zigzag_microbench_overrides_sha256)"
 dockerfile_sha256="$(shasum -a 256 docker/zigzag-microbench.Dockerfile | awk '{print $1}')"
 platform="linux/$(devnet_normalize_architecture "$(docker info --format '{{.Architecture}}')")"
-image="${DEVNET_IMAGE_NAMESPACE}/zigzag-microbench:${zigzag_source_sha256:0:12}-${zigzag_overrides_sha256:0:12}"
+image="${DEVNET_IMAGE_NAMESPACE}/zigzag-microbench:${zigzag_source_sha256:0:12}-${zigzag_overrides_sha256:0:12}-${zigzag_build_settings_sha256:0:12}"
 
 docker buildx build \
   --load \
@@ -60,6 +61,9 @@ docker buildx build \
   --build-context "harness-overlay=." \
   --build-context "rust-fil-proofs=${zigzag_source_relative}" \
   --build-arg "ZIGZAG_RUST_TOOLCHAIN_IMAGE=${zigzag_toolchain_image}" \
+  --build-arg "ZIGZAG_TARGET_CPU=${zigzag_target_cpu}" \
+  --build-arg "ZIGZAG_LTO=${zigzag_lto}" \
+  --build-arg "ZIGZAG_SHA_ASM=${zigzag_sha_asm}" \
   --build-arg "RUST_FIL_PROOFS_COMMIT=${zigzag_source_commit}" \
   --build-arg "RUST_FIL_PROOFS_SOURCE_SHA256=${zigzag_source_sha256}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_overrides_sha256}" \
@@ -90,7 +94,8 @@ jq -n \
   --arg dockerfileSha256 "${dockerfile_sha256}" \
   --arg imageReference "${image}" \
   --arg imageId "${image_id}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:["multicore-sdr","zigzag-bench","zigzag-setup-status"],zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
+  --arg targetCpu "${zigzag_target_cpu}" --arg lto "${zigzag_lto}" --arg shaAsm "${zigzag_sha_asm}" \
+  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(["multicore-sdr","zigzag-bench","zigzag-setup-status"] + (if $targetCpu == "generic" then ["blst-portable"] else [] end) + (if $shaAsm == "1" then ["zigzag-sha-asm"] else [] end)),cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
   > "${temporary}"
 mv -f -- "${temporary}" "${manifest}"
 printf 'ZigZag microbench image=%s manifest=%s\n' "${image}" "${manifest}"

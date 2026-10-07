@@ -129,6 +129,27 @@ function selectedEnvironment() {
     "FIL_PROOFS_USE_MULTICORE_SDR",
     "POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS",
     "RAYON_NUM_THREADS",
+    "EC_GPU_NUM_THREADS",
+    "BENCH_RAYON_NUM_THREADS",
+    "BENCH_EC_GPU_NUM_THREADS",
+    "BENCH_ZIGZAG_USE_PARENT_CACHE",
+    "BENCH_ZIGZAG_MULTICORE_ENCODE",
+    "BENCH_ZIGZAG_ENCODE_AFFINITY",
+    "BENCH_ZIGZAG_ENCODE_PRODUCERS",
+    "BENCH_ZIGZAG_ENCODE_STRIDE",
+    "BENCH_ZIGZAG_ENCODE_LOOKAHEAD",
+    "BENCH_ZIGZAG_PARENT_BUFFER_NODES",
+    "BENCH_ZIGZAG_PARENT_CACHE_DONTNEED",
+    "BENCH_ZIGZAG_TREE_R_DONTNEED",
+    "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE",
+    "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE",
+    "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY",
+    "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS",
+    "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE",
+    "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD",
+    "FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES",
+    "FIL_PROOFS_ZIGZAG_PARENT_CACHE_DONTNEED",
+    "FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED",
   ];
   return Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]));
 }
@@ -224,6 +245,7 @@ export function buildProvenance({
         zigzag_source_overrides_sha256: imageManifest.zigzagSourceOverridesSha256,
         zigzag_rust_fil_proofs_api_sha256: imageManifest.zigzagRustFilProofsApiSha256,
         cargo_features: cargoFeatures,
+        cpu_build: imageManifest.cpuBuild ?? null,
         zigzag_capabilities: backend === "zigzag" ? {
           split_proving: imageManifest.zigzagSplitProving,
           tree_d_reuse: imageManifest.zigzagTreeDReuse,
@@ -232,6 +254,11 @@ export function buildProvenance({
         } : null,
       },
       image: filteredImageInspect(repositoryRoot, imageReference),
+      cargo_feature_graph: existsSync(resolve(runDirectory, "cargo-features.txt")) ? {
+        path: "cargo-features.txt",
+        sha256: sha256File(resolve(runDirectory, "cargo-features.txt")),
+        scope: "cargo tree -e features of the exact dedicated image build",
+      } : null,
       benchmark_binary: {
         container_path: "/usr/local/bin/porep-proof-microbench",
         build_workdir: "/opt/curio/extern/filecoin-ffi/rust",

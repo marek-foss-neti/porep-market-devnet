@@ -97,6 +97,7 @@ struct BenchmarkSummary {
     porep_layers: usize,
     porep_partitions: usize,
     zigzag_groth16_batch_size: Option<usize>,
+    cpu_configuration: Option<serde_json::Value>,
     minimum_total_challenges: usize,
     challenges_per_layer_per_partition: usize,
     profile: Option<zigzag_512_profile::EffectiveProfile>,
@@ -210,10 +211,72 @@ struct ParamPrewarmResult {
     parameter_cache_hit: Option<bool>,
 }
 
+fn configure_cpu_runtime(sector_size_bytes: u64) -> Result<()> {
+    // Resolve before SETTINGS, Rayon, or either ec-gpu-gen version initializes.
+    let available = std::thread::available_parallelism()?.get();
+    for name in ["RAYON_NUM_THREADS", "EC_GPU_NUM_THREADS"] {
+        let raw = std::env::var(name).unwrap_or_else(|_| "auto".into());
+        let threads = if raw == "auto" {
+            available
+        } else {
+            raw.parse::<usize>()
+                .with_context(|| format!("invalid {name}"))?
+        };
+        ensure!(
+            (1..=4096).contains(&threads),
+            "{name} must be between 1 and 4096"
+        );
+        std::env::set_var(name, threads.to_string());
+    }
+    let configuration = cpu_configuration(sector_size_bytes)?;
+    eprintln!("ZigZag CPU configuration: {configuration}");
+    Ok(())
+}
+
+fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
+    use storage_proofs_core_zigzag::settings::SETTINGS;
+    let nodes = usize::try_from(sector_size_bytes / 32)?;
+    let lookahead = SETTINGS.zigzag_multicore_encode_lookahead.max(1).min(nodes);
+    let status = fs::read_to_string("/proc/self/status").ok();
+    let allowed = status.as_ref().and_then(|text| {
+        text.lines()
+            .find_map(|line| line.strip_prefix("Cpus_allowed_list:").map(str::trim))
+    });
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let sha_ni_eligible = Some(
+        std::is_x86_feature_detected!("sha")
+            && std::is_x86_feature_detected!("sse2")
+            && std::is_x86_feature_detected!("ssse3")
+            && std::is_x86_feature_detected!("sse4.1"),
+    );
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    let sha_ni_eligible: Option<bool> = None;
+    Ok(serde_json::json!({
+        "rayon_num_threads": rayon::current_num_threads(),
+        "ec_gpu_num_threads": std::env::var("EC_GPU_NUM_THREADS").ok().and_then(|value| value.parse::<usize>().ok()),
+        "available_parallelism": std::thread::available_parallelism().ok().map(|count| count.get()),
+        "cpus_allowed_list": allowed,
+        "sha_ni_eligible": sha_ni_eligible,
+        "sha_backend_scope": "eligibility only; exact build features recorded in image cargo-features.txt",
+        "multicore_encode": SETTINGS.zigzag_multicore_encode,
+        "encode_affinity": SETTINGS.zigzag_multicore_encode_affinity,
+        "encode_producers": SETTINGS.zigzag_multicore_encode_producers.max(1),
+        "encode_stride": SETTINGS.zigzag_multicore_encode_producer_stride.max(1).min(lookahead),
+        "encode_lookahead": lookahead,
+        "requested_encode_stride": SETTINGS.zigzag_multicore_encode_producer_stride,
+        "requested_encode_lookahead": SETTINGS.zigzag_multicore_encode_lookahead,
+        "parent_cache": SETTINGS.use_zigzag_parent_cache,
+        "parent_cache_window_nodes": SETTINGS.zigzag_parent_cache_size,
+        "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
+        "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary"
+    }))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1).collect())?;
     if matches!(args.backend, Backend::ZigZag) {
         fil_logger::init();
+        configure_cpu_runtime(args.sector_size_bytes)?;
     }
     configure_microbench_layers(&args)?;
     fs::create_dir_all(&args.work_dir).context("create work directory")?;
@@ -1196,6 +1259,7 @@ fn run_stacked(args: &Args) -> Result<BenchmarkSummary> {
         porep_layers,
         porep_partitions,
         zigzag_groth16_batch_size: None,
+        cpu_configuration: None,
         minimum_total_challenges,
         challenges_per_layer_per_partition,
         profile: None,
@@ -1350,6 +1414,7 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         porep_layers,
         porep_partitions,
         zigzag_groth16_batch_size,
+        cpu_configuration: Some(cpu_configuration(args.sector_size_bytes)?),
         minimum_total_challenges,
         challenges_per_layer_per_partition,
         profile,

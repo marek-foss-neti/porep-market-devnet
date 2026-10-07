@@ -28,12 +28,22 @@ RUN set -eu; \
 COPY --from=harness-overlay source-overrides/fvm-4.8.2-zigzag/ /opt/curio/extern/fvm-4.8.2-zigzag/
 # Use the installed default from the pinned image, without fetching the
 # development components named by the source's rust-toolchain.toml.
-RUN toolchain="$(rustup default | awk '{print $1}')" \
-    && cd extern/filecoin-ffi/rust \
-    && RUSTUP_TOOLCHAIN="${toolchain}" CARGO_BUILD_JOBS=2 cargo build --release --locked \
+ARG ZIGZAG_TARGET_CPU=default
+ARG ZIGZAG_LTO=off
+ARG ZIGZAG_SHA_ASM=0
+RUN set -eu; toolchain="$(rustup default | awk '{print $1}')"; \
+    cd extern/filecoin-ffi/rust; \
+    export RUSTUP_TOOLCHAIN="${toolchain}" CARGO_BUILD_JOBS=2; \
+    if [ "${ZIGZAG_TARGET_CPU}" = native ]; then export RUSTFLAGS='-C target-cpu=native'; fi; \
+    if [ "${ZIGZAG_LTO}" != off ]; then export CARGO_PROFILE_RELEASE_LTO="${ZIGZAG_LTO}" CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1; fi; \
+    features='multicore-sdr,zigzag-bench,zigzag-setup-status'; \
+    if [ "${ZIGZAG_TARGET_CPU}" = generic ]; then features="${features},blst-portable"; fi; \
+    if [ "${ZIGZAG_SHA_ASM}" = 1 ]; then features="${features},zigzag-sha-asm"; fi; \
+    cargo tree --locked -e features --no-default-features --features "${features}" > /opt/zigzag-cargo-features.txt; \
+    cargo build --release --locked \
          --bin porep-proof-microbench \
          --no-default-features \
-         --features "multicore-sdr,zigzag-bench,zigzag-setup-status"
+         --features "${features}"
 
 FROM ${ZIGZAG_RUST_TOOLCHAIN_IMAGE} AS zigzag-microbench
 
@@ -46,12 +56,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=zigzag-builder /opt/curio/extern/filecoin-ffi/rust/target/release/porep-proof-microbench /usr/local/bin/porep-proof-microbench
+COPY --from=zigzag-builder /opt/zigzag-cargo-features.txt /usr/local/share/zigzag/cargo-features.txt
 
 ARG RUST_FIL_PROOFS_COMMIT
 ARG RUST_FIL_PROOFS_SOURCE_SHA256
 ARG ZIGZAG_SOURCE_OVERRIDES_SHA256
 ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE
+ARG ZIGZAG_TARGET_CPU
+ARG ZIGZAG_LTO
+ARG ZIGZAG_SHA_ASM
 LABEL io.porep-market.zigzag.rust-fil-proofs.commit="${RUST_FIL_PROOFS_COMMIT}" \
       io.porep-market.zigzag.rust-fil-proofs.source-sha256="${RUST_FIL_PROOFS_SOURCE_SHA256}" \
       io.porep-market.zigzag.source-overrides.sha256="${ZIGZAG_SOURCE_OVERRIDES_SHA256}" \
-      io.porep-market.zigzag.rust-toolchain.image="${ZIGZAG_RUST_TOOLCHAIN_IMAGE}"
+      io.porep-market.zigzag.rust-toolchain.image="${ZIGZAG_RUST_TOOLCHAIN_IMAGE}" \
+      io.porep-market.zigzag.target-cpu="${ZIGZAG_TARGET_CPU}" \
+      io.porep-market.zigzag.lto="${ZIGZAG_LTO}" \
+      io.porep-market.zigzag.sha-asm="${ZIGZAG_SHA_ASM}"

@@ -47,33 +47,52 @@ COPY --from=harness-overlay source-overrides/fvm-4.8.2-zigzag/ /opt/curio/extern
 COPY --from=blst-builder /opt/blst /opt/curio/extern/supraseal/deps/blst
 ARG CURIO_COMMIT
 ARG CURIO_FFI_COMMIT
+ARG ZIGZAG_TARGET_CPU=default
+ARG ZIGZAG_LTO=off
+ARG ZIGZAG_SHA_ASM=0
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/opt/curio/extern/filecoin-ffi/rust/target \
     set -eu; \
     toolchain="$(rustup default | awk '{print $1}')"; \
+    export RUSTUP_TOOLCHAIN="${toolchain}"; \
+    if [ "${ZIGZAG_TARGET_CPU}" = generic ]; then export FFI_PORTABLE=1; fi; \
+    if [ "${ZIGZAG_TARGET_CPU}" = native ]; then export RUSTFLAGS='-C target-cpu=native'; fi; \
+    if [ "${ZIGZAG_LTO}" != off ]; then export CARGO_PROFILE_RELEASE_LTO="${ZIGZAG_LTO}" CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1; fi; \
     mkdir -p build; \
     touch build/.update-modules build/.blst-install; \
     RUSTUP_TOOLCHAIN="${toolchain}" \
     FFI_BUILD_FROM_SOURCE=1 FFI_GIT_COMMIT="${CURIO_FFI_COMMIT}" \
-    FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 \
+    FFI_ZIGZAG_SHA_ASM="${ZIGZAG_SHA_ASM}" FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 \
+    FFI_ZIGZAG_CARGO_FEATURES_FILE=/opt/zigzag-cargo-features.txt \
     CARGO_BUILD_JOBS=2 GOMAXPROCS=2 \
     make build CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
-      CURIO_TAGS="cunative debug nosupraseal"
+      CURIO_TAGS="cunative debug nosupraseal"; \
+    test -s /opt/zigzag-cargo-features.txt
 
 FROM ${BASE_CURIO_IMAGE} AS zigzag-curio
-COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio
-COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool
+COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio-zigzag
+COPY --from=harness-overlay --chmod=755 source-overrides/zigzag/curio/curio-cpu-launcher.sh /usr/local/bin/curio
+COPY --from=harness-overlay scripts/zigzag-cpu-settings.sh /usr/local/share/zigzag/cpu-settings.sh
+COPY --from=curio-builder /opt/zigzag-cargo-features.txt /usr/local/share/zigzag/cargo-features.txt
+COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool-zigzag
+COPY --from=harness-overlay --chmod=755 source-overrides/zigzag/curio/curio-cpu-launcher.sh /usr/local/bin/sptool
 ARG CURIO_COMMIT
 ARG RUST_FIL_PROOFS_COMMIT
 ARG RUST_FIL_PROOFS_SOURCE_SHA256
 ARG ZIGZAG_SOURCE_OVERRIDES_SHA256
 ARG ZIGZAG_DOCKERFILE_SHA256
 ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE
+ARG ZIGZAG_TARGET_CPU
+ARG ZIGZAG_LTO
+ARG ZIGZAG_SHA_ASM
 LABEL io.porep-market.curio.commit="${CURIO_COMMIT}" \
       io.porep-market.zigzag.split-proving="1" \
       io.porep-market.zigzag.rust-fil-proofs.commit="${RUST_FIL_PROOFS_COMMIT}" \
       io.porep-market.zigzag.rust-fil-proofs.source-sha256="${RUST_FIL_PROOFS_SOURCE_SHA256}" \
       io.porep-market.zigzag.source-overrides.sha256="${ZIGZAG_SOURCE_OVERRIDES_SHA256}" \
       io.porep-market.zigzag.dockerfile.sha256="${ZIGZAG_DOCKERFILE_SHA256}" \
-      io.porep-market.zigzag.rust-toolchain.image="${ZIGZAG_RUST_TOOLCHAIN_IMAGE}"
+      io.porep-market.zigzag.rust-toolchain.image="${ZIGZAG_RUST_TOOLCHAIN_IMAGE}" \
+      io.porep-market.zigzag.target-cpu="${ZIGZAG_TARGET_CPU}" \
+      io.porep-market.zigzag.lto="${ZIGZAG_LTO}" \
+      io.porep-market.zigzag.sha-asm="${ZIGZAG_SHA_ASM}"

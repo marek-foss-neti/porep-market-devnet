@@ -74,6 +74,7 @@ storage-proofs-update = { path = "../../rust-fil-proofs/storage-proofs-update" }
 [features]
 zigzag-bench = ["filecoin-proofs-zigzag/zigzag-bench"]
 zigzag-setup-status = []
+zigzag-sha-asm = ["storage-proofs-porep-zigzag/zigzag-sha-asm"]
 default = ["cuda", "multicore-sdr", "fvm"]
 fvm = [
   "fvm2",

@@ -71,6 +71,18 @@ export function parseBellpersonTimings(raw) {
   });
 }
 
+export function parseCpuDiagnostics(raw) {
+  // fil_logger 0.1.7 renders module_path, not the custom log target. Match
+  // diagnostic messages from their actual modules, retaining target-based logs
+  // from other formatters without collecting unrelated ZigZag phase messages.
+  const module = /\bstorage_proofs_porep::zigzag::(?:cache_policy|vanilla::(?:cores|parent_table|vde))\b/;
+  const diagnostic = /\b(?:encode (?:affinity|producers=)|zigzag (?:encode affinity|multicore encode L3 affinity)|parent records mmap_window_nodes=|DONTNEED (?:advised_bytes=|unavailable:))/;
+  return raw.split(/\r?\n/).flatMap((line, index) => {
+    const matches = /\bzigzag_(cpu|cache)\b/.test(line) || (module.test(line) && diagnostic.test(line));
+    return matches ? [{ line_number: index + 1, source: "stderr.log", message: line }] : [];
+  });
+}
+
 export function composeReport({
   mode,
   benchmark,
@@ -107,6 +119,8 @@ export function composeReport({
     schema_version: 1,
     mode,
     benchmark,
+    cpu_configuration: benchmark.cpu_configuration ?? null,
+    cpu_diagnostics: measuredLog === null ? [] : parseCpuDiagnostics(measuredLog),
     telemetry,
     prewarm,
     prewarm_telemetry: prewarmTelemetry,
@@ -177,6 +191,14 @@ export function renderPhaseMarkdown(report) {
     lines.push("| Bellperson timer | Wall ms | Source |", "| --- | ---: | --- |");
     for (const timer of report.auxiliary_c2_timings) lines.push(`| ${timer.name} | ${value(timer.wall_ms)} | [stderr.log line ${timer.line_number}](./stderr.log) |`);
     lines.push("", "Auxiliary library timers are not added to sealing or C2 totals.");
+  }
+  if (report.cpu_configuration) {
+    const cpu = report.cpu_configuration;
+    lines.push("", "## CPU configuration", "",
+      `Independent pools: Rayon **${value(cpu.rayon_num_threads)}**, ec-gpu **${value(cpu.ec_gpu_num_threads)}**. Allowed CPUs: \`${cpu.cpus_allowed_list ?? "unavailable"}\`.`, "",
+      `Encode: affinity=${cpu.encode_affinity}, producers=${value(cpu.encode_producers)}, stride=${value(cpu.encode_stride)}, lookahead=${value(cpu.encode_lookahead)}. Parent cache=${cpu.parent_cache}, requested mmap window=${value(cpu.parent_cache_window_nodes)} nodes.`, "",
+      `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
+      "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
   }
   return `${lines.join("\n")}\n`;
 }
