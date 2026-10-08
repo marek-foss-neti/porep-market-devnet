@@ -60,6 +60,8 @@ printf 'resource docker="%s" platform=linux/%s cpus=%s memory_bytes=%s host_free
   "${docker_memory_bytes}" "${host_free_bytes}"
 
 runtime_lock_output="$(npm --prefix tools run cli -- runtime lock verify)"
+printf 'fetching missing pinned managed sources\n'
+npm --prefix tools run cli -- sources fetch >/dev/null
 source_verify_output="$(npm --prefix tools run cli -- sources verify)"
 
 lotus_devnet_image_reference=""

@@ -87,8 +87,10 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 32g
 and dedicated ZigZag microbench and Curio images. The standard images always
 use the managed locked Rust source. Dedicated ZigZag images always include
 split C1/C2 proving, TreeD reuse, file-backed unseal and semantic C1 validation.
-Their builds require all corresponding Rust APIs. After updating the
-lock, run `npm --prefix tools run cli -- sources fetch` before `just build`.
+Their builds require all corresponding Rust APIs. `just build` automatically
+fetches missing sources pinned in the lock before verifying them and building
+images, including after a repin. Existing managed checkouts are verified and
+never reset; local changes or an invalid checkout still stop the build.
 For development, `DEVNET_RUST_FIL_PROOFS_SOURCE` can select an absolute source
 directory inside this repository for the ZigZag builds.
 The builds keep separate toolchains and manifests (`images.json`,
