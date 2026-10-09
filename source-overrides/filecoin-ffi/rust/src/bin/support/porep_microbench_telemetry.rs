@@ -46,6 +46,8 @@ struct OperationSample {
     layer: Option<usize>,
     boundary: &'static str,
     completed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -454,6 +456,16 @@ pub fn record_operation(
     layer: Option<usize>,
     completed: Option<bool>,
 ) {
+    record_operation_with_details(id, name, layer, completed, None);
+}
+
+pub fn record_operation_with_details(
+    id: u64,
+    name: &'static str,
+    layer: Option<usize>,
+    completed: Option<bool>,
+    details: Option<serde_json::Value>,
+) {
     let Some(recorder) = ACTIVE_RECORDER.get() else {
         return;
     };
@@ -480,6 +492,7 @@ pub fn record_operation(
             layer,
             boundary: if completed.is_none() { "start" } else { "end" },
             completed,
+            details,
         }),
         None,
     );
@@ -854,6 +867,51 @@ fn timeval_ms(value: libc::timeval) -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn operation_details_reach_both_samples_and_legacy_events_keep_their_schema() {
+        let directory = tempfile::tempdir().expect("telemetry fixture");
+        let path = directory.path().join("samples.ndjson");
+        let prior_path = std::env::var_os(TELEMETRY_PATH_ENV);
+        std::env::set_var(TELEMETRY_PATH_ENV, &path);
+        let session = TelemetrySession::start(directory.path(), directory.path(), directory.path())
+            .expect("start sampler")
+            .expect("enabled sampler");
+        let details = serde_json::json!({"partition_start": 3, "partition_count": 1});
+        record_operation_with_details(1, "groth16_batch", None, None, Some(details.clone()));
+        record_operation_with_details(1, "groth16_batch", None, Some(true), Some(details.clone()));
+        record_operation(2, "encode", Some(0), None);
+        record_operation(2, "encode", Some(0), Some(true));
+        session.finish().expect("finish sampler");
+        if let Some(prior) = prior_path {
+            std::env::set_var(TELEMETRY_PATH_ENV, prior);
+        } else {
+            std::env::remove_var(TELEMETRY_PATH_ENV);
+        }
+        let samples: Vec<serde_json::Value> = fs::read_to_string(path)
+            .expect("read samples")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("sample JSON"))
+            .collect();
+        let operations: Vec<_> = samples
+            .iter()
+            .filter(|sample| !sample["operation"].is_null())
+            .collect();
+        assert_eq!(operations.len(), 4);
+        for sample in &operations[..2] {
+            assert_eq!(sample["operation"]["details"], details);
+            assert_eq!(sample["active_operation_ids"], serde_json::json!([1]));
+        }
+        assert_eq!(operations[0]["operation"]["boundary"], "start");
+        assert_eq!(operations[1]["operation"]["completed"], true);
+        for sample in &operations[2..] {
+            assert!(!sample["operation"]
+                .as_object()
+                .unwrap()
+                .contains_key("details"));
+            assert_eq!(sample["active_operation_ids"], serde_json::json!([2]));
+        }
+    }
 
     #[test]
     fn parses_process_status_in_bytes() {

@@ -92,7 +92,7 @@ jq -n \
   --arg baseImage "${base_image}" --arg baseImageId "${base_id}" \
   --arg imageReference "${image}" --arg imageId "${image_id}" \
   --arg targetCpu "${zigzag_target_cpu}" --arg lto "${zigzag_lto}" --arg shaAsm "${zigzag_sha_asm}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId,zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true}' \
+  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId,zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,zigzagCompactParameters:true}' \
   > "${temporary}"
 mv -- "${temporary}" "${manifest}"
 printf 'ZigZag Curio image=%s manifest=%s\n' "${image}" "${manifest}"

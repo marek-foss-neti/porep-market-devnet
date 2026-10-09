@@ -52,7 +52,7 @@ for repetition in 1; do
   printf 'zigzag-512 baseline repetition %s/1\n' "${repetition}" >&2
   output="$(
     BENCH_PROOF_MICRO_PROFILE=zigzag-512 \
-    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}" \
+    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}" \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \
     BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1 \

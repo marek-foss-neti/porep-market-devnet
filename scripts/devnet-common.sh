@@ -940,6 +940,17 @@ devnet_require_zigzag_apis() {
     grep -Eq "^[[:space:]]*pub fn ${api}[<(]" "${api_file}" ||
       devnet_die "ZigZag source lacks required API ${api}; select the Rust revision pinned in versions.lock.yaml or a compatible newer source. Optimization fallbacks are no longer supported."
   done
+  local parameters="${source}/storage-proofs-porep/src/zigzag/parameters.rs"
+  local compound="${source}/storage-proofs-porep/src/zigzag/circuit/compound.rs"
+  [[ -f "${parameters}" && ! -L "${parameters}" && -f "${compound}" && ! -L "${compound}" ]] ||
+    devnet_die "ZigZag source lacks compact Groth16 parameters; select a revision containing the compact loader"
+  grep -Eq '^pub struct CompactParameters' "${parameters}" &&
+    grep -Eq '^pub enum ZigZagParameters' "${parameters}" ||
+    devnet_die "ZigZag source lacks the compact Groth16 parameter source"
+  for api in groth_parameters circuit_proofs_with_parameters prove_with_parameters; do
+    grep -Eq "^[[:space:]]*pub fn ${api}[<(]" "${compound}" ||
+      devnet_die "ZigZag source lacks required compact parameter API ${api}"
+  done
 }
 
 devnet_rust_fil_proofs_content_sha256() {

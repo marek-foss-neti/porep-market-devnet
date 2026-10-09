@@ -180,10 +180,10 @@ if [[ "${backend}" == "zigzag" ]]; then
   while IFS= read -r setting; do
     docker_common_args+=(-e "${setting}")
   done <<<"${zigzag_cpu_environment}"
-  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
-  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-85899345920}"
+  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}"
   [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0 && full_memory_bytes <= 85899345920)) ||
     devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be positive and at most 80 GiB"
   docker_common_args+=(--memory "${full_memory_bytes}" --memory-swap "${full_memory_bytes}")
@@ -204,7 +204,7 @@ if [[ "${backend}" == "zigzag" ]]; then
   )
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
   setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
-  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-75161927680}"
+  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-53687091200}"
   for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
     [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
       devnet_die "ZigZag setup batch, workers, and budget must be positive integers"
@@ -218,7 +218,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     -e "FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE=/bench-run/zigzag-setup-phase.txt"
   )
   if [[ "${mode}" == "prewarm-only" ]]; then
-    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-85899345920}"
+    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-64424509440}"
     [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 && setup_memory_bytes <= 85899345920 )) ||
       devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be positive and at most 80 GiB"
     prewarm_limit_args=(--memory "${setup_memory_bytes}" --memory-swap "${setup_memory_bytes}")
@@ -231,6 +231,61 @@ fi
 
 bench_epoch_ms() {
   node -e 'process.stdout.write(String(Date.now()))'
+}
+
+bench_measured_exit() {
+  local script_status="$?" container_id="" captured=0 report_saved=1
+  trap - EXIT
+  set +e
+  local container_json="${run_dir}/container.json"
+  if [[ -f "${measured_cidfile}" && ! -L "${measured_cidfile}" ]]; then
+    container_id="$(cat "${measured_cidfile}")"
+  fi
+  if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] &&
+    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}}}' \
+      "${container_id}" > "${container_json}.temporary" 2>> "${stderr_log}"; then
+    mv -- "${container_json}.temporary" "${container_json}"
+    captured=1
+  else
+    jq -n --arg id "${container_id}" '{id:$id,state:null,capture_error:"final container state unavailable"}' > "${container_json}"
+  fi
+  if ((script_status != 0)); then
+    if [[ "${benchmark_results_saved:-0}" == "1" ]]; then
+      # A cleanup/output error must not replace validated benchmark results.
+      local post_run_error_json="${run_dir}/post-run-error.json"
+      if jq -n --arg operation "${post_run_operation:-post_run}" \
+        --argjson exit_code "${post_run_exit_code:-${script_status}}" \
+        --argjson script_exit_code "${script_status}" --arg log "${post_run_log:-}" \
+        --slurpfile container "${container_json}" \
+        '{schema_version:1,benchmark_results_saved:true,operation:$operation,
+          exit_code:$exit_code,script_exit_code:$script_exit_code,
+          benchmark_report:"report.json",log:(if $log == "" then null else $log end),
+          container:$container[0]}' > "${post_run_error_json}.temporary" &&
+        mv -- "${post_run_error_json}.temporary" "${post_run_error_json}"; then
+        printf 'proof microbench succeeded; post-run error: %s\n' "${post_run_error_json}" >&2
+      else
+        report_saved=0
+        printf 'could not write post-run error; retained successful report, diagnostics and container: %s\n' "${run_dir}" >&2
+      fi
+    else
+      measured_finished_ms="${measured_finished_ms:-$(bench_epoch_ms)}"
+      if node "${DEVNET_ROOT}/scripts/write-proof-micro-failure.mjs" \
+        "${report_json}" "${DEVNET_ROOT}" "${image_manifest}" "${image}" "${backend}" "${sector_size}" \
+        "${measured_started_ms}" "${measured_finished_ms}" "${measured_exit_code:-${script_status}}" \
+        "${container_json}" "${telemetry_ndjson}" "${summary_json}" "${stderr_log}" - full; then
+        printf 'proof microbench failure: %s\n' "${report_json}" >&2
+      else
+        report_saved=0
+        printf 'could not write full failure report; retained diagnostics and container: %s\n' "${run_dir}" >&2
+      fi
+    fi
+  fi
+  # Keep final OOM state until its report is durable. Never stop other services
+  # or remove an uninspected/running container.
+  if ((captured && report_saved)) && jq -e '.state.Running == false' "${container_json}" >/dev/null; then
+    docker rm "${container_id}" > "${run_dir}/container-removal.log" 2>&1 || true
+  fi
+  exit "${script_status}"
 }
 
 bench_prewarm_exit() {
@@ -350,6 +405,8 @@ bench_cleanup_successful_run() {
   local cleanup_json buildkit_prune_log removed_allocated_bytes retain_work_artifacts status
   cleanup_json="${run_dir}/cleanup.json"
   buildkit_prune_log="${run_dir}/buildkit-prune.log"
+  post_run_operation=cleanup
+  post_run_log=""
   retain_work_artifacts="${retain_zigzag_work_artifacts}"
   if [[ "${backend}" == "stacked" ]]; then
     retain_work_artifacts="${retain_stacked_work_artifacts}"
@@ -364,7 +421,16 @@ bench_cleanup_successful_run() {
       devnet_progress "bench-proof-micro: retaining ${parent_cache_kind} work artifacts by request"
     else
       devnet_progress "bench-proof-micro: pruning successful ${parent_cache_kind} run artifacts"
-      node "${DEVNET_ROOT}/scripts/cleanup-proof-micro-artifacts.mjs" "${run_dir}" "${backend}" >/dev/null
+      post_run_operation=artifact_cleanup
+      post_run_log=cleanup.stderr.log
+      if node "${DEVNET_ROOT}/scripts/cleanup-proof-micro-artifacts.mjs" "${run_dir}" "${backend}" \
+        >/dev/null 2> "${run_dir}/${post_run_log}"; then
+        :
+      else
+        post_run_exit_code=$?
+        tail -40 "${run_dir}/${post_run_log}" >&2 || true
+        devnet_die "proof microbench succeeded, but artifact cleanup failed with exit code ${post_run_exit_code}; see ${run_dir}/${post_run_log}"
+      fi
       removed_allocated_bytes="$(jq -r '.removed_allocated_bytes // .removed_logical_bytes' "${cleanup_json}")"
       devnet_progress "bench-proof-micro: pruned $(devnet_format_bytes "${removed_allocated_bytes}") from the run directory; manifest=${cleanup_json}"
       if [[ "${backend}" == "zigzag" ]]; then
@@ -384,15 +450,20 @@ bench_cleanup_successful_run() {
 
   if [[ "${prune_buildkit_after_bench}" == "1" ]]; then
     devnet_progress "bench-proof-micro: pruning unused BuildKit cache"
+    post_run_operation=buildkit_prune
+    post_run_log=buildkit-prune.log
     if docker buildx prune --force > "${buildkit_prune_log}" 2>&1; then
       devnet_progress "bench-proof-micro: BuildKit cache prune complete; log=${buildkit_prune_log}"
     else
       status=$?
+      post_run_exit_code="${status}"
       tail -40 "${buildkit_prune_log}" >&2 || true
       devnet_die "proof microbench succeeded, but BuildKit cache cleanup failed with exit code ${status}; see ${buildkit_prune_log}"
     fi
     printf -- '- Unused BuildKit cache: pruned; log: [`buildkit-prune.log`](./buildkit-prune.log).\n' >> "${summary_md}"
   fi
+  post_run_operation=post_run
+  post_run_log=""
 }
 
 bench_append_telemetry_markdown() {
@@ -855,11 +926,11 @@ if [[ "${mode}" == "prewarm-only" ]]; then
   prewarm_remove_args=()
   trap bench_prewarm_exit EXIT
 fi
-docker run "${prewarm_remove_args[@]}" \
+docker run ${prewarm_remove_args[@]+"${prewarm_remove_args[@]}"} \
   --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
-  "${zigzag_setup_args[@]}" \
-  "${prewarm_limit_args[@]}" \
+  ${zigzag_setup_args[@]+"${zigzag_setup_args[@]}"} \
+  ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/param-prewarm-telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \
@@ -867,7 +938,7 @@ docker run "${prewarm_remove_args[@]}" \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/prewarm-work \
     --prewarm-only \
-    "${profile_args[@]}" \
+    ${profile_args[@]+"${profile_args[@]}"} \
   > "${prewarm_summary_json}" 2> "${prewarm_stderr_log}" &
 prewarm_pid="$!"
 prewarm_progress_pid=""
@@ -948,7 +1019,13 @@ fi
 
 rm -f -- "${measured_cidfile}"
 measured_started_ms="$(bench_epoch_ms)"
-if docker run --rm \
+benchmark_results_saved=0
+measured_remove_args=(--rm)
+if [[ "${backend}" == zigzag ]]; then
+  measured_remove_args=()
+  trap bench_measured_exit EXIT
+fi
+if docker run ${measured_remove_args[@]+"${measured_remove_args[@]}"} \
   --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
@@ -957,12 +1034,13 @@ if docker run --rm \
     --backend "${backend}" \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/work \
-    "${profile_args[@]}" \
+    ${profile_args[@]+"${profile_args[@]}"} \
   > "${summary_json}" 2> "${stderr_log}"; then
   measured_finished_ms="$(bench_epoch_ms)"
   :
 else
   status=$?
+  measured_exit_code="${status}"
   measured_finished_ms="$(bench_epoch_ms)"
   if [[ -s "${stderr_log}" ]]; then
     tail -40 "${stderr_log}" >&2
@@ -1064,6 +1142,8 @@ summary_md="${run_dir}/summary.md"
 } > "${summary_md}"
 
 bench_append_telemetry_markdown "${report_json}" "${summary_md}"
+# Both machine-readable and Markdown results are complete before cleanup starts.
+benchmark_results_saved=1
 bench_cleanup_successful_run
 
 printf 'proof microbenchmark: %s\n' "${summary_md}"

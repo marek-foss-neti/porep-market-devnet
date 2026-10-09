@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "9c954a9cae2ddc61110848fc348b92d04dddba36";
+const rustFilProofsSourceCommit = "6a1291c60fad974d2195f9bfd8fd63be606ba2d4";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -854,6 +854,7 @@ printf '%s\\n' '${"d".repeat(40)}'
     await chmod(join(fixture.stubBin, "git"), 0o755);
     await writeFile(join(fixture.root, "scripts/bench-proof-micro.sh"), `#!/usr/bin/env bash
 set -euo pipefail
+[[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-64424509440}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
 touch "$run_dir/summary.md"
 manifest="$DEVNET_TEST_ROOT/.runtime/devnet/build/zigzag-microbench-images.json"
@@ -878,6 +879,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
           DEVNET_TEST_ROOT: fixture.root,
           DEVNET_TEST_COMMAND_LOG: fixture.commandLog,
           DEVNET_TEST_REPORT_COMMIT: reportCommit,
+          BENCH_ZIGZAG_FULL_MEMORY_BYTES: "",
           ...overrides,
         },
       },
@@ -890,6 +892,11 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     assert.equal(baseline.rust_fil_proofs_head, commit);
     assert.equal(baseline.rust_fil_proofs_commit_source, "image manifest");
     assert.equal(baseline.completed_runs, 1);
+    const lowerLimit = run(commit, {
+      BENCH_ZIGZAG_FULL_MEMORY_BYTES: "42949672960",
+      DEVNET_TEST_EXPECTED_MEMORY_BYTES: "42949672960",
+    });
+    assert.equal(lowerLimit.status, 0, lowerLimit.stderr);
     const mismatch = run("b".repeat(40));
     assert.notEqual(mismatch.status, 0);
     assert.match(mismatch.stderr, /used a different ZigZag image or source/);
@@ -920,6 +927,12 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
   ];
   try {
     await mkdir(dirname(apiPath), { recursive: true });
+    const parametersPath = join(source, "storage-proofs-porep/src/zigzag/parameters.rs");
+    const compoundPath = join(source, "storage-proofs-porep/src/zigzag/circuit/compound.rs");
+    await mkdir(dirname(compoundPath), { recursive: true });
+    await writeFile(parametersPath, "pub struct CompactParameters;\npub enum ZigZagParameters {}\n");
+    const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
+    await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
     for (const missing of [null, ...apis]) {
       await writeFile(apiPath, apis.map((api) =>
         `${api === missing ? "// " : ""}pub fn ${api}<T>() {}\n`).join(""));
@@ -933,6 +946,13 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
         assert.notEqual(result.status, 0);
         assert.ok(result.stderr.includes(`lacks required API ${missing}`), result.stderr);
       }
+    }
+    await writeFile(apiPath, apis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
+    for (const missing of compactApis) {
+      await writeFile(compoundPath, compactApis.map((api) => `${api === missing ? "// " : ""}pub fn ${api}<T>() {}\n`).join(""));
+      const result = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, new RegExp(`required compact parameter API ${missing}`));
     }
   } finally {
     await rm(source, { recursive: true, force: true });
@@ -1894,7 +1914,7 @@ elif [[ "$1" == run && "$*" != *'--entrypoint sh'* ]]; then
 elif [[ "$1" == inspect ]]; then
   [[ "$DEVNET_TEST_SCENARIO" != inspect-unavailable ]] || exit 1
   oom=true; [[ "$DEVNET_TEST_SCENARIO" != killed ]] || oom=false
-  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":85899345920,"memory_swap_limit_bytes":85899345920}\\n' "$oom"
+  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":64424509440,"memory_swap_limit_bytes":64424509440}\\n' "$oom"
 elif [[ "$1" == rm ]]; then
   run_dir="$(cat "$DEVNET_TEST_RUN_DIRECTORY_FILE")"
   [[ -s "$run_dir/prewarm-container.json" ]] || exit 97
@@ -1905,6 +1925,7 @@ fi
       const result = spawnSync("bash", [join(fixture.root, "scripts/bench-proof-micro.sh"), "zigzag", "2kib", "prewarm-only"], {
         encoding: "utf8", timeout: 30_000,
         env: { ...process.env, PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
+          BENCH_ZIGZAG_SETUP_MEMORY_BYTES: "", BENCH_ZIGZAG_SETUP_BUDGET_BYTES: "",
           DEVNET_TEST_COMMAND_LOG: fixture.commandLog, DEVNET_TEST_RUN_DIRECTORY_FILE: directoryFile,
           DEVNET_TEST_TELEMETRY_FIXTURE: rawFixture, DEVNET_TEST_SCENARIO: scenario },
       });
@@ -1913,7 +1934,7 @@ fi
       assert.ok(reportPath, result.stderr);
       const report = JSON.parse(await readFile(reportPath, "utf8"));
       assert.equal(report.status, "failed");
-      assert.equal(report.failure.exit_code, 137);
+      assert.equal(report.failure.exit_code, 137, result.stderr);
       assert.equal(report.failure.last_setup_phase, "setup_eval_aux");
       assert.equal(report.benchmark, null);
       assert.equal(report.diagnostics.telemetry_complete, false);
@@ -1921,6 +1942,8 @@ fi
       const log = await readFile(fixture.commandLog, "utf8");
       const prewarm = log.split("\n").find((line) => line.includes("<--cidfile>"));
       assert.ok(prewarm);
+      assert.match(prewarm, /<--memory> <64424509440> <--memory-swap> <64424509440>/);
+      assert.match(prewarm, /<FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=53687091200>/);
       assert.doesNotMatch(prewarm, /<--rm>/);
       if (scenario === "inspect-unavailable") {
         assert.equal(report.derived.docker_oom_killed, null);

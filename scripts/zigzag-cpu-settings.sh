@@ -32,6 +32,9 @@ zigzag_emit_integer() {
 
 zigzag_bench_cpu_environment() {
   local name value
+  value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
+  case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"
   zigzag_emit_integer RAYON_NUM_THREADS "${BENCH_RAYON_NUM_THREADS:-${RAYON_NUM_THREADS:-auto}}" auto 4096 || return
   zigzag_emit_integer EC_GPU_NUM_THREADS "${BENCH_EC_GPU_NUM_THREADS:-${EC_GPU_NUM_THREADS:-auto}}" auto 4096 || return
   for name in USE_PARENT_CACHE MULTICORE_ENCODE ENCODE_AFFINITY PARENT_CACHE_DONTNEED TREE_R_DONTNEED; do

@@ -10,8 +10,12 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`9c954a9cae2ddc61110848fc348b92d04dddba36`. This revision adds bounded encode
-parent-record buffers, opt-in TreeR/parent-cache DONTNEED advice, affinity
+`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`. This revision includes
+[compact Groth16 parameter indices](zigzag-compact-parameters.md), C2
+parameter/query/batch measurement boundaries, memory-cache VK repair, cache
+recovery after panics, consistent Groth16 circuit/batch boundaries in both API
+paths and a separate native Supraseal path. It retains bounded encode parent-record buffers,
+opt-in TreeR/parent-cache DONTNEED advice, affinity
 diagnostics and optional `zigzag-sha-asm`. Buffering and advice default to off.
 It retains optional TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
 report per-phase CPU, sampled memory and timing in the full cycle. Ordinary
@@ -30,6 +34,7 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Validated TreeD import | `zigzag_pre_commit_phase1_with_tree_d` |
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
+| Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
 
 These are unconditional parts of the dedicated adapter. There are no Cargo
 features, `FFI_USE_*` switches or Docker build arguments for disabling them.

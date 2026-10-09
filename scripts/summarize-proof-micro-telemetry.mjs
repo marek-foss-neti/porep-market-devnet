@@ -48,6 +48,10 @@ function windowMetrics(samples, start, end) {
     average_cpu_cores: wall > 0 && cpu !== null ? cpu / wall : null,
     measurement_scope: "whole_process_during_interval",
     sampling: samplingQuality(samples),
+    boundary_snapshots: {
+      before: start ? { elapsed_ms: start.elapsed_ms, process: start.process, cgroup: start.cgroup } : null,
+      after: end ? { elapsed_ms: end.elapsed_ms, process: end.process, cgroup: end.cgroup } : null,
+    },
   };
 }
 
@@ -70,6 +74,7 @@ function operationSummaries(samples) {
         const operation = operations.get(event.id);
         if (!operation || operation.end) fail(`unmatched operation end: ${event.id}`);
         if (operation.event.name !== event.name || operation.event.layer !== event.layer ||
+            JSON.stringify(operation.event.details ?? null) !== JSON.stringify(event.details ?? null) ||
             typeof event.completed !== "boolean") fail(`operation metadata changed: ${event.id}`);
         operation.end = sample;
       }
@@ -93,6 +98,7 @@ function operationSummaries(samples) {
     id: event.id,
     name: event.name,
     layer: event.layer,
+    details: event.details ?? null,
     parent_phase: start.phase,
     parent_phase_id: start.phase_id ?? null,
     completed: end?.operation.completed ?? null,

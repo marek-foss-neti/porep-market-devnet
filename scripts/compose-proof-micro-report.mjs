@@ -83,6 +83,21 @@ export function parseCpuDiagnostics(raw) {
   });
 }
 
+export function parseParameterDiagnostics(raw) {
+  return raw.split(/\r?\n/).flatMap((line, index) => {
+    let message = line;
+    try {
+      const envelope = JSON.parse(line);
+      message = envelope.message ?? envelope.msg ?? line;
+    } catch {}
+    const match = String(message).match(/\bzigzag_parameters (\{.*\})\s*$/);
+    if (!match) return [];
+    try {
+      return [{ ...JSON.parse(match[1]), source: "stderr.log", line_number: index + 1 }];
+    } catch { return []; }
+  });
+}
+
 export function composeReport({
   mode,
   benchmark,
@@ -105,6 +120,7 @@ export function composeReport({
       end_elapsed_ms: phase.end_elapsed_ms ?? window?.end_elapsed_ms ?? null,
       completed: phase.completed ?? window?.completed ?? null,
       measurement_scope: "whole_process_during_interval",
+      boundary_snapshots: window?.boundary_snapshots ?? null,
       ...memoryMetrics(window, numeric(phase.max_rss_bytes), telemetry.sampling_interval_ms),
     };
   });
@@ -121,12 +137,22 @@ export function composeReport({
     benchmark,
     cpu_configuration: benchmark.cpu_configuration ?? null,
     cpu_diagnostics: measuredLog === null ? [] : parseCpuDiagnostics(measuredLog),
+    parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? provenance.invocation.parameter_loader ?? null,
+    allocator_configuration: benchmark.cpu_configuration?.allocator_configuration ?? provenance.invocation.allocator_configuration ?? null,
+    memory_budget: {
+      memory_limit_bytes: telemetry.overall.cgroup.memory_max_bytes ?? provenance.invocation.memory_limit_bytes ?? null,
+      swap_limit_bytes: telemetry.overall.cgroup.swap_max_bytes ?? provenance.invocation.swap_limit_bytes ?? null,
+      scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
+    },
+    groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
     telemetry,
     prewarm,
     prewarm_telemetry: prewarmTelemetry,
     provenance,
     phases,
     pc1_suboperations: pc1Suboperations,
+    c2_suboperations: (telemetry.operations ?? []).filter((operation) => operation.name.startsWith("groth16_"))
+      .map((operation) => ({ ...operation, ...memoryMetrics(operation) })),
     auxiliary_c2_timings: auxiliary.length ? auxiliary : null,
     measurement_units: { wall_ms: "milliseconds", cpu_ms: "process CPU milliseconds", average_cpu_cores: "logical cores; 1 = one fully occupied core", memory: "bytes", elapsed_ms: "milliseconds since telemetry session start" },
     measurement_semantics: {
@@ -199,6 +225,21 @@ export function renderPhaseMarkdown(report) {
       `Encode: affinity=${cpu.encode_affinity}, producers=${value(cpu.encode_producers)}, stride=${value(cpu.encode_stride)}, lookahead=${value(cpu.encode_lookahead)}. Parent cache=${cpu.parent_cache}, requested mmap window=${value(cpu.parent_cache_window_nodes)} nodes.`, "",
       `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
       "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
+  }
+  if (report.parameter_loader || report.c2_suboperations?.length) {
+    lines.push("", "## Groth16 parameters and batch memory", "",
+      "Loader: " + (report.parameter_loader ?? "unavailable") + ". Effective container RAM limit: " + value(report.memory_budget?.memory_limit_bytes) + " B; swap limit: " + value(report.memory_budget?.swap_limit_bytes) + " B.", "",
+      "Allocator configuration: " + JSON.stringify(report.allocator_configuration ?? null) + ".",
+      "Before/after process anon/file RSS, cgroup counters, I/O and PSI are recorded in boundary_snapshots in report.json. The batch end is after Bellperson releases circuits/query builders. Remaining RSS is not a measurement of free allocator memory.",
+      "groth16_c2 measures circuit/batch proving in both API paths. Parameter loading, vanilla proving/validation, API-level VK lookup and final seal-proof serialization are outside this operation; the enclosing benchmark phase still includes them.", "", ...header);
+    for (const operation of report.c2_suboperations ?? []) {
+      lines.push(row(operation.name + " id=" + operation.id + " " + JSON.stringify(operation.details ?? {}), operation));
+    }
+    lines.push("", "| Loader | Query index metadata B | Legacy index elements B | Parameter file B |", "| --- | ---: | ---: | ---: |");
+    for (const layout of report.groth16_parameters ?? []) {
+      if (layout.kind === "layout") lines.push("| " + layout.loader + " | " + layout.index_metadata_bytes + " | " + layout.legacy_index_element_bytes + " | " + layout.file_bytes + " |");
+    }
+    lines.push("", "Per-family point counts, encoded/decoded sizes and decode times are in groth16_parameters. Query index sizes exclude VK, decoded points and mmap/page cache. Nested or overlapping operations are not added to C2 or sealing totals.");
   }
   return `${lines.join("\n")}\n`;
 }

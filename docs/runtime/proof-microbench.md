@@ -3,6 +3,8 @@
 Dedicated ZigZag pool, affinity, parent-cache, residency and build controls are
 documented in [CPU tuning](zigzag-cpu-tuning.md). Experimental buffering and
 DONTNEED remain off until full remote acceptance.
+The ZigZag Groth16 loader, C2/query/batch boundaries and interrupted-run reports
+are documented in [compact parameters](zigzag-compact-parameters.md).
 
 `just bench-proof-micro` runs the proof code path without Curio scheduling,
 HarmonyDB, chain message waits, or HTTP retrieval. It is meant to explain where
@@ -47,19 +49,20 @@ time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
 Full ZigZag runs for `512mib` and `32gib` limit both their prewarm and measured
-containers to 85,899,345,920 bytes (80 GiB) of RAM, with swap disabled. Override
+containers to 64,424,509,440 bytes (60 GiB) of RAM by default, with swap disabled. Override
 this with `BENCH_ZIGZAG_FULL_MEMORY_BYTES`. The full-run prewarm inherits the same
 limit as sealing, C2 and unseal. Standalone `prewarm-only` uses
-`BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same 80 GiB default. The remote 32 GiB run
+`BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same 60 GiB default. Both overrides
+retain the global ceiling of 80 GiB. The remote 32 GiB run
 `2026-09-29T21-03-21-645Z-bench-proof-micro-zigzag-32gib` completed successfully
 with seal verification and raw-unseal byte comparison passing, no OOM events
 or OOM kills, and zero swap usage. Its kernel cgroup memory peak reached the
 effective limit of 109,999,996,928 bytes (approximately 102.45 GiB), corresponding
 to the former 110 GB limit. This validates that historical run at its configured
 limit; it does not establish memory headroom or guarantee success with the
-current 80 GiB default or concurrent runs.
-The default setup allocation budget is 70 GiB
-(`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=75161927680`); it checks an allocation lower
+current 60 GiB default or concurrent runs.
+The default setup allocation budget is 50 GiB
+(`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=53687091200`); it checks an allocation lower
 bound and is not a runtime memory limit.
 
 The full runner generates the deterministic input on demand and checks unsealed
@@ -146,7 +149,8 @@ parameters in `.cache/zigzag-512-parameters`, or the directory selected by
 Normal and split Curio precommit use the same instrumented Rust paths through
 the dedicated FFI. The observer is only installed by the benchmark; ordinary
 Curio workers do not start this benchmark sampler. Existing source and overlay
-digests include these changes without a new capability flag.
+digests include the measurement changes. Dedicated builds also require the
+compact Groth16 API and record the `zigzagCompactParameters` capability.
 
 Lightweight report checks, without proof generation or Git staging, run with:
 
@@ -155,14 +159,17 @@ npm --prefix tools run test:measurements
 bash scripts/static-checks.sh
 ```
 
-Rust builds, proof tests and full benchmark acceptance run only on the
-authorized remote machine in `~/filecoin/porep-market-devnet`. The lock now pins
-the measurement observer and CPU/cache controls at
-`9c954a9cae2ddc61110848fc348b92d04dddba36`.
+Image builds, full PoRep tests and benchmark acceptance run only on the
+authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
+tests are authorized for the compact parameter implementation. The lock pins
+the measurement observer, CPU/cache controls and compact Groth16 parameters at
+`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`, including cache recovery after
+panics and consistent Groth16 circuit/batch boundaries in both API paths.
 Fetch the managed sources after updating the lock, then rebuild both dedicated
 images. For development, an isolated source copy inside this repository can be
 selected with `DEVNET_RUST_FIL_PROOFS_SOURCE` for the builds and run. Include
-`storage-proofs-porep/src/zigzag/measurements.rs` and `cache_policy.rs` in that copy.
+`storage-proofs-porep/src/zigzag/measurements.rs`, `cache_policy.rs` and the new
+`parameters.rs` module in that copy, together with its API/cache/compound changes.
 The existing image
 manifest records its content digest. Local report
 checks do not establish proof correctness or telemetry overhead for the new

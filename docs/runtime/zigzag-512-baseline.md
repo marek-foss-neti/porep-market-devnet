@@ -20,7 +20,9 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`9c954a9cae2ddc61110848fc348b92d04dddba36`, including CPU/cache tuning controls.
+`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`, including CPU/cache tuning controls,
+compact Groth16 parameter indices, cache recovery after panics and corrected
+Groth16 operation boundaries.
 Fetch that revision into the remote machine's managed sources before building.
 Then run:
 
@@ -48,10 +50,12 @@ cache. Parameter preparation and loading are recorded separately from the
 measured cycle and remain visible in each report.
 
 The full-run prewarm and measured cycle, including sealing, C2 and unseal,
-default to 80 GiB (85,899,345,920 bytes) with no additional swap. The wrapper
+default to 60 GiB (64,424,509,440 bytes) with no additional swap. The wrapper
 passes `BENCH_ZIGZAG_FULL_MEMORY_BYTES` to the full runner; an explicit override
 changes the limit for both containers. The separate setup command also defaults
-to 80 GiB. Its 70 GiB setup allocation budget remains below the container limit.
+to 60 GiB. Its 50 GiB setup allocation budget remains below the container limit.
+Explicit container-limit overrides remain capped at 80 GiB. The 60 GiB default
+is a configured budget, not a measured guarantee that the full run fits.
 
 Each run checks the effective setup before parameter generation, then verifies
 that the full run used the same cache identifier and profile. It requires a

@@ -174,6 +174,7 @@ struct UnsealOnlySummary {
 #[derive(Debug, Serialize)]
 struct ParamPrewarmSummary {
     schema_version: u8,
+    cpu_configuration: Option<serde_json::Value>,
     backend: Backend,
     sector_size_label: String,
     sector_size_bytes: u64,
@@ -268,7 +269,16 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "parent_cache": SETTINGS.use_zigzag_parent_cache,
         "parent_cache_window_nodes": SETTINGS.zigzag_parent_cache_size,
         "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
-        "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary"
+        "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary",
+        "parameter_loader": storage_proofs_porep_zigzag::zigzag::parameters::ParameterLoader::from_env()?,
+        "allocator_configuration": {
+            "scope": "existing allocator; no tuning applied",
+            "MALLOC_ARENA_MAX": std::env::var("MALLOC_ARENA_MAX").ok(),
+            "MALLOC_TRIM_THRESHOLD_": std::env::var("MALLOC_TRIM_THRESHOLD_").ok(),
+            "MALLOC_MMAP_THRESHOLD_": std::env::var("MALLOC_MMAP_THRESHOLD_").ok(),
+            "GLIBC_TUNABLES": std::env::var("GLIBC_TUNABLES").ok(),
+            "LD_PRELOAD": std::env::var("LD_PRELOAD").ok()
+        }
     }))
 }
 
@@ -291,7 +301,7 @@ fn main() -> Result<()> {
             set_operation_observer, OperationBoundary,
         };
         set_operation_observer(|event| {
-            microbench_telemetry::record_operation(
+            microbench_telemetry::record_operation_with_details(
                 event.id,
                 event.name,
                 event.layer,
@@ -299,6 +309,9 @@ fn main() -> Result<()> {
                     OperationBoundary::Start => None,
                     OperationBoundary::End { completed } => Some(completed),
                 },
+                event
+                    .details
+                    .and_then(|details| serde_json::to_value(details).ok()),
             );
         })
         .map_err(|_| anyhow::anyhow!("ZigZag operation observer already installed"))?;
@@ -591,6 +604,11 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
     }
     let summary = ParamPrewarmSummary {
         schema_version: 1,
+        cpu_configuration: if matches!(args.backend, Backend::ZigZag) {
+            Some(cpu_configuration(args.sector_size_bytes)?)
+        } else {
+            None
+        },
         backend: args.backend,
         sector_size_label: args.sector_size_label.clone(),
         sector_size_bytes: args.sector_size_bytes,

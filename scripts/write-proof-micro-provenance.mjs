@@ -133,6 +133,8 @@ function selectedEnvironment() {
     "BENCH_RAYON_NUM_THREADS",
     "BENCH_EC_GPU_NUM_THREADS",
     "BENCH_ZIGZAG_USE_PARENT_CACHE",
+    "BENCH_ZIGZAG_PARAMETER_LOADER",
+    "FIL_PROOFS_ZIGZAG_PARAMETER_LOADER",
     "BENCH_ZIGZAG_MULTICORE_ENCODE",
     "BENCH_ZIGZAG_ENCODE_AFFINITY",
     "BENCH_ZIGZAG_ENCODE_PRODUCERS",
@@ -168,6 +170,11 @@ export function buildProvenance({
   benchmarkSummaryPath,
 }) {
   const imageManifest = JSON.parse(readFileSync(imageManifestPath, "utf8"));
+  let benchmark = {};
+  // Failed containers may leave empty or interrupted stdout. Keep provenance
+  // available and preserve that artifact's hash without inventing a result.
+  try { benchmark = JSON.parse(readFileSync(benchmarkSummaryPath, "utf8")); } catch {}
+  const telemetry = JSON.parse(readFileSync(telemetrySummaryPath, "utf8"));
   if (!/^[0-9a-f]{40}$/.test(imageManifest.rustFilProofsCommit ?? "")) {
     fail("image manifest has no valid rust-fil-proofs commit");
   }
@@ -222,6 +229,10 @@ export function buildProvenance({
       finished_unix_ms: Number(finishedUnixMs),
       outer_wall_ms: Number(finishedUnixMs) - Number(startedUnixMs),
       environment: selectedEnvironment(),
+      parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? null,
+      allocator_configuration: benchmark.cpu_configuration?.allocator_configuration ?? null,
+      memory_limit_bytes: telemetry.overall?.cgroup?.memory_max_bytes ?? null,
+      swap_limit_bytes: telemetry.overall?.cgroup?.swap_max_bytes ?? null,
     },
     workspaces: {
       porep_market_devnet: gitState(repositoryRoot),
@@ -251,6 +262,7 @@ export function buildProvenance({
           tree_d_reuse: imageManifest.zigzagTreeDReuse,
           file_backed_unseal: imageManifest.zigzagFileBackedUnseal,
           c1_validation: imageManifest.zigzagC1Validation,
+          compact_parameters: imageManifest.zigzagCompactParameters ?? null,
         } : null,
       },
       image: filteredImageInspect(repositoryRoot, imageReference),

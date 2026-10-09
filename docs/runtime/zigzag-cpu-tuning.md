@@ -1,7 +1,6 @@
 # ZigZag CPU scheduling and cache residency
 
-This implements the CPU controls and optional cache experiments from Etap 1 of
-`PROMPT-PLAN-FAST-SEAL.md`. It keeps one complete `just bench-zigzag-512` run,
+This implements the CPU controls and optional cache experiments. It keeps one complete `just bench-zigzag-512` run,
 including a newly produced and validated C1, all C2 partitions, verify and unseal.
 No faster profile has been selected: Rust correctness tests, image builds and full
 performance comparisons still require the authorized remote machine. Encode
@@ -17,6 +16,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | --- | --- | --- |
 | `BENCH_RAYON_NUM_THREADS` | `RAYON_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
+| `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; 1–64, screen 1/2/3/4 |
@@ -71,8 +71,9 @@ private copies, retry and ENOSPC behavior remain. The active replica is never
 advised; unsupported systems retain normal residency.
 
 DONTNEED is advisory, not a RAM cap. Include C1 rereads and total sealing when
-deciding whether it helps. Full 512 MiB/32 GiB containers are capped at 80 GiB
-(85899345920 bytes), with memory-swap equal to memory; larger overrides fail.
+deciding whether it helps. Full 512 MiB/32 GiB containers default to 60 GiB
+(64424509440 bytes), with memory-swap equal to memory. Explicit overrides are
+capped at 80 GiB (85899345920 bytes); larger overrides fail.
 
 ## Curio and build variants
 
@@ -121,7 +122,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`9c954a9cae2ddc61110848fc348b92d04dddba36`, including the cache_policy module,
+`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`, including the cache_policy module,
 reader, encoder and feature. Fetch the updated managed sources and rebuild both
 dedicated images from the same source digest. For further uncommitted development,
 use an isolated copy selected by DEVNET_RUST_FIL_PROOFS_SOURCE; never edit managed
@@ -158,5 +159,3 @@ Local checks: `npm --prefix tools run test:cpu-settings`,
 `npm --prefix tools run test:measurements`, shell/Node syntax, Rust formatting
 and locked offline Cargo metadata. Mock workers/Docker and small report data
 do not establish PoRep correctness or speedup. No remote result is claimed.
-
-Suggested manual commit: `feat: tune ZigZag CPU scheduling and cache residency`.
