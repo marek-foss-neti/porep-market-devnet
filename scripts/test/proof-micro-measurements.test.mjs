@@ -203,9 +203,12 @@ test("Groth16 query and batch boundaries retain sizes, anon/file RSS, cgroup I/O
     JSON.stringify({ message: `zigzag_parameters ${JSON.stringify(decoded)}` }) + "\nzigzag_parameters {broken";
   assert.deepEqual(parseParameterDiagnostics(logs).map(({ source, line_number, ...entry }) => entry), [layout, decoded]);
   const result = report(telemetry, [{ name: "commit_phase2_groth16", phase_id: 1, wall_ms: 50, cpu_ms: 120 }], {
-    benchmark: { phases: [{ name: "commit_phase2_groth16", phase_id: 1, wall_ms: 50, cpu_ms: 120 }], cpu_configuration: { parameter_loader: "compact", allocator_configuration: { tuning_applied: false } } }, measuredLog: logs,
+    benchmark: { phases: [{ name: "commit_phase2_groth16", phase_id: 1, wall_ms: 50, cpu_ms: 120 }], cpu_configuration: { parameter_loader: "compact", allocator_configuration: { scope: "existing allocator; no tuning applied", MALLOC_ARENA_MAX: "4" } } }, measuredLog: logs,
   });
   assert.equal(result.parameter_loader, "compact");
+  assert.equal(result.allocator_configuration.MALLOC_ARENA_MAX, "4");
+  assert.doesNotMatch(result.allocator_configuration.scope, /no tuning applied/);
+  assert.deepEqual(result.benchmark.cpu_configuration.allocator_configuration, result.allocator_configuration);
   assert.deepEqual(result.memory_budget.memory_limit_bytes, 85899345920);
   assert.equal(result.memory_budget.swap_limit_bytes, 0);
   assert.equal(result.derived.sealing_wall_ms, 50);
@@ -262,7 +265,7 @@ test("interrupted full C2 records OOM, partial query metadata and missing batch 
     writeFileSync(path("telemetry.ndjson"), JSON.stringify(entry) + "\n{interrupted");
     writeFileSync(path("summary.json"), "");
     writeFileSync(path("manifest.json"), "{}"); // Exercise unavailable provenance diagnostics, too.
-    const cpu = { parameter_loader: "compact", allocator_configuration: { tuning_applied: false } };
+    const cpu = { parameter_loader: "compact", allocator_configuration: { scope: "existing allocator; no tuning applied", MALLOC_ARENA_MAX: "4" } };
     writeFileSync(path("stderr.log"), `ZigZag CPU configuration: ${JSON.stringify(cpu)}\nINFO storage_proofs_porep::zigzag::parameters > zigzag_parameters {"kind":"layout","loader":"compact","index_metadata_bytes":120}\n`);
     const result = writeFailureReport({ mode: "full", outputPath: path("report.json"), repositoryRoot: directory, imageManifestPath: path("manifest.json"), imageReference: "fixture", backend: "zigzag", sectorSize: "512mib", startedUnixMs: "1000", finishedUnixMs: "2000", exitCode: "137", containerPath: path("container.json"), rawTelemetryPath: path("telemetry.ndjson"), stdoutPath: path("summary.json"), stderrPath: path("stderr.log"), phasePath: "-" });
     assert.equal(result.status, "failed");
@@ -274,6 +277,9 @@ test("interrupted full C2 records OOM, partial query metadata and missing batch 
     assert.equal(result.c2_suboperations[0].boundary_coverage, "missing_end");
     assert.equal(result.c2_suboperations[0].boundary_snapshots.after, null);
     assert.equal(result.parameter_loader, "compact");
+    assert.equal(result.allocator_configuration.MALLOC_ARENA_MAX, "4");
+    assert.doesNotMatch(result.allocator_configuration.scope, /no tuning applied/);
+    assert.deepEqual(result.provenance.invocation.allocator_configuration, result.allocator_configuration);
     assert.equal(result.provenance.invocation.memory_limit_bytes, 85899345920);
     assert.equal(result.provenance.invocation.swap_limit_bytes, 0);
     assert.equal(result.provenance.invocation.docker_memory_swap_limit_bytes, 85899345920);

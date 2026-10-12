@@ -28,6 +28,33 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | Wrapper emits `FIL_PROOFS_ZIGZAG_GROTH16_BATCH_SIZE` | 1 for 512 MiB/32 GiB; screen 1/2 |
+| `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | Wrapper emits `MALLOC_ARENA_MAX` | Unset; explicit 1–256, diagnostic candidate 4 |
+
+The allocator override applies only to dedicated ZigZag benchmark containers
+(prewarm and full run). It needs no image rebuild, does not inherit host
+`MALLOC_ARENA_MAX`, and does not change Curio, SDR or host services. Keep it unset
+for the allocator baseline. Reports record the requested override and the
+container-reported environment. These fields are not measurements of arena count
+or free allocator memory. The report writer corrects the older binary's static
+"no tuning applied" description; raw `summary.json`/stderr retain the original
+binary output. Do not declare a lower memory budget validated before all
+partitions, proof verification and unseal have completed.
+
+ZigZag's compact parameter loader decodes each query family into one initialized
+destination vector, filling its slots in parallel. This avoids the temporary
+vectors and final merge used by Rayon's parallel `Result<Vec<_>>` collection
+([upstream implementation](https://raw.githubusercontent.com/rayon-rs/rayon/v1.10.0/src/result.rs),
+[vector collection](https://raw.githubusercontent.com/rayon-rs/rayon/v1.10.0/src/iter/extend.rs)).
+The Bellperson `Arc<Vec<Affine>>` interface and checked/unchecked point validation
+are preserved. This allocation change is independent of `MALLOC_ARENA_MAX`;
+limiting arenas alone is not sufficient evidence that repeated C2 batches fit.
+
+Dedicated ZigZag benchmark containers use `--oom-score-adj=1000`, making the
+disposable benchmark a preferred victim if the shared host exhausts memory.
+The final container JSON records this value. This applies to prewarm and full
+benchmark containers, not Curio or SDR, and does not reserve host RAM or replace
+the cgroup limit. Leave headroom for other services; a late user-space monitor
+cannot guarantee recovery once the host is already thrashing.
 
 `auto` resolves inside the container before static settings or pools initialize.
 The runner uses its process's available parallelism. Rayon and ec-gpu are separate
@@ -122,9 +149,10 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`, including the cache_policy module,
-reader, encoder and feature. Fetch the updated managed sources and rebuild both
-dedicated images from the same source digest. For further uncommitted development,
+`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including the cache_policy module,
+reader, encoder, feature and direct Groth16 query decoding. Fetch the updated
+managed sources and rebuild both dedicated images from the same source digest.
+For further uncommitted development,
 use an isolated copy selected by DEVNET_RUST_FIL_PROOFS_SOURCE; never edit managed
 checkouts.
 

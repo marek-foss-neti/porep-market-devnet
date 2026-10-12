@@ -174,12 +174,21 @@ docker_common_args=(
 )
 if [[ "${backend}" == "zigzag" ]]; then
   source "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh"
+  # This is a disposable benchmark on a shared host. Prefer it as an OOM
+  # victim over unrelated services; cgroup memory limits still apply.
+  docker_common_args+=(--oom-score-adj 1000)
   # Capture validation failures before constructing docker argv. A host export alone
   # does not reach either the prewarm or measured container.
   zigzag_cpu_environment="$(zigzag_bench_cpu_environment)"
   while IFS= read -r setting; do
     docker_common_args+=(-e "${setting}")
   done <<<"${zigzag_cpu_environment}"
+  # Explicit, process-local allocator experiment. Do not inherit allocator
+  # settings from the host or change SDR / other services.
+  if [[ -n "${BENCH_ZIGZAG_MALLOC_ARENA_MAX+x}" ]]; then
+    zigzag_malloc_arena_max="$(zigzag_cpu_setting BENCH_ZIGZAG_MALLOC_ARENA_MAX "${BENCH_ZIGZAG_MALLOC_ARENA_MAX}" 1 256)"
+    docker_common_args+=(-e "MALLOC_ARENA_MAX=${zigzag_malloc_arena_max}")
+  fi
   docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
@@ -242,7 +251,7 @@ bench_measured_exit() {
     container_id="$(cat "${measured_cidfile}")"
   fi
   if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] &&
-    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}}}' \
+    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}},"oom_score_adj":{{json .HostConfig.OomScoreAdj}}}' \
       "${container_id}" > "${container_json}.temporary" 2>> "${stderr_log}"; then
     mv -- "${container_json}.temporary" "${container_json}"
     captured=1
@@ -299,7 +308,7 @@ bench_prewarm_exit() {
     container_id="$(cat "${measured_cidfile}")"
   fi
   if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] &&
-    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}}}' \
+    docker inspect --format '{"id":{{json .Id}},"state":{{json .State}},"memory_limit_bytes":{{json .HostConfig.Memory}},"memory_swap_limit_bytes":{{json .HostConfig.MemorySwap}},"oom_score_adj":{{json .HostConfig.OomScoreAdj}}}' \
       "${container_id}" > "${container_json}.temporary" 2>> "${prewarm_stderr_log}"; then
     mv -- "${container_json}.temporary" "${container_json}"
     captured=1

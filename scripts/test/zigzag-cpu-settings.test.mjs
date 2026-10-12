@@ -47,18 +47,30 @@ test("native variables and benchmark overrides reach explicit docker -e argument
     BENCH_ZIGZAG_USE_PARENT_CACHE: "0", BENCH_ZIGZAG_PARENT_BUFFER_NODES: "32768",
     BENCH_ZIGZAG_TREE_R_DONTNEED: "true",
     FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "compact", BENCH_ZIGZAG_PARAMETER_LOADER: "mapped",
+    BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4",
   }, ["zigzag"]);
   assert.equal(result.status, 0, result.stderr);
   const args = result.stdout.split("\0").filter(Boolean);
+  assert.equal(args[args.indexOf("--oom-score-adj") + 1], "1000");
+  assert.ok(args.includes("MALLOC_ARENA_MAX=4"));
+  assert.equal(args[args.indexOf("MALLOC_ARENA_MAX=4") - 1], "-e");
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped"));
   assert.equal(args[args.indexOf("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped") - 1], "-e");
   for (const setting of ["RAYON_NUM_THREADS=6", "EC_GPU_NUM_THREADS=8", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY=0", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS=3", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE=17", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD=2048", "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0", "FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES=32768", "FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED=1"]) {
     assert.ok(args.includes(setting), setting);
     assert.equal(args[args.indexOf(setting) - 1], "-e");
   }
-  const stacked = shell(code, { RAYON_NUM_THREADS: "12", BENCH_ZIGZAG_TREE_R_DONTNEED: "1" }, ["stacked"]);
+  const stacked = shell(code, { RAYON_NUM_THREADS: "12", BENCH_ZIGZAG_TREE_R_DONTNEED: "1", BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4" }, ["stacked"]);
   assert.equal(stacked.status, 0, stacked.stderr);
   assert.equal(stacked.stdout.replaceAll("\0", ""), "");
+  const unchanged = shell(code, { MALLOC_ARENA_MAX: "2" }, ["zigzag"]);
+  assert.equal(unchanged.status, 0, unchanged.stderr);
+  assert.ok(!unchanged.stdout.includes("MALLOC_ARENA_MAX="));
+  for (const value of ["", "0", "257", "auto", "-1", "4 extra"]) {
+    const invalid = shell(code + '; printf "UNEXPECTED_SUCCESS"', { BENCH_ZIGZAG_MALLOC_ARENA_MAX: value }, ["zigzag"]);
+    assert.notEqual(invalid.status, 0, value);
+    assert.ok(!invalid.stdout.includes("UNEXPECTED_SUCCESS"));
+  }
 });
 
 test("invalid CPU settings fail before docker argv is constructed", () => {

@@ -98,6 +98,19 @@ export function parseParameterDiagnostics(raw) {
   });
 }
 
+export function normalizeCpuConfiguration(configuration) {
+  if (configuration?.allocator_configuration?.scope !== "existing allocator; no tuning applied") return configuration ?? null;
+  return {
+    ...configuration,
+    allocator_configuration: {
+      ...configuration.allocator_configuration,
+      // Older binaries say "no tuning applied" even when their environment
+      // fields contain overrides. Preserve the values, not that stale claim.
+      scope: "container process environment; allocator implementation, effective arena count and retained free memory require separate diagnostics",
+    },
+  };
+}
+
 export function composeReport({
   mode,
   benchmark,
@@ -107,6 +120,9 @@ export function composeReport({
   prewarmTelemetry,
   measuredLog = null,
 }) {
+  if (benchmark.cpu_configuration) {
+    benchmark = { ...benchmark, cpu_configuration: normalizeCpuConfiguration(benchmark.cpu_configuration) };
+  }
   const nativePhases = Array.isArray(benchmark.phases) ? benchmark.phases : [];
   const phases = nativePhases.map((phase) => {
     const window = phase.phase_id != null

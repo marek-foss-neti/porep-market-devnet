@@ -20,9 +20,9 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`6a1291c60fad974d2195f9bfd8fd63be606ba2d4`, including CPU/cache tuning controls,
-compact Groth16 parameter indices, cache recovery after panics and corrected
-Groth16 operation boundaries.
+`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including CPU/cache tuning controls,
+compact Groth16 parameter indices, direct query decoding into one destination
+vector, cache recovery after panics and corrected Groth16 operation boundaries.
 Fetch that revision into the remote machine's managed sources before building.
 Then run:
 

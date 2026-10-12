@@ -2,7 +2,7 @@
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { composeReport, parseParameterDiagnostics, renderPhaseMarkdown } from "./compose-proof-micro-report.mjs";
+import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, renderPhaseMarkdown } from "./compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "./summarize-proof-micro-telemetry.mjs";
 import { buildProvenance } from "./write-proof-micro-provenance.mjs";
 
@@ -84,6 +84,7 @@ export function writeFailureReport(options) {
   let cpu = null;
   const configuration = measuredLog.match(/ZigZag CPU configuration: (\{[^\n]*\})/);
   if (configuration) { try { cpu = JSON.parse(configuration[1]); } catch {} }
+  cpu = normalizeCpuConfiguration(cpu);
   provenance.invocation.parameter_loader = cpu?.parameter_loader ?? null;
   provenance.invocation.allocator_configuration = cpu?.allocator_configuration ?? null;
   provenance.invocation.memory_limit_bytes = container?.memory_limit_bytes ?? telemetry.summary?.overall.cgroup.memory_max_bytes ?? null;

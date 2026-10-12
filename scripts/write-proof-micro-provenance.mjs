@@ -5,6 +5,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { normalizeCpuConfiguration } from "./compose-proof-micro-report.mjs";
 
 function fail(message) {
   throw new Error(`proof microbenchmark provenance: ${message}`);
@@ -134,6 +135,7 @@ function selectedEnvironment() {
     "BENCH_EC_GPU_NUM_THREADS",
     "BENCH_ZIGZAG_USE_PARENT_CACHE",
     "BENCH_ZIGZAG_PARAMETER_LOADER",
+    "BENCH_ZIGZAG_MALLOC_ARENA_MAX",
     "FIL_PROOFS_ZIGZAG_PARAMETER_LOADER",
     "BENCH_ZIGZAG_MULTICORE_ENCODE",
     "BENCH_ZIGZAG_ENCODE_AFFINITY",
@@ -230,7 +232,7 @@ export function buildProvenance({
       outer_wall_ms: Number(finishedUnixMs) - Number(startedUnixMs),
       environment: selectedEnvironment(),
       parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? null,
-      allocator_configuration: benchmark.cpu_configuration?.allocator_configuration ?? null,
+      allocator_configuration: normalizeCpuConfiguration(benchmark.cpu_configuration)?.allocator_configuration ?? null,
       memory_limit_bytes: telemetry.overall?.cgroup?.memory_max_bytes ?? null,
       swap_limit_bytes: telemetry.overall?.cgroup?.swap_max_bytes ?? null,
     },
