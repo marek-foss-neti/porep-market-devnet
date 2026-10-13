@@ -5,14 +5,17 @@ including a newly produced and validated C1, all C2 partitions, verify and unsea
 No faster profile has been selected: Rust correctness tests, image builds and full
 performance comparisons still require the authorized remote machine. Encode
 defaults remain affinity on, two producers, stride 128 and lookahead 4096.
-Record buffering and both DONTNEED options default to off.
+Record buffering and both DONTNEED options default to off in the general runner
+and Curio. `just bench-zigzag-512` applies its own
+[comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
+options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 60 GiB RAM.
 
 ## Runtime controls
 
 The wrapper passes settings explicitly with Docker `-e` to both prewarm and
 measured processes. Native variables are supported; `BENCH_*` takes precedence.
 
-| Benchmark variable | Native variable | Default / permitted values |
+| Benchmark variable | Native variable | General runner default / permitted values |
 | --- | --- | --- |
 | `BENCH_RAYON_NUM_THREADS` | `RAYON_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
@@ -33,7 +36,8 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 The allocator override applies only to dedicated ZigZag benchmark containers
 (prewarm and full run). It needs no image rebuild, does not inherit host
 `MALLOC_ARENA_MAX`, and does not change Curio, SDR or host services. Keep it unset
-for the allocator baseline. Reports record the requested override and the
+in the general runner for the allocator baseline; `just bench-zigzag-512`
+supplies `4` unless explicitly overridden. Reports record the requested override and the
 container-reported environment. These fields are not measurements of arena count
 or free allocator memory. The report writer corrects the older binary's static
 "no tuning applied" description; raw `summary.json`/stderr retain the original
@@ -181,7 +185,8 @@ just bench-zigzag-512
 Reuse BENCH_ZIGZAG_512_PARAMETER_DIR. Preserve baseline reports, cache state,
 cpuset, hardware and filesystem evidence. Accept variants only with correct
 commitments/proof/unseal, memory headroom and improvement in the target phase
-and total sealing beyond noise. Candidate defaults stay off until acceptance.
+and total sealing beyond noise. The `zigzag-512` comparison preset above has
+been selected; other candidate defaults require separate acceptance.
 
 Local checks: `npm --prefix tools run test:cpu-settings`,
 `npm --prefix tools run test:measurements`, shell/Node syntax, Rust formatting

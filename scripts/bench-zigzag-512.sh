@@ -50,8 +50,16 @@ fi
 reports=()
 for repetition in 1; do
   printf 'zigzag-512 baseline repetition %s/1\n' "${repetition}" >&2
+  # Keep the accepted comparison preset explicit in the runner's provenance.
+  # BENCH_* overrides allow deliberate A/B runs, including disabling cache advice.
   output="$(
     BENCH_PROOF_MICRO_PROFILE=zigzag-512 \
+    BENCH_ZIGZAG_PARENT_BUFFER_NODES="${BENCH_ZIGZAG_PARENT_BUFFER_NODES:-32768}" \
+    BENCH_ZIGZAG_PARENT_CACHE_DONTNEED="${BENCH_ZIGZAG_PARENT_CACHE_DONTNEED:-1}" \
+    BENCH_ZIGZAG_TREE_R_DONTNEED="${BENCH_ZIGZAG_TREE_R_DONTNEED:-1}" \
+    BENCH_ZIGZAG_MALLOC_ARENA_MAX="${BENCH_ZIGZAG_MALLOC_ARENA_MAX-4}" \
+    BENCH_ZIGZAG_PARAMETER_LOADER="${BENCH_ZIGZAG_PARAMETER_LOADER-compact}" \
+    BENCH_ZIGZAG_GROTH16_BATCH_SIZE="${BENCH_ZIGZAG_GROTH16_BATCH_SIZE:-1}" \
     BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}" \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \

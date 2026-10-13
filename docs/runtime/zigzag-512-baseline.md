@@ -32,6 +32,36 @@ just build
 just bench-zigzag-512
 ```
 
+`just bench-zigzag-512` applies the following comparison preset automatically:
+
+| Variable | Default |
+| --- | --- |
+| `BENCH_ZIGZAG_PARENT_BUFFER_NODES` | `32768` |
+| `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `1` |
+| `BENCH_ZIGZAG_TREE_R_DONTNEED` | `1` |
+| `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | `4` |
+| `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
+| `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
+| `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `64424509440` (60 GiB) |
+
+These are the settings used by the three successful full runs on the remote
+machines on 12 October 2026. Use this preset for comparisons of subsequent
+optimizations. The wrapper passes the values explicitly to the full runner,
+which records them in provenance and reports effective configuration in JSON/MD.
+Applicable settings also reach its prewarm container.
+
+Explicit `BENCH_*` values override the preset for deliberate experiments; `0`
+disables parent buffering or either DONTNEED option. For these settings, the
+profile's `BENCH_*` defaults take precedence over inherited native
+`FIL_PROOFS_*` variables. The preset belongs to this command, not the general
+`bench-proof-micro` command or Curio. For an allocator reference without an arena
+override, use the general runner with `BENCH_PROOF_MICRO_PROFILE=zigzag-512` and
+`BENCH_ZIGZAG_MALLOC_ARENA_MAX` unset.
+
+Keep CPU pool settings, host load and parameter-cache state comparable as well;
+the preset does not fix the machine's hardware or available CPU count.
+Changing these script defaults requires no image rebuild.
+
 No sibling `../rust-fil-proofs` checkout is required. The baseline records the
 Rust commit from `.runtime/devnet/build/images.json`, identifying the code in the
 built image, and checks that the report uses that commit. Detailed

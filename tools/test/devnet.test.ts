@@ -838,7 +838,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /Proof backend benchmark comparison/);
 });
 
-test("zigzag-512 baseline records the image revision without a sibling checkout", async () => {
+test("zigzag-512 baseline passes the comparison preset and overrides and records the image revision", async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
   const imageManifest = join(fixture.root, ".runtime/devnet/build/zigzag-microbench-images.json");
@@ -855,6 +855,12 @@ printf '%s\\n' '${"d".repeat(40)}'
     await writeFile(join(fixture.root, "scripts/bench-proof-micro.sh"), `#!/usr/bin/env bash
 set -euo pipefail
 [[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-64424509440}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_PARENT_BUFFER_NODES" == "\${DEVNET_TEST_EXPECTED_PARENT_BUFFER_NODES:-32768}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_PARENT_CACHE_DONTNEED" == "\${DEVNET_TEST_EXPECTED_PARENT_CACHE_DONTNEED:-1}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_MALLOC_ARENA_MAX" == "\${DEVNET_TEST_EXPECTED_MALLOC_ARENA_MAX:-4}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
 touch "$run_dir/summary.md"
 manifest="$DEVNET_TEST_ROOT/.runtime/devnet/build/zigzag-microbench-images.json"
@@ -869,12 +875,15 @@ jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_di
 ' > "$run_dir/report.json"
 printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
 `);
+    const cleanBenchEnv = Object.fromEntries(Object.entries(process.env).filter(
+      ([name]) => !/^(BENCH_|FIL_PROOFS_|DEVNET_TEST_)/.test(name),
+    ));
     const run = (reportCommit: string, overrides: Record<string, string> = {}) => spawnSync(
       "bash", [join(fixture.root, "scripts/bench-zigzag-512.sh")], {
         encoding: "utf8",
         timeout: 30_000,
         env: {
-          ...process.env,
+          ...cleanBenchEnv,
           PATH: `${fixture.stubBin}:${process.env.PATH ?? ""}`,
           DEVNET_TEST_ROOT: fixture.root,
           DEVNET_TEST_COMMAND_LOG: fixture.commandLog,
@@ -897,6 +906,16 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
       DEVNET_TEST_EXPECTED_MEMORY_BYTES: "42949672960",
     });
     assert.equal(lowerLimit.status, 0, lowerLimit.stderr);
+    const changedSettings: Record<string, string> = {};
+    for (const [setting, value] of Object.entries({
+      PARENT_BUFFER_NODES: "0", PARENT_CACHE_DONTNEED: "0", TREE_R_DONTNEED: "0",
+      MALLOC_ARENA_MAX: "2", PARAMETER_LOADER: "mapped", GROTH16_BATCH_SIZE: "2",
+    })) {
+      changedSettings[`BENCH_ZIGZAG_${setting}`] = value;
+      changedSettings[`DEVNET_TEST_EXPECTED_${setting}`] = value;
+    }
+    const changed = run(commit, changedSettings);
+    assert.equal(changed.status, 0, changed.stderr);
     const mismatch = run("b".repeat(40));
     assert.notEqual(mismatch.status, 0);
     assert.match(mismatch.stderr, /used a different ZigZag image or source/);
