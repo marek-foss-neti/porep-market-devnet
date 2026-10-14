@@ -480,3 +480,18 @@ test("benchmark shell appends the canonical phase table and preserves existing t
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("per-C2 query cache reservations and hits remain inspectable in JSON and Markdown", () => {
+  const entries = [
+    { kind: "query_cache", scope: "one_c2", config: { requested_bytes: 4294967296, reserve_bytes: 60129542144, memory_limit_bytes: 64424509440, effective_bytes: 4294967296 }, reserved_bytes: 3209931744, selected_families: ["b_g1"] },
+    { kind: "query_cache_access", family: "b_g1", outcome: "miss_retained" },
+    { kind: "query_cache_access", family: "b_g1", outcome: "hit" },
+    { kind: "query_cache_access", family: "b_g1", outcome: "hit" },
+  ];
+  const log = entries.map((entry) => `zigzag_parameters ${JSON.stringify(entry)}`).join("\n");
+  assert.deepEqual(parseParameterDiagnostics(log).map(({source, line_number, ...entry}) => entry), entries);
+  const markdown = renderPhaseMarkdown({ phases: [], derived: {}, auxiliary_c2_timings: null, pc1_suboperations: [], c2_suboperations: [], parameter_loader: "compact", groth16_parameters: entries });
+  assert.match(markdown, /"effective_bytes":4294967296/);
+  assert.match(markdown, /\| b_g1 \| 2 \| 1 \| 0 \|/);
+  assert.match(markdown, /do not imply an additive wall-time saving/);
+});

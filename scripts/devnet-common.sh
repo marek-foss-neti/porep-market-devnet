@@ -951,6 +951,10 @@ devnet_require_zigzag_apis() {
     grep -Eq "^[[:space:]]*pub fn ${api}[<(]" "${compound}" ||
       devnet_die "ZigZag source lacks required compact parameter API ${api}"
   done
+  local query_cache="${source}/storage-proofs-porep/src/zigzag/parameters/query_cache.rs"
+  [[ -f "${query_cache}" && ! -L "${query_cache}" ]] &&
+    grep -Eq '^pub struct QueryCacheConfig' "${query_cache}" ||
+    devnet_die "ZigZag source lacks the bounded C2 query cache; select the implementation source until its commit is pinned"
 }
 
 devnet_rust_fil_proofs_content_sha256() {

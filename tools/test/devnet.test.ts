@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "36a70955c1f8e7196aa6b836dc20711d0c2cf1af";
+const rustFilProofsSourceCommit = "5a41d59feaf041933a9ebfdf2bbc5d621136ea4f";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -860,6 +860,8 @@ set -euo pipefail
 [[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_MALLOC_ARENA_MAX" == "\${DEVNET_TEST_EXPECTED_MALLOC_ARENA_MAX:-4}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-0}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES:-60129542144}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
 touch "$run_dir/summary.md"
@@ -895,6 +897,9 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     );
     const result = run(commit);
     assert.equal(result.status, 0, result.stderr);
+    assert.equal(run(commit, { FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" }).status, 0);
+    const queryCache = run(commit, { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "4294967296", DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES: "4294967296" });
+    assert.equal(queryCache.status, 0, queryCache.stderr);
     const baselinePath = result.stdout.match(/^zigzag-512 baseline: (.+)$/m)?.[1];
     assert.ok(baselinePath);
     const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
@@ -950,6 +955,9 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const compoundPath = join(source, "storage-proofs-porep/src/zigzag/circuit/compound.rs");
     await mkdir(dirname(compoundPath), { recursive: true });
     await writeFile(parametersPath, "pub struct CompactParameters;\npub enum ZigZagParameters {}\n");
+    const queryCachePath = join(source, "storage-proofs-porep/src/zigzag/parameters/query_cache.rs");
+    await mkdir(dirname(queryCachePath), { recursive: true });
+    await writeFile(queryCachePath, "pub struct QueryCacheConfig;\n");
     const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
     await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
     for (const missing of [null, ...apis]) {
@@ -973,6 +981,11 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, new RegExp(`required compact parameter API ${missing}`));
     }
+    await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
+    await rm(queryCachePath);
+    const oldSource = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+    assert.notEqual(oldSource.status, 0);
+    assert.match(oldSource.stderr, /lacks the bounded C2 query cache/);
   } finally {
     await rm(source, { recursive: true, force: true });
   }

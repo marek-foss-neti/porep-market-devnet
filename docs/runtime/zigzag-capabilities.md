@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`. This revision includes
+`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -18,6 +18,9 @@ recovery after panics, consistent Groth16 circuit/batch boundaries in both API
 paths and a separate native Supraseal path. It retains bounded encode parent-record buffers,
 opt-in TreeR/parent-cache DONTNEED advice, affinity
 diagnostics and optional `zigzag-sha-asm`. Buffering and advice default to off.
+The revision also includes the optional [per-C2 query cache](zigzag-query-cache.md),
+corrected cgroup-v2 root-limit detection and circuit-preparation measurements.
+Query retention defaults to off.
 It retains optional TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
 report per-phase CPU, sampled memory and timing in the full cycle. Ordinary
 Curio workers leave the measurement observer unset. It retains shared-L3 CPU
@@ -36,6 +39,7 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
+| Bounded per-C2 query cache, disabled by default | `parameters/query_cache.rs`, `QueryCacheConfig` |
 
 These are unconditional parts of the dedicated adapter. There are no Cargo
 features, `FFI_USE_*` switches or Docker build arguments for disabling them.

@@ -21,6 +21,11 @@ merge of parallel `Result<Vec<_>>` collection. This still materializes the full
 query family; it is not a streaming MSM source. Query decoding, FFT and MSM
 still require substantial memory.
 
+An optional [per-C2 query adapter](zigzag-query-cache.md) can now retain selected
+decoded families between batches. It is separate from this loader and defaults
+to off. With retention enabled, batch return releases the prover's builders,
+while the adapter retains selected points until the enclosing C2 call returns.
+
 Ordinary `zigzag_prove` and split `zigzag_commit_phase2` use the new source and
 the existing Bellperson batch prover. Dedicated FFI/Curio reaches these APIs
 without changing their external signatures. The ZigZag parameter cache uses
@@ -76,8 +81,8 @@ comparison requires separate processes. Standard SDR does not receive it.
 The existing memory/swap contract stays in place: Docker memory-swap equals
 memory, meaning no additional swap. A lower explicit RAM limit is supported;
 the default is 60 GiB and the global ceiling for explicit overrides stays 80 GiB.
-This default was lowered at the user's request; fitting the full workload at
-60 GiB remains unconfirmed by a benchmark.
+The full 512 MiB workload subsequently passed at this default in the three
+2026-10-12 runs described below; this does not establish a 32 GiB result.
 
 The full runner records `groth16_parameter_load`, `groth16_query_*`,
 `groth16_batch` and `groth16_c2` boundaries. Batch details identify the zero-based
@@ -114,11 +119,14 @@ successful benchmark, phase table, telemetry and provenance.
 
 ## Validation status and later measurement
 
-As of 2026-10-12, the loader has eight passing tests, a successful dedicated
-microbench image build and partial bench-512 measurements on the remote machine.
-A complete ten-partition seal/prove/verify/unseal run with this allocation fix
-has not passed yet. Neither the 55 GiB experimental limit nor the 60 GiB default
-is accepted as a validated full-run budget.
+As of 2026-10-13, the three recorded full bench-512 runs from 2026-10-12 in
+`.runtime/remote-runs/fidl-lab` and `.runtime/remote-runs/holland` passed all ten
+partitions, proof verification and unseal at 60 GiB, with the compact loader,
+batch 1 and `MALLOC_ARENA_MAX=4`. This validates the combined configuration for
+those runs; it does not isolate the allocator's contribution, validate 55 GiB,
+or establish a 32 GiB sector result. The earlier focused loader validation is
+described next; optional query-retention validation is tracked separately in
+[zigzag-query-cache.md](zigzag-query-cache.md).
 
 All eight loader tests passed on the remote machine with the dedicated image's
 pinned Rust 1.94 toolchain. They compare all families and splits against legacy
@@ -175,8 +183,9 @@ loader tests and microbench build used the pinned image toolchain. The remote
 image was built from an isolated development copy containing the allocation fix;
 the two changed Rust files match the newly pinned commit byte for byte. This
 does not establish that images have already been rebuilt from the new lock.
-An updated dedicated Curio image, actual Curio sealing and a full bench-512
-acceptance run with this fix remain pending. No result is extrapolated to 32 GiB.
+An updated dedicated Curio image and actual Curio sealing remain separate
+acceptance checks. The later full bench-512 results are recorded above; no
+result is extrapolated to 32 GiB.
 
 Remote bench-512 attempts on 2026-10-09 used the same profile and parameter file:
 
@@ -215,9 +224,11 @@ On a CUDA-enabled machine, check the Rust/API configuration with
 before claiming a validated native build.
 
 Devnet pins the committed implementation at
-`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including direct query decoding
+`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including direct query decoding
 into one initialized vector, cache recovery after panics and consistent Groth16
-circuit/batch boundaries. Fetch the managed sources before
+circuit/batch boundaries. It also includes the optional per-C2 query adapter
+with corrected cgroup-v2 root-limit detection and circuit-preparation measurements;
+retention defaults to off. Fetch the managed sources before
 rebuilding the dedicated images. Their build guard requires the compact API and
 manifests record `zigzagCompactParameters`.
 An isolated development copy must include the complete modified Rust source;
@@ -227,6 +238,7 @@ machine with ready parameters and sufficient host memory throughout the run.
 Record explicit allocator, batch and CPU settings; compare identical settings
 when evaluating the loader. Acceptance requires all ten partitions, proof
 verification and byte-for-byte unseal, plus memory, I/O, PSI, OOM and swap data.
-The 60 GiB default remains unconfirmed. No local benchmark or prewarm should be
+The 60 GiB default passed the recorded 512 MiB runs above; no 32 GiB result is
+established by those runs. No local benchmark or prewarm should be
 started, and diagnostic changes must remain unstaged for manual review; never
 stage files or create commits automatically.

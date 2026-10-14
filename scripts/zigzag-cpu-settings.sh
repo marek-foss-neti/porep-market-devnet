@@ -30,11 +30,21 @@ zigzag_emit_integer() {
   printf '%s=%s\n' "${name}" "${value}"
 }
 
+zigzag_cache_bytes() {
+  local name="$1" value="$2" minimum="$3"
+  [[ "${value}" =~ ^[0-9]{1,11}$ ]] || devnet_die "${name} must be an unsigned byte count"
+  value=$((10#${value}))
+  ((value >= minimum && value <= 64424509440)) || devnet_die "${name} must be between ${minimum} and 60 GiB"
+  printf '%s=%s\n' "${name}" "${value}"
+}
+
 zigzag_bench_cpu_environment() {
   local name value
   value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
   case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"
+  zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0 || return
+  zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-60129542144}}" 1 || return
   zigzag_emit_integer RAYON_NUM_THREADS "${BENCH_RAYON_NUM_THREADS:-${RAYON_NUM_THREADS:-auto}}" auto 4096 || return
   zigzag_emit_integer EC_GPU_NUM_THREADS "${BENCH_EC_GPU_NUM_THREADS:-${EC_GPU_NUM_THREADS:-auto}}" auto 4096 || return
   for name in USE_PARENT_CACHE MULTICORE_ENCODE ENCODE_AFFINITY PARENT_CACHE_DONTNEED TREE_R_DONTNEED; do

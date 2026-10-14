@@ -20,9 +20,12 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including CPU/cache tuning controls,
+`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
+It also includes the optional per-C2 query cache with corrected cgroup-v2
+root-limit detection and circuit-preparation measurements. Retention remains off
+in the default comparison preset.
 Fetch that revision into the remote machine's managed sources before building.
 Then run:
 
@@ -49,6 +52,12 @@ machines on 12 October 2026. Use this preset for comparisons of subsequent
 optimizations. The wrapper passes the values explicitly to the full runner,
 which records them in provenance and reports effective configuration in JSON/MD.
 Applicable settings also reach its prewarm container.
+
+The optional [Groth16 query cache](zigzag-query-cache.md) is explicitly off in
+this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`, with
+`BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144` (56 GiB allowance when
+retention is requested). It does not inherit a Curio cache setting from the
+host. An explicit benchmark override enables the experiment.
 
 Explicit `BENCH_*` values override the preset for deliberate experiments; `0`
 disables parent buffering or either DONTNEED option. For these settings, the

@@ -20,6 +20,8 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_RAYON_NUM_THREADS` | `RAYON_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
+| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 60 GiB |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | 60129542144 (56 GiB); positive allowance for uncached prover work |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; 1–64, screen 1/2/3/4 |
@@ -153,8 +155,10 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including the cache_policy module,
-reader, encoder, feature and direct Groth16 query decoding. Fetch the updated
+`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including the cache_policy module,
+reader, encoder, feature and direct Groth16 query decoding, plus the optional
+per-C2 query cache with corrected cgroup-v2 root-limit detection and
+circuit-preparation measurements. Query retention remains off by default. Fetch the updated
 managed sources and rebuild both dedicated images from the same source digest.
 For further uncommitted development,
 use an isolated copy selected by DEVNET_RUST_FIL_PROOFS_SOURCE; never edit managed

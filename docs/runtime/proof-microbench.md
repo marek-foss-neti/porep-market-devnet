@@ -163,14 +163,17 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`36a70955c1f8e7196aa6b836dc20711d0c2cf1af`, including direct query decoding
+`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
-consistent Groth16 circuit/batch boundaries in both API paths.
+consistent Groth16 circuit/batch boundaries in both API paths. It also includes
+the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and
+separate circuit-preparation measurements; query retention defaults to off.
 Fetch the managed sources after updating the lock, then rebuild both dedicated
 images. For development, an isolated source copy inside this repository can be
 selected with `DEVNET_RUST_FIL_PROOFS_SOURCE` for the builds and run. Include
 `storage-proofs-porep/src/zigzag/measurements.rs`, `cache_policy.rs` and the new
-`parameters.rs` module in that copy, together with its API/cache/compound changes.
+`parameters.rs` module and its `parameters/` submodules in that copy, together
+with its API/cache/compound changes.
 The existing image
 manifest records its content digest. Local report
 checks do not establish proof correctness or telemetry overhead for the new

@@ -271,6 +271,8 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
         "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary",
         "parameter_loader": storage_proofs_porep_zigzag::zigzag::parameters::ParameterLoader::from_env()?,
+        "query_cache_requested_bytes": std::env::var("FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES").ok(),
+        "query_cache_reserve_bytes": std::env::var("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES").ok(),
         "allocator_configuration": {
             "scope": "existing allocator; no tuning applied",
             "MALLOC_ARENA_MAX": std::env::var("MALLOC_ARENA_MAX").ok(),

@@ -27,6 +27,8 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.RAYON_NUM_THREADS, "auto");
   assert.equal(env.EC_GPU_NUM_THREADS, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_PARAMETER_LOADER, "compact");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES, "0");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES, "60129542144");
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS, "2");
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE, "128");
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD, "4096");
@@ -48,11 +50,16 @@ test("native variables and benchmark overrides reach explicit docker -e argument
     BENCH_ZIGZAG_TREE_R_DONTNEED: "true",
     FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "compact", BENCH_ZIGZAG_PARAMETER_LOADER: "mapped",
     BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4",
+    BENCH_ZIGZAG_QUERY_CACHE_BYTES: "4294967296",
+    FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: "0",
+    BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "60129542144",
   }, ["zigzag"]);
   assert.equal(result.status, 0, result.stderr);
   const args = result.stdout.split("\0").filter(Boolean);
   assert.equal(args[args.indexOf("--oom-score-adj") + 1], "1000");
   assert.ok(args.includes("MALLOC_ARENA_MAX=4"));
+  assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES=4294967296"));
+  assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144"));
   assert.equal(args[args.indexOf("MALLOC_ARENA_MAX=4") - 1], "-e");
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped"));
   assert.equal(args[args.indexOf("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped") - 1], "-e");
@@ -79,6 +86,10 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_ENCODE_AFFINITY: "maybe" }, { BENCH_ZIGZAG_ENCODE_PRODUCERS: "0" },
     { BENCH_ZIGZAG_ENCODE_STRIDE: "-1" }, { BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "1048576" },
     { BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262145" },
+    { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "64424509441" },
+    { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
+    { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "-1" },
+    { BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "0" },
     { BENCH_ZIGZAG_PARAMETER_LOADER: "unknown" }, { FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "" },
   ]) {
     const result = shell(settings + '; printf "UNEXPECTED_SUCCESS"', env);
@@ -107,6 +118,7 @@ test("compose applies CPU override only to ZigZag and passes settings to the Cur
     assert.match(override, /EC_GPU_NUM_THREADS: \$\{EC_GPU_NUM_THREADS:-auto\}/);
     assert.match(override, /FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: \$\{FIL_PROOFS_ZIGZAG_PARAMETER_LOADER:-compact\}/);
     assert.ok(!override.includes("lotus:"));
+    assert.match(override, /FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: \$\{FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES:-0\}/);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
 

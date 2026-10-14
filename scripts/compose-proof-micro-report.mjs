@@ -255,6 +255,18 @@ export function renderPhaseMarkdown(report) {
     for (const layout of report.groth16_parameters ?? []) {
       if (layout.kind === "layout") lines.push("| " + layout.loader + " | " + layout.index_metadata_bytes + " | " + layout.legacy_index_element_bytes + " | " + layout.file_bytes + " |");
     }
+    for (const cache of (report.groth16_parameters ?? []).filter((entry) => entry.kind === "query_cache")) {
+      lines.push("", "C2 query cache: " + JSON.stringify(cache) + ".");
+    }
+    const accesses = (report.groth16_parameters ?? []).filter((entry) => entry.kind === "query_cache_access");
+    if (accesses.length) {
+      lines.push("", "| Cached family | Hits | Retained misses | Capacity skips |", "| --- | ---: | ---: | ---: |");
+      for (const family of [...new Set(accesses.map((entry) => entry.family))]) {
+        const count = (outcome) => accesses.filter((entry) => entry.family === family && entry.outcome === outcome).length;
+        lines.push(`| ${family} | ${count("hit")} | ${count("miss_retained")} | ${count("skip_capacity")} |`);
+      }
+    }
+    lines.push("", "The query cache is local to one C2 and retains selected decoded families between batches. Its byte reservation is separate from the allowance for witness, FFT/MSM, other queries and file pages. A successful run does not establish an allocator-only saving. Query cache hit counts do not imply an additive wall-time saving.");
     lines.push("", "Per-family point counts, encoded/decoded sizes and decode times are in groth16_parameters. Query index sizes exclude VK, decoded points and mmap/page cache. Nested or overlapping operations are not added to C2 or sealing totals.");
   }
   return `${lines.join("\n")}\n`;
