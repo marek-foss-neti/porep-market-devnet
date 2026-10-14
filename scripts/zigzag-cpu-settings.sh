@@ -39,13 +39,20 @@ zigzag_cache_bytes() {
 }
 
 zigzag_bench_cpu_environment() {
-  local name value
+  local name value tree_builder pipeline
   value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
   case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"
   value="${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy}}"
   case "${value}" in binary|legacy) ;; *) devnet_die "ZigZag TreeR builder must be binary or legacy" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=%s\n' "${value}"
+  tree_builder="${value}"
+  pipeline="${BENCH_ZIGZAG_LAYER_PIPELINE-${FIL_PROOFS_ZIGZAG_LAYER_PIPELINE-sequential}}"
+  case "${pipeline}" in sequential|overlap|stream) ;; *) devnet_die "ZigZag layer pipeline must be sequential, overlap or stream" ;; esac
+  [[ "${pipeline}" == sequential || "${tree_builder}" == binary ]] || devnet_die "ZigZag layer pipeline requires the binary TreeR builder"
+  printf 'FIL_PROOFS_ZIGZAG_LAYER_PIPELINE=%s\n' "${pipeline}"
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_TREE_R_THREADS "${BENCH_ZIGZAG_TREE_R_THREADS-${FIL_PROOFS_ZIGZAG_TREE_R_THREADS-auto}}" auto 64 || return
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB "${BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB-${FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB-64}}" 1 64 || return
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0 || return
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-60129542144}}" 1 || return
   zigzag_emit_integer RAYON_NUM_THREADS "${BENCH_RAYON_NUM_THREADS:-${RAYON_NUM_THREADS:-auto}}" auto 4096 || return

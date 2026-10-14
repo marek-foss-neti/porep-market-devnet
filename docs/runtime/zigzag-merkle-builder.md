@@ -37,9 +37,10 @@ One scoped I/O thread receives completed ranges through a one-entry queue.
 It is joined on success, error and cancellation before file cleanup/publication.
 
 The leaf snapshot is independent of later writes to the replica. This is the
-boundary for future encoding/tree overlap; this implementation still completes
-each TreeR before starting the next encode. It creates no extra historical
-sector copy beside the leaves already retained in each TreeR.
+boundary used by the optional [layer pipeline](zigzag-layer-pipeline.md).
+Sequential mode completes each TreeR before starting the next encode; pipeline
+modes overlap immutable tree work with encoding. Neither creates an extra
+historical sector copy beside the leaves already retained in each TreeR.
 
 Positioned reads/writes avoid writable mmap in the specialized builder.
 Short transfers and EINTR are handled explicitly; ENOSPC, invalid field bytes
@@ -102,9 +103,11 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned in `versions.lock.yaml` at
-`b74a7fc073f67b5250604da40f371825ab0f0223`. Fetch the managed sources and rebuild
+`5fc76924a65213c73bf65b8c0c82bc7c6f394297`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.
+The pinned [layer-pipeline integration](zigzag-layer-pipeline.md) additionally
+requires `LayerPipelineConfig` and provides opt-in `overlap` and `stream` modes.
 For further uncommitted development, use an isolated source copy inside the
 devnet context selected by `DEVNET_RUST_FIL_PROOFS_SOURCE`; do not edit managed
 source checkouts. Keep all changes unstaged; never create commits automatically.

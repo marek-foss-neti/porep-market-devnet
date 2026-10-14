@@ -9,6 +9,9 @@ Record buffering and both DONTNEED options default to off in the general runner
 and Curio. `just bench-zigzag-512` applies its own
 [comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
 options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 60 GiB RAM.
+Optional [layer overlap and streaming snapshots](zigzag-layer-pipeline.md) use
+a separate bounded TreeR pool and snapshot buffers; the baseline remains
+sequential until full performance acceptance.
 
 ## Runtime controls
 
@@ -156,7 +159,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`b74a7fc073f67b5250604da40f371825ab0f0223`, including the cache_policy module,
+`5fc76924a65213c73bf65b8c0c82bc7c6f394297`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated

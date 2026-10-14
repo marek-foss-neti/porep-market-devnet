@@ -5,6 +5,9 @@ documented in [CPU tuning](zigzag-cpu-tuning.md). Experimental buffering and
 DONTNEED remain off until full remote acceptance.
 The ZigZag Groth16 loader, C2/query/batch boundaries and interrupted-run reports
 are documented in [compact parameters](zigzag-compact-parameters.md).
+Optional CPU TreeR/encode overlap and bounded streaming snapshots are described
+in [layer pipeline](zigzag-layer-pipeline.md), including their non-additive
+operation measurements and full-run comparison controls.
 
 `just bench-proof-micro` runs the proof code path without Curio scheduling,
 HarmonyDB, chain message waits, or HTTP retrieval. It is meant to explain where
@@ -166,7 +169,7 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`b74a7fc073f67b5250604da40f371825ab0f0223`, including direct query decoding
+`5fc76924a65213c73bf65b8c0c82bc7c6f394297`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
 consistent Groth16 circuit/batch boundaries in both API paths. It also includes
 the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and

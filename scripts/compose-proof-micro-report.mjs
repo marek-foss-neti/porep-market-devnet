@@ -91,6 +91,10 @@ export function parseMerkleDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_merkle (\{.*\})\s*$/);
 }
 
+export function parsePipelineDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_pipeline (\{.*\})\s*$/);
+}
+
 function parseJsonDiagnostics(raw, pattern) {
   return raw.split(/\r?\n/).flatMap((line, index) => {
     let message = line;
@@ -169,6 +173,7 @@ export function composeReport({
       scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
+    layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
@@ -236,6 +241,15 @@ export function renderPhaseMarkdown(report) {
     lines.push(row(`\`${operation.name}\` id=${operation.id}${operation.layer === null ? "" : ` layer=${operation.layer}`} (${operation.completed === null ? "incomplete" : operation.completed ? "completed" : "failed"})`, operation));
   }
   if (report.pc1_suboperations.length === 0) lines.push("", "PC1 suboperation measurements unavailable.");
+  if (report.layer_pipeline?.length) {
+    lines.push("", "Layer pipeline records (overlapping intervals are not additive to PC1):", "",
+      "| Layer | Mode | Tree threads | Pool bytes | Written bytes | Chunks | Capture ready ms |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+    for (const entry of report.layer_pipeline) {
+      lines.push(`| ${entry.layer ?? "all"} | ${entry.mode ?? "stream"} | ${entry.tree_threads ?? "unavailable"} | ${entry.pool_bytes ?? entry.snapshot_buffer_bytes ?? "unavailable"} | ${entry.written_bytes ?? "unavailable"} | ${entry.chunks ?? "unavailable"} | ${entry.capture_ready_ms ?? "unavailable"} |`);
+    }
+    lines.push("", "Stream TreeR intervals include capture during encoding. Capture-ready time includes encoding, capture and any backpressure; it is not an extra sealing phase. Pool and dirty-write limits exclude the active replica and clean page cache. Requested/effective worker counts, orientation and all scope notes are preserved in layer_pipeline in report.json.");
+  }
   if (report.tree_r_builds?.length) {
     lines.push("", "TreeR builder records (worker intervals overlap; do not add them to PC1 wall time):", "",
       "| Layer | Builder | Workers | Buffer bytes | Buffer allocations | Read ms | Convert ms | Hash/serialize ms | Write ms | Writeback submit ms |",

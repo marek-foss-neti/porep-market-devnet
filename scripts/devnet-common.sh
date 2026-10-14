@@ -959,6 +959,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${merkle_builder}" && ! -L "${merkle_builder}" ]] &&
     grep -Eq '^pub enum TreeRBuilder' "${merkle_builder}" ||
     devnet_die "ZigZag source lacks the binary TreeR builder; select the implementation source until its commit is pinned"
+  local layer_pipeline="${source}/storage-proofs-porep/src/zigzag/layer_pipeline.rs"
+  [[ -f "${layer_pipeline}" && ! -L "${layer_pipeline}" ]] &&
+    grep -Eq '^pub struct LayerPipelineConfig' "${layer_pipeline}" ||
+    devnet_die "ZigZag source lacks the bounded layer pipeline; select the implementation source until its commit is pinned"
 }
 
 devnet_rust_fil_proofs_content_sha256() {

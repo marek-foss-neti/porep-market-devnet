@@ -28,6 +28,9 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.EC_GPU_NUM_THREADS, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_PARAMETER_LOADER, "compact");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "legacy");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "sequential");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_THREADS, "auto");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB, "64");
   assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES, "0");
   assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES, "60129542144");
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS, "2");
@@ -95,6 +98,11 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "0" },
     { BENCH_ZIGZAG_TREE_R_BUILDER: "" }, { BENCH_ZIGZAG_TREE_R_BUILDER: "gpu" },
     { FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "" },
+    { BENCH_ZIGZAG_LAYER_PIPELINE: "stream" },
+    { BENCH_ZIGZAG_LAYER_PIPELINE: "" }, { BENCH_ZIGZAG_LAYER_PIPELINE: "unknown" },
+    { BENCH_ZIGZAG_TREE_R_THREADS: "0" }, { BENCH_ZIGZAG_TREE_R_THREADS: "65" },
+    { BENCH_ZIGZAG_TREE_R_THREADS: "" },
+    { BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB: "0" }, { BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB: "65" },
     { BENCH_ZIGZAG_PARAMETER_LOADER: "unknown" }, { FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "" },
   ]) {
     const result = shell(settings + '; printf "UNEXPECTED_SUCCESS"', env);
@@ -104,6 +112,20 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
   assert.equal(environment({ BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262144" }).FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES, "262144");
   assert.equal(environment({ BENCH_ZIGZAG_TREE_R_BUILDER: "binary" }).FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "binary");
   assert.equal(environment({ FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary" }).FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "binary");
+});
+
+test("layer pipeline selects independent overlap and stream variants with bounded resources", () => {
+  for (const mode of ["overlap", "stream"]) {
+    const env = environment({
+      FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary",
+      FIL_PROOFS_ZIGZAG_LAYER_PIPELINE: "sequential", BENCH_ZIGZAG_LAYER_PIPELINE: mode,
+      BENCH_ZIGZAG_TREE_R_THREADS: "5", BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB: "1",
+    });
+    assert.equal(env.FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, mode);
+    assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_THREADS, "5");
+    assert.equal(env.FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB, "1");
+  }
+  assert.equal(environment({ FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", FIL_PROOFS_ZIGZAG_LAYER_PIPELINE: "stream" }).FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "stream");
 });
 
 test("compose applies CPU override only to ZigZag and passes settings to the Curio service", () => {

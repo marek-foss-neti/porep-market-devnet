@@ -511,3 +511,17 @@ test("TreeR worker metrics survive plain and JSON logs without changing sealing 
   assert.match(markdown, /\| 3 \| legacy \| unavailable/);
   assert.match(markdown, /worker intervals overlap; do not add/);
 });
+
+test("layer pipeline records keep effective bounds and capture timing separate from sealing totals", () => {
+  const config = { mode: "stream", tree_threads: 5, snapshot_buffer_bytes: 1048576, dirty_bytes_per_store: 67108864 };
+  const capture = { layer: 1, written_bytes: 4096, chunks: 2, pool_bytes: 1048576, forward: false, state: "written" };
+  const raw = `zigzag_pipeline ${JSON.stringify(config)}\n${JSON.stringify({message: `zigzag_pipeline ${JSON.stringify(capture)}`})}`;
+  const telemetry = summarize([sample(0, 0, 100, "phase_start"), sample(1, 10, 120, "phase_end")]);
+  const result = report(telemetry, [{name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20}], {measuredLog: raw});
+  assert.equal(result.layer_pipeline.length, 2);
+  assert.equal(result.layer_pipeline[1].forward, false);
+  assert.equal(result.layer_pipeline[0].dirty_bytes_per_store, 67108864);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  assert.match(renderPhaseMarkdown(result), /\| all \| stream \| 5 \| 1048576/);
+  assert.match(renderPhaseMarkdown(result), /overlapping intervals are not additive/);
+});
