@@ -40,6 +40,8 @@ zigzag_cache_bytes() {
 
 zigzag_bench_cpu_environment() {
   local name value tree_builder pipeline
+  value="$(zigzag_cpu_bool FIL_PROOFS_ZIGZAG_ENCODE_PREHASH "${BENCH_ZIGZAG_ENCODE_PREHASH-${FIL_PROOFS_ZIGZAG_ENCODE_PREHASH-0}}")" || return
+  printf 'FIL_PROOFS_ZIGZAG_ENCODE_PREHASH=%s\n' "${value}"
   value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
   case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"

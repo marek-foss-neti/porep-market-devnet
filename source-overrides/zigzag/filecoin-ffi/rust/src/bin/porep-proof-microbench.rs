@@ -269,6 +269,7 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "parent_cache": SETTINGS.use_zigzag_parent_cache,
         "parent_cache_window_nodes": SETTINGS.zigzag_parent_cache_size,
         "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
+        "encode_prehash": storage_proofs_porep_zigzag::zigzag::encode_prehash::EncodePrehash::from_env()?,
         "layer_pipeline": storage_proofs_porep_zigzag::zigzag::layer_pipeline::LayerPipelineConfig::from_env()?,
         "tree_r_builder": storage_proofs_porep_zigzag::zigzag::merkle_builder::TreeRBuilder::from_env()?,
         "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary",

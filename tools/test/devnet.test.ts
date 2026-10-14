@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "5fc76924a65213c73bf65b8c0c82bc7c6f394297";
+const rustFilProofsSourceCommit = "1977b4edce2c27c019a3c302c595ad1adee59753";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -961,6 +961,8 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     await writeFile(queryCachePath, "pub struct QueryCacheConfig;\n");
     const merkleBuilderPath = join(source, "storage-proofs-porep/src/zigzag/merkle_builder.rs");
     await writeFile(merkleBuilderPath, "pub enum TreeRBuilder {}\n");
+    const encodePrehashPath = join(source, "storage-proofs-porep/src/zigzag/encode_prehash.rs");
+    await writeFile(encodePrehashPath, "pub struct EncodePrehash;\n");
     const layerPipelinePath = join(source, "storage-proofs-porep/src/zigzag/layer_pipeline.rs");
     await writeFile(layerPipelinePath, "pub struct LayerPipelineConfig;\n");
     const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
@@ -1001,6 +1003,11 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const missingPipeline = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
     assert.notEqual(missingPipeline.status, 0);
     assert.match(missingPipeline.stderr, /lacks the bounded layer pipeline/);
+    await writeFile(layerPipelinePath, "pub struct LayerPipelineConfig;\n");
+    await rm(encodePrehashPath);
+    const missingPrehash = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+    assert.notEqual(missingPrehash.status, 0);
+    assert.match(missingPrehash.stderr, /lacks the ZigZag encode prehash API/);
   } finally {
     await rm(source, { recursive: true, force: true });
   }

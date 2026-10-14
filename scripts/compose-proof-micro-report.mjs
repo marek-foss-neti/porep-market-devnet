@@ -91,6 +91,10 @@ export function parseMerkleDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_merkle (\{.*\})\s*$/);
 }
 
+export function parseEncodePrehashDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_encode_prehash (\{.*\})\s*$/);
+}
+
 export function parsePipelineDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_pipeline (\{.*\})\s*$/);
 }
@@ -173,6 +177,7 @@ export function composeReport({
       scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
+    encode_prehash: measuredLog === null ? [] : parseEncodePrehashDiagnostics(measuredLog),
     layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
@@ -241,6 +246,15 @@ export function renderPhaseMarkdown(report) {
     lines.push(row(`\`${operation.name}\` id=${operation.id}${operation.layer === null ? "" : ` layer=${operation.layer}`} (${operation.completed === null ? "incomplete" : operation.completed ? "completed" : "failed"})`, operation));
   }
   if (report.pc1_suboperations.length === 0) lines.push("", "PC1 suboperation measurements unavailable.");
+  if (report.encode_prehash?.length) {
+    lines.push("", "Encode feeder SHA preparation (one record per completed encode call):", "",
+      "| Enabled | Reversed | Nodes | Feeder SHA data blocks | Midstate ring bytes | Prefix-block histogram |",
+      "| --- | --- | ---: | ---: | ---: | --- |");
+    for (const entry of report.encode_prehash) {
+      lines.push(`| ${entry.enabled} | ${entry.reversed} | ${entry.nodes} | ${entry.feeder_sha_blocks} | ${entry.midstate_ring_bytes} | ${JSON.stringify(entry.prefix_blocks_histogram)} |`);
+    }
+    lines.push("", "Histogram index is the number of complete SHA data blocks prepared for a node. Padding remains on the consumer. Ring bytes cover midstate storage only (also reserved when disabled), excluding existing slot buffers and allocator overhead. These counters show work distribution, not a speedup; compare encode, PC1 and total sealing at the same limits.");
+  }
   if (report.layer_pipeline?.length) {
     lines.push("", "Layer pipeline records (overlapping intervals are not additive to PC1):", "",
       "| Layer | Mode | Tree threads | Pool bytes | Written bytes | Chunks | Capture ready ms |",

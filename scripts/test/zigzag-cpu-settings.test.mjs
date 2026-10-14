@@ -29,6 +29,7 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.FIL_PROOFS_ZIGZAG_PARAMETER_LOADER, "compact");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "legacy");
   assert.equal(env.FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "sequential");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_ENCODE_PREHASH, "0");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_THREADS, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB, "64");
   assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES, "0");
@@ -49,6 +50,7 @@ test("native variables and benchmark overrides reach explicit docker -e argument
   const result = shell(code, {
     RAYON_NUM_THREADS: "12", EC_GPU_NUM_THREADS: "8", BENCH_RAYON_NUM_THREADS: "6",
     BENCH_ZIGZAG_ENCODE_AFFINITY: "false", BENCH_ZIGZAG_ENCODE_PRODUCERS: "3",
+    FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: "0", BENCH_ZIGZAG_ENCODE_PREHASH: "true",
     BENCH_ZIGZAG_ENCODE_STRIDE: "17", BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "2048",
     BENCH_ZIGZAG_USE_PARENT_CACHE: "0", BENCH_ZIGZAG_PARENT_BUFFER_NODES: "32768",
     BENCH_ZIGZAG_TREE_R_DONTNEED: "true",
@@ -63,6 +65,7 @@ test("native variables and benchmark overrides reach explicit docker -e argument
   const args = result.stdout.split("\0").filter(Boolean);
   assert.equal(args[args.indexOf("--oom-score-adj") + 1], "1000");
   assert.ok(args.includes("MALLOC_ARENA_MAX=4"));
+  assert.ok(args.includes("FIL_PROOFS_ZIGZAG_ENCODE_PREHASH=1"));
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=legacy"));
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES=4294967296"));
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144"));
@@ -89,6 +92,8 @@ test("native variables and benchmark overrides reach explicit docker -e argument
 test("invalid CPU settings fail before docker argv is constructed", () => {
   for (const env of [
     { BENCH_RAYON_NUM_THREADS: "0" }, { BENCH_EC_GPU_NUM_THREADS: "4097" },
+    { BENCH_ZIGZAG_ENCODE_PREHASH: "" }, { BENCH_ZIGZAG_ENCODE_PREHASH: "2" },
+    { FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: "invalid" },
     { BENCH_ZIGZAG_ENCODE_AFFINITY: "maybe" }, { BENCH_ZIGZAG_ENCODE_PRODUCERS: "0" },
     { BENCH_ZIGZAG_ENCODE_STRIDE: "-1" }, { BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "1048576" },
     { BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262145" },
@@ -109,6 +114,7 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     assert.notEqual(result.status, 0, JSON.stringify(env));
     assert.ok(!result.stdout.includes("UNEXPECTED_SUCCESS"));
   }
+  assert.equal(environment({ FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: "on" }).FIL_PROOFS_ZIGZAG_ENCODE_PREHASH, "1");
   assert.equal(environment({ BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262144" }).FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES, "262144");
   assert.equal(environment({ BENCH_ZIGZAG_TREE_R_BUILDER: "binary" }).FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "binary");
   assert.equal(environment({ FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary" }).FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "binary");
@@ -147,6 +153,7 @@ test("compose applies CPU override only to ZigZag and passes settings to the Cur
     assert.match(override, /EC_GPU_NUM_THREADS: \$\{EC_GPU_NUM_THREADS:-auto\}/);
     assert.match(override, /FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: \$\{FIL_PROOFS_ZIGZAG_PARAMETER_LOADER:-compact\}/);
     assert.ok(!override.includes("lotus:"));
+    assert.match(override, /FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: \$\{FIL_PROOFS_ZIGZAG_ENCODE_PREHASH-0\}/);
     assert.match(override, /FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: \$\{FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES:-0\}/);
     assert.match(override, /FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: \$\{FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy\}/);
   } finally { rmSync(temporary, { recursive: true, force: true }); }

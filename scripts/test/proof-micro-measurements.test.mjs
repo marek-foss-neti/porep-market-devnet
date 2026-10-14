@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
-import { composeReport, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseEncodePrehashDiagnostics, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { writeFailureReport } from "../write-proof-micro-failure.mjs";
 
 function sample(sequence, elapsed, cpu, trigger = "interval", extra = {}) {
@@ -524,4 +524,22 @@ test("layer pipeline records keep effective bounds and capture timing separate f
   assert.equal(result.derived.sealing_wall_ms, 10);
   assert.match(renderPhaseMarkdown(result), /\| all \| stream \| 5 \| 1048576/);
   assert.match(renderPhaseMarkdown(result), /overlapping intervals are not additive/);
+});
+
+
+test("encode prehash diagnostics retain histogram and bounded state memory without adding timings", () => {
+  const record = { enabled: true, reversed: true, nodes: 16, feeder_sha_blocks: 31,
+    midstate_ring_bytes: 512, prefix_blocks_histogram: [1, 3, 10, 2] };
+  const line = `INFO storage_proofs_porep::zigzag::vanilla::vde > zigzag_encode_prehash ${JSON.stringify(record)}`;
+  const raw = line + "\nzigzag_encode_prehash {bad json}\n" + JSON.stringify({ message: line });
+  assert.equal(parseEncodePrehashDiagnostics(raw).length, 2);
+  const telemetry = summarize([sample(0, 0, 0, "phase_start"), sample(1, 10, 10, "phase_end", { phase_completed: true })]);
+  const result = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 10 }], { measuredLog: raw });
+  assert.deepEqual(result.encode_prehash[0].prefix_blocks_histogram, record.prefix_blocks_histogram);
+  assert.equal(result.encode_prehash[0].midstate_ring_bytes, 512);
+  const markdown = renderPhaseMarkdown(result);
+  assert.match(markdown, /Feeder SHA data blocks/);
+  assert.match(markdown, /\[1,3,10,2\]/);
+  assert.match(markdown, /not a speedup/);
+  assert.deepEqual(report(telemetry, []).encode_prehash, []);
 });

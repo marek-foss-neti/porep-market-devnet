@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`5fc76924a65213c73bf65b8c0c82bc7c6f394297`. This revision includes
+`1977b4edce2c27c019a3c302c595ad1adee59753`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -42,6 +42,7 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Bounded per-C2 query cache, disabled by default | `parameters/query_cache.rs`, `QueryCacheConfig` |
 | Bounded binary CPU TreeR builder and explicit reference path | `merkle_builder.rs`, `TreeRBuilder` |
 | Bounded layer overlap and streaming snapshots | `layer_pipeline.rs`, `LayerPipelineConfig` |
+| Bounded SHA prefix preparation in encode feeders | `encode_prehash.rs`, `EncodePrehash` |
 
 The pinned revision also includes the [binary TreeR builder](zigzag-merkle-builder.md),
 wired into the same PC1 path used by dedicated Curio. It remains opt-in:
@@ -52,6 +53,11 @@ The pinned revision also includes the [layer pipeline](zigzag-layer-pipeline.md)
 It offers `overlap` and `stream` through the same PC1 path, with bounded snapshot
 buffers, dirty writes and workers. The default remains `sequential` pending
 performance acceptance; no development-source override is required.
+
+The pinned revision also includes [encode prehash](zigzag-encode-prehash.md).
+Both dedicated build guards require `EncodePrehash`; no development-source
+override is required. Prefix preparation remains opt-in and disabled by default
+pending a full benchmark comparison.
 
 These are unconditional parts of the dedicated adapter. There are no Cargo
 features, `FFI_USE_*` switches or Docker build arguments for disabling them.

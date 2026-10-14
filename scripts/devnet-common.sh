@@ -959,6 +959,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${merkle_builder}" && ! -L "${merkle_builder}" ]] &&
     grep -Eq '^pub enum TreeRBuilder' "${merkle_builder}" ||
     devnet_die "ZigZag source lacks the binary TreeR builder; select the implementation source until its commit is pinned"
+  local encode_prehash="${source}/storage-proofs-porep/src/zigzag/encode_prehash.rs"
+  [[ -f "${encode_prehash}" && ! -L "${encode_prehash}" ]] &&
+    grep -Eq '^pub struct EncodePrehash' "${encode_prehash}" ||
+    devnet_die "selected Rust source lacks the ZigZag encode prehash API; fetch the updated pin or use an explicit development source"
   local layer_pipeline="${source}/storage-proofs-porep/src/zigzag/layer_pipeline.rs"
   [[ -f "${layer_pipeline}" && ! -L "${layer_pipeline}" ]] &&
     grep -Eq '^pub struct LayerPipelineConfig' "${layer_pipeline}" ||
