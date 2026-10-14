@@ -84,13 +84,21 @@ export function parseCpuDiagnostics(raw) {
 }
 
 export function parseParameterDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_parameters (\{.*\})\s*$/);
+}
+
+export function parseMerkleDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_merkle (\{.*\})\s*$/);
+}
+
+function parseJsonDiagnostics(raw, pattern) {
   return raw.split(/\r?\n/).flatMap((line, index) => {
     let message = line;
     try {
       const envelope = JSON.parse(line);
       message = envelope.message ?? envelope.msg ?? line;
     } catch {}
-    const match = String(message).match(/\bzigzag_parameters (\{.*\})\s*$/);
+    const match = String(message).match(pattern);
     if (!match) return [];
     try {
       return [{ ...JSON.parse(match[1]), source: "stderr.log", line_number: index + 1 }];
@@ -161,6 +169,7 @@ export function composeReport({
       scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
+    tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
     prewarm_telemetry: prewarmTelemetry,
@@ -227,6 +236,17 @@ export function renderPhaseMarkdown(report) {
     lines.push(row(`\`${operation.name}\` id=${operation.id}${operation.layer === null ? "" : ` layer=${operation.layer}`} (${operation.completed === null ? "incomplete" : operation.completed ? "completed" : "failed"})`, operation));
   }
   if (report.pc1_suboperations.length === 0) lines.push("", "PC1 suboperation measurements unavailable.");
+  if (report.tree_r_builds?.length) {
+    lines.push("", "TreeR builder records (worker intervals overlap; do not add them to PC1 wall time):", "",
+      "| Layer | Builder | Workers | Buffer bytes | Buffer allocations | Read ms | Convert ms | Hash/serialize ms | Write ms | Writeback submit ms |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (const build of report.tree_r_builds) {
+      const stats = build.stats ?? {};
+      const milliseconds = (name) => typeof stats[name] === "number" ? stats[name] / 1e6 : "unavailable";
+      lines.push(`| ${build.layer} | ${build.builder} | ${stats.workers ?? "unavailable"} | ${stats.buffer_bytes ?? "unavailable"} | ${stats.buffer_allocations ?? "unavailable"} | ${milliseconds("read_ns")} | ${milliseconds("conversion_ns")} | ${milliseconds("hash_serialize_ns")} | ${milliseconds("write_ns")} | ${milliseconds("writeback_submit_ns")} |`);
+    }
+    lines.push("", "Read/convert/hash/write are summed hash-worker intervals; writeback submit measures one I/O thread and overlaps hashing. Buffer counts cover builder-owned vectors only, excluding shared Poseidon constants, Rayon and file pages. Snapshot/preallocation, internal-node construction and final sync/reopen have separate operation boundaries above; their nested intervals are not additive to total TreeR. Byte counts and fallback reasons are preserved in tree_r_builds in report.json.");
+  }
   lines.push("", "Layer numbers are zero-based. Operation IDs, start/end intervals and overlaps are preserved in JSON. CPU and RAM cover the whole process during each operation; overlapping windows must not be summed or treated as exclusive worker usage.", "", "## Auxiliary C2 timers", "");
   if (report.auxiliary_c2_timings === null) lines.push("Bellperson synthesis/prover timers unavailable; full C2 remains in the phase table.");
   else {

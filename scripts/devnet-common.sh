@@ -955,6 +955,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${query_cache}" && ! -L "${query_cache}" ]] &&
     grep -Eq '^pub struct QueryCacheConfig' "${query_cache}" ||
     devnet_die "ZigZag source lacks the bounded C2 query cache; select the implementation source until its commit is pinned"
+  local merkle_builder="${source}/storage-proofs-porep/src/zigzag/merkle_builder.rs"
+  [[ -f "${merkle_builder}" && ! -L "${merkle_builder}" ]] &&
+    grep -Eq '^pub enum TreeRBuilder' "${merkle_builder}" ||
+    devnet_die "ZigZag source lacks the binary TreeR builder; select the implementation source until its commit is pinned"
 }
 
 devnet_rust_fil_proofs_content_sha256() {

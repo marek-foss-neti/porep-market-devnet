@@ -20,12 +20,15 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including CPU/cache tuning controls,
+`b74a7fc073f67b5250604da40f371825ab0f0223`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. Retention remains off
 in the default comparison preset.
+The pinned binary TreeR builder is available through
+`BENCH_ZIGZAG_TREE_R_BUILDER=binary`; the default remains `legacy` pending full
+performance acceptance.
 Fetch that revision into the remote machine's managed sources before building.
 Then run:
 
@@ -58,6 +61,11 @@ this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`, with
 `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144` (56 GiB allowance when
 retention is requested). It does not inherit a Curio cache setting from the
 host. An explicit benchmark override enables the experiment.
+
+The [binary TreeR builder](zigzag-merkle-builder.md) is also selected explicitly
+for its full comparison: `BENCH_ZIGZAG_TREE_R_BUILDER=binary just bench-zigzag-512`.
+The preset keeps `BENCH_ZIGZAG_TREE_R_BUILDER=legacy` until end-to-end acceptance;
+the other comparison settings above are unchanged.
 
 Explicit `BENCH_*` values override the preset for deliberate experiments; `0`
 disables parent buffering or either DONTNEED option. For these settings, the

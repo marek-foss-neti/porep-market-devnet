@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`. This revision includes
+`b74a7fc073f67b5250604da40f371825ab0f0223`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -40,6 +40,12 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
 | Bounded per-C2 query cache, disabled by default | `parameters/query_cache.rs`, `QueryCacheConfig` |
+| Bounded binary CPU TreeR builder and explicit reference path | `merkle_builder.rs`, `TreeRBuilder` |
+
+The pinned revision also includes the [binary TreeR builder](zigzag-merkle-builder.md),
+wired into the same PC1 path used by dedicated Curio. It remains opt-in:
+`legacy` is the default until full performance acceptance. The selector is a
+runtime comparison control, not a Cargo feature or a different adapter.
 
 These are unconditional parts of the dedicated adapter. There are no Cargo
 features, `FFI_USE_*` switches or Docker build arguments for disabling them.

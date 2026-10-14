@@ -189,7 +189,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     zigzag_malloc_arena_max="$(zigzag_cpu_setting BENCH_ZIGZAG_MALLOC_ARENA_MAX "${BENCH_ZIGZAG_MALLOC_ARENA_MAX}" 1 256)"
     docker_common_args+=(-e "MALLOC_ARENA_MAX=${zigzag_malloc_arena_max}")
   fi
-  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}"

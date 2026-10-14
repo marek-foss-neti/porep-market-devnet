@@ -43,6 +43,9 @@ zigzag_bench_cpu_environment() {
   value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
   case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"
+  value="${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy}}"
+  case "${value}" in binary|legacy) ;; *) devnet_die "ZigZag TreeR builder must be binary or legacy" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=%s\n' "${value}"
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0 || return
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-60129542144}}" 1 || return
   zigzag_emit_integer RAYON_NUM_THREADS "${BENCH_RAYON_NUM_THREADS:-${RAYON_NUM_THREADS:-auto}}" auto 4096 || return

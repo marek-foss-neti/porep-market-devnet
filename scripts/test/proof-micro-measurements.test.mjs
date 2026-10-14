@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
-import { composeReport, parseBellpersonTimings, parseParameterDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { writeFailureReport } from "../write-proof-micro-failure.mjs";
 
 function sample(sequence, elapsed, cpu, trigger = "interval", extra = {}) {
@@ -494,4 +494,20 @@ test("per-C2 query cache reservations and hits remain inspectable in JSON and Ma
   assert.match(markdown, /"effective_bytes":4294967296/);
   assert.match(markdown, /\| b_g1 \| 2 \| 1 \| 0 \|/);
   assert.match(markdown, /do not imply an additive wall-time saving/);
+});
+
+test("TreeR worker metrics survive plain and JSON logs without changing sealing totals", () => {
+  const entry = { builder: "binary", layer: 2, file_bytes: 1024,
+    stats: { workers: 2, buffer_bytes: 1280, buffer_allocations: 6, read_ns: 1000000, conversion_ns: 2000000, hash_serialize_ns: 3000000, write_ns: 4000000, writeback_submit_ns: 5000000 } };
+  const fallback = { builder: "legacy", layer: 3, reason: "explicit reference" };
+  const raw = `ignored zigzag_merkle broken\nzigzag_merkle ${JSON.stringify(entry)}\n${JSON.stringify({message: `zigzag_merkle ${JSON.stringify(fallback)}`})}`;
+  assert.deepEqual(parseMerkleDiagnostics(raw).map(({source, line_number, ...value}) => value), [entry, fallback]);
+  const telemetry = summarize([sample(0, 0, 100, "phase_start"), sample(1, 10, 120, "phase_end")]);
+  const result = report(telemetry, [{name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20}], {measuredLog: raw});
+  assert.equal(result.tree_r_builds.length, 2);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  const markdown = renderPhaseMarkdown(result);
+  assert.match(markdown, /\| 2 \| binary \| 2 \| 1280 \| 6 \| 1 \| 2 \| 3 \| 4 \| 5 \|/);
+  assert.match(markdown, /\| 3 \| legacy \| unavailable/);
+  assert.match(markdown, /worker intervals overlap; do not add/);
 });

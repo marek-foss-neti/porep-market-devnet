@@ -124,7 +124,10 @@ One average logical core means one fully occupied core. A zero wall time has
 `average_cpu_cores: null`; missing measurements are `null`, not fabricated zeros.
 
 `pc1_suboperations` records TreeD build (or imported TreeD copy/validation),
-encode and TreeR for each zero-based layer. The ZigZag Rust APIs emit optional
+encode and TreeR for each zero-based layer. The [binary TreeR builder](zigzag-merkle-builder.md)
+adds nested snapshot/build/sync intervals and `tree_r_builds` diagnostics with
+bounded-buffer counters and worker timings. These remain part of the same full
+benchmark and are not added to sealing totals a second time. The ZigZag Rust APIs emit optional
 operation boundaries, and the dedicated runner connects them to the same
 sampler. Periodic and synchronous boundary samples contribute to sampled phase
 peaks; their interval, counts and maximum gaps are recorded per window. A short
@@ -163,7 +166,7 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including direct query decoding
+`b74a7fc073f67b5250604da40f371825ab0f0223`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
 consistent Groth16 circuit/batch boundaries in both API paths. It also includes
 the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and

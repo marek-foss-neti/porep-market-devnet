@@ -32,6 +32,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_PARENT_BUFFER_NODES` | `FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES` | 0; 0–262144 per encode reader |
 | `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED` | 0; boolean |
+| `BENCH_ZIGZAG_TREE_R_BUILDER` | `FIL_PROOFS_ZIGZAG_TREE_R_BUILDER` | `legacy`; opt-in `binary`, see [bounded TreeR builder](zigzag-merkle-builder.md) for acceptance |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | Wrapper emits `FIL_PROOFS_ZIGZAG_GROTH16_BATCH_SIZE` | 1 for 512 MiB/32 GiB; screen 1/2 |
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | Wrapper emits `MALLOC_ARENA_MAX` | Unset; explicit 1–256, diagnostic candidate 4 |
 
@@ -155,7 +156,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`5a41d59feaf041933a9ebfdf2bbc5d621136ea4f`, including the cache_policy module,
+`b74a7fc073f67b5250604da40f371825ab0f0223`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated

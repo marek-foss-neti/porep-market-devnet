@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "5a41d59feaf041933a9ebfdf2bbc5d621136ea4f";
+const rustFilProofsSourceCommit = "b74a7fc073f67b5250604da40f371825ab0f0223";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -860,6 +860,7 @@ set -euo pipefail
 [[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_MALLOC_ARENA_MAX" == "\${DEVNET_TEST_EXPECTED_MALLOC_ARENA_MAX:-4}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_TREE_R_BUILDER" == "\${DEVNET_TEST_EXPECTED_TREE_R_BUILDER:-legacy}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-0}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES:-60129542144}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
@@ -958,6 +959,8 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const queryCachePath = join(source, "storage-proofs-porep/src/zigzag/parameters/query_cache.rs");
     await mkdir(dirname(queryCachePath), { recursive: true });
     await writeFile(queryCachePath, "pub struct QueryCacheConfig;\n");
+    const merkleBuilderPath = join(source, "storage-proofs-porep/src/zigzag/merkle_builder.rs");
+    await writeFile(merkleBuilderPath, "pub enum TreeRBuilder {}\n");
     const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
     await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
     for (const missing of [null, ...apis]) {
@@ -986,6 +989,11 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const oldSource = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
     assert.notEqual(oldSource.status, 0);
     assert.match(oldSource.stderr, /lacks the bounded C2 query cache/);
+    await writeFile(queryCachePath, "pub struct QueryCacheConfig;\n");
+    await rm(merkleBuilderPath);
+    const missingBuilder = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+    assert.notEqual(missingBuilder.status, 0);
+    assert.match(missingBuilder.stderr, /lacks the binary TreeR builder/);
   } finally {
     await rm(source, { recursive: true, force: true });
   }
