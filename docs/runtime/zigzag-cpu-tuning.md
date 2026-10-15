@@ -163,7 +163,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
 in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`1977b4edce2c27c019a3c302c595ad1adee59753`, including the cache_policy module,
+`bcb7d508f995b2ccec94e4473c156cb92d17a775`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated

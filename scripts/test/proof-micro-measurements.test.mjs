@@ -543,3 +543,35 @@ test("encode prehash diagnostics retain histogram and bounded state memory witho
   assert.match(markdown, /not a speedup/);
   assert.deepEqual(report(telemetry, []).encode_prehash, []);
 });
+
+test("pipeline wait and flush metrics remain nested and never change phase totals", () => {
+  const wait = { events: 3, elapsed_ns: 2500000 };
+  const dirty = { limit_bytes: 64, flush_threshold_bytes: 32, peak_outstanding_bytes: 60,
+    flushed_bytes: 128, flush_count: 4, flush_ns: 9000000, budget_wait: wait };
+  const encode = { enabled: true, reversed: false, nodes: 16, feeder_sha_blocks: 40,
+    prefix_blocks_histogram: [0, 0, 8, 8], midstate_ring_bytes: 512,
+    consumer_ready_wait: wait, feeders: [{ producer: 0, ring_full_wait: { events: 0, elapsed_ns: 0 }, publication_wait: wait }] };
+  const capture = { layer: 1, writer_input_wait: wait, dirty_budget: dirty };
+  const joined = { layer: 1, snapshot_buffer_wait: wait, writer_finish_wait_ns: 7000000 };
+  const tree = { layer: 1, builder: "binary", stats: { dirty_budget: dirty } };
+  const raw = [`zigzag_encode_prehash ${JSON.stringify(encode)}`, `zigzag_pipeline ${JSON.stringify(capture)}`,
+    JSON.stringify({ message: `zigzag_pipeline ${JSON.stringify(joined)}` }), `zigzag_merkle ${JSON.stringify(tree)}`].join("\n");
+  const telemetry = summarize([sample(0, 0, 0, "phase_start"), sample(1, 10, 10, "phase_end", { phase_completed: true })]);
+  const result = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }], { measuredLog: raw });
+  assert.deepEqual(result.encode_prehash[0].consumer_ready_wait, wait);
+  assert.deepEqual(result.layer_pipeline[0].dirty_budget, dirty);
+  assert.deepEqual(result.tree_r_builds[0].stats.dirty_budget, dirty);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  assert.equal(result.derived.sealing_cpu_ms, 20);
+  const markdown = renderPhaseMarkdown(result);
+  assert.match(markdown, /consumer waiting for prepared nodes \| 3 \| 2\.5/);
+  assert.match(markdown, /ring full \| 0 \| 0/);
+  assert.match(markdown, /ordered publication \| 3 \| 2\.5/);
+  assert.match(markdown, /encoder waiting for free buffer \| 3 \| 2\.5/);
+  assert.match(markdown, /writer waiting for captured chunk \| 3 \| 2\.5/);
+  assert.match(markdown, /final writer join \| 1 \| 7/);
+  assert.match(markdown, /TreeR layer 1 \| 64 \| 32 \| 60 \| 128 \| 4 \| 9/);
+  assert.match(markdown, /not measured OS dirty-page memory/);
+  const historical = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }]);
+  assert.doesNotMatch(renderPhaseMarkdown(historical), /CPU pipeline waits|Bounded background writeback/);
+});

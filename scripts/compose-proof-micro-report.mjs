@@ -275,6 +275,50 @@ export function renderPhaseMarkdown(report) {
     }
     lines.push("", "Read/convert/hash/write are summed hash-worker intervals; writeback submit measures one I/O thread and overlaps hashing. Buffer counts cover builder-owned vectors only, excluding shared Poseidon constants, Rayon and file pages. Snapshot/preallocation, internal-node construction and final sync/reopen have separate operation boundaries above; their nested intervals are not additive to total TreeR. Byte counts and fallback reasons are preserved in tree_r_builds in report.json.");
   }
+  const waits = [];
+  const dirtyWindows = [];
+  const addWait = (scope, reason, wait) => {
+    if (wait && typeof wait.events === "number" && typeof wait.elapsed_ns === "number") {
+      waits.push(`| ${scope} | ${reason} | ${wait.events} | ${wait.elapsed_ns / 1e6} |`);
+    }
+  };
+  const addDirty = (scope, stats) => {
+    if (!stats) return;
+    addWait(scope, "dirty window full", stats.budget_wait);
+    const ms = typeof stats.flush_ns === "number" ? stats.flush_ns / 1e6 : "unavailable";
+    dirtyWindows.push(`| ${scope} | ${stats.limit_bytes ?? "unavailable"} | ${stats.flush_threshold_bytes ?? "unavailable"} | ${stats.peak_outstanding_bytes ?? "unavailable"} | ${stats.flushed_bytes ?? "unavailable"} | ${stats.flush_count ?? "unavailable"} | ${ms} |`);
+  };
+  for (const [index, entry] of (report.encode_prehash ?? []).entries()) {
+    const scope = `Encode record ${index + 1} (reversed=${entry.reversed})`;
+    addWait(scope, "consumer waiting for prepared nodes", entry.consumer_ready_wait);
+    for (const feeder of entry.feeders ?? []) {
+      addWait(`${scope}, feeder ${feeder.producer}`, "ring full", feeder.ring_full_wait);
+      addWait(`${scope}, feeder ${feeder.producer}`, "ordered publication", feeder.publication_wait);
+    }
+  }
+  for (const entry of report.layer_pipeline ?? []) {
+    const scope = `Snapshot layer ${entry.layer ?? "unknown"}`;
+    addWait(scope, "encoder waiting for free buffer", entry.snapshot_buffer_wait);
+    addWait(scope, "writer waiting for captured chunk", entry.writer_input_wait);
+    if (typeof entry.writer_finish_wait_ns === "number") {
+      addWait(scope, "final writer join", { events: 1, elapsed_ns: entry.writer_finish_wait_ns });
+    }
+    addDirty(scope, entry.dirty_budget);
+  }
+  for (const build of report.tree_r_builds ?? []) {
+    addDirty(`TreeR layer ${build.layer}`, build.stats?.dirty_budget);
+  }
+  if (waits.length) {
+    lines.push("", "CPU pipeline waits (wall-time episodes, not exclusive CPU time):", "",
+      "| Scope | Wait reason | Episodes | Wait ms |", "| --- | --- | ---: | ---: |", ...waits,
+      "", "Clocks start only after contention is observed; episode counts are not polling iterations. Feeder waits are per thread. Dirty-window waits are summed across writers and already included in builder write or snapshot writer-write intervals. Waits and flushes overlap each other and encode/PC1; do not add them to sealing totals. Missing fields in older reports mean unavailable, not zero. Ordered-publication waits are distinct from a full ring; neither histogram nor wait time alone measures spare CPU capacity.");
+  }
+  if (dirtyWindows.length) {
+    lines.push("", "Bounded background writeback:", "",
+      "| Scope | Limit B | Flush threshold B | Peak outstanding B | Retired B | Flushes | Flush ms |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | ---: |", ...dirtyWindows,
+      "", "Outstanding bytes include reserved/in-flight writes and completed writes awaiting flush. Each flush retires only bytes completed before it started; concurrently completed writes stay charged. Peak is a conservative byte-credit bound, not measured OS dirty-page memory. One flush worker per active store; final file/directory publication sync remains mandatory.");
+  }
   lines.push("", "Layer numbers are zero-based. Operation IDs, start/end intervals and overlaps are preserved in JSON. CPU and RAM cover the whole process during each operation; overlapping windows must not be summed or treated as exclusive worker usage.", "", "## Auxiliary C2 timers", "");
   if (report.auxiliary_c2_timings === null) lines.push("Bellperson synthesis/prover timers unavailable; full C2 remains in the phase table.");
   else {
