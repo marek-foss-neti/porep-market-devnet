@@ -2,7 +2,7 @@
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, renderPhaseMarkdown } from "./compose-proof-micro-report.mjs";
+import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, renderPhaseMarkdown, readGpuSummary } from "./compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "./summarize-proof-micro-telemetry.mjs";
 import { buildProvenance } from "./write-proof-micro-provenance.mjs";
 
@@ -98,8 +98,10 @@ export function writeFailureReport(options) {
     mode, benchmark: { cpu_configuration: cpu }, telemetry: telemetry.summary, provenance,
     prewarm: null, prewarmTelemetry: null,
     measuredLog,
+    gpu: readGpuSummary(runDirectory),
   }) : {
     schema_version: 1, mode, telemetry: null, provenance,
+    gpu: readGpuSummary(runDirectory),
     parameter_loader: cpu?.parameter_loader ?? null,
     allocator_configuration: cpu?.allocator_configuration ?? null,
     memory_budget: { memory_limit_bytes: provenance.invocation.memory_limit_bytes, swap_limit_bytes: provenance.invocation.swap_limit_bytes, scope: "Docker final configuration; cgroup samples unavailable" },

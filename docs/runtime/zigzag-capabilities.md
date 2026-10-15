@@ -8,9 +8,11 @@ No optimized default or remote speedup has been accepted yet.
 The dedicated adapters live under `source-overrides/zigzag`. `just build-zigzag`
 builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
+The GPU branch also provides explicit [native Bellperson GPU Groth16](zigzag-gpu-groth16.md)
+builds through `just build-zigzag-gpu`; GPU runtime acceptance remains pending.
 
 The lock pins `rust-fil-proofs` to
-`1977b4edce2c27c019a3c302c595ad1adee59753`. This revision includes
+`38c1803db561c7c94369b358813d0019b33484e6`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache

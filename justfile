@@ -12,6 +12,10 @@ build-zigzag:
     @bash scripts/devnet-build-zigzag-microbench.sh
     @bash scripts/devnet-build-zigzag-curio.sh
 
+build-zigzag-gpu:
+    @DEVNET_ZIGZAG_GPU_BACKEND=cuda bash scripts/devnet-build-zigzag-microbench.sh
+    @DEVNET_ZIGZAG_GPU_BACKEND=cuda bash scripts/devnet-build-zigzag-curio.sh
+
 build-contracts:
     @bash scripts/contracts-build.sh
 

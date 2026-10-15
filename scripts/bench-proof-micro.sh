@@ -78,6 +78,38 @@ devnet_prepare_runtime
 
 image_manifest="$(devnet_proof_microbench_manifest_for_backend "${backend}")"
 image="$(devnet_proof_microbench_image_for_backend "${backend}")"
+gpu_docker_args=()
+prewarm_gpu_args=()
+measured_command=(porep-proof-microbench)
+if [[ "${backend}" == zigzag ]]; then
+  source "${DEVNET_ROOT}/scripts/zigzag-gpu-settings.sh"
+  gpu_build="$(jq -r '.gpuBuild.backend // "cpu"' "${image_manifest}")"
+  gpu_backend="${BENCH_ZIGZAG_GPU_BACKEND-${gpu_build}}"
+  gpu_required_default=0
+  [[ "${gpu_backend}" != cuda || "${mode}" != full ]] || gpu_required_default=1
+  gpu_required="${BENCH_ZIGZAG_REQUIRE_GPU-${gpu_required_default}}"
+  gpu_environment="$(zigzag_gpu_environment "${gpu_build}" "${gpu_backend}" "${gpu_required}")"
+  prewarm_gpu_args=(-e BELLMAN_NO_GPU=1 -e FIL_PROOFS_ZIGZAG_GPU_BACKEND=cpu)
+  gpu_trace="${BENCH_ZIGZAG_GPU_TRACE-${gpu_required}}"
+  [[ "${gpu_trace}" == 0 || "${gpu_trace}" == 1 ]] || devnet_die "BENCH_ZIGZAG_GPU_TRACE must be 0 or 1"
+  [[ "${gpu_required}" == 0 || "${gpu_trace}" == 1 ]] || devnet_die "required GPU execution needs a CUDA trace"
+  [[ "${gpu_trace}" == 0 || "${gpu_build}" == cuda ]] || devnet_die "Nsight trace requires the CUDA image"
+  [[ "${gpu_trace}" == 0 || "${mode}" == full ]] || devnet_die "CUDA execution acceptance requires a full benchmark"
+  while IFS= read -r setting; do gpu_docker_args+=(-e "${setting}"); done <<<"${gpu_environment}"
+  if [[ "${gpu_build}" != cpu ]]; then
+    gpu_device="${BENCH_ZIGZAG_GPU_DEVICE:-}"
+    [[ "${gpu_device}" =~ ^GPU-[0-9a-fA-F-]+$ ]] || devnet_die "select one GPU UUID with BENCH_ZIGZAG_GPU_DEVICE (also for the CUDA-build CPU control)"
+    gpu_lock_dir="${DEVNET_GPU_LOCK_DIR:-${DEVNET_ROOT}/.runtime/gpu-locks}"
+    devnet_prepare_gpu_lock_directory "${gpu_lock_dir}"
+    gpu_docker_args+=(--gpus "device=${gpu_device}" -e NVIDIA_DRIVER_CAPABILITIES=compute,utility -v "${gpu_lock_dir}:/var/tmp/filecoin-gpu-locks:rw")
+    # Resolve driver/passthrough failures before parameter prewarm.
+    docker run --rm --gpus "device=${gpu_device}" -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+      "${image}" nvidia-smi -L >&2 || devnet_die "GPU passthrough/driver preflight failed"
+  fi
+  if [[ "${gpu_trace}" == 1 || "${gpu_backend}" != cpu ]]; then
+    measured_command=(zigzag-gpu-run porep-proof-microbench)
+  fi
+fi
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 safe_sector="$(printf '%s' "${sector_size}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
@@ -90,6 +122,15 @@ run_dir="${DEVNET_ROOT}/.runtime/runs/${timestamp}-${run_name}"
 devnet_require_safe_write_path "${DEVNET_ROOT}/.runtime/runs" directory
 devnet_require_safe_write_path "${run_dir}" directory
 mkdir -p "${run_dir}"
+if [[ "${backend}" == zigzag ]]; then
+  jq -n --arg build "${gpu_build}" --arg backend "${gpu_backend}" \
+    --arg device "${gpu_device:-}" --arg required "${gpu_required}" --arg trace "${gpu_trace}" \
+    --arg environment "${gpu_environment}" \
+    '{schema_version:1,build_backend:$build,backend:$backend,device_uuid:$device,
+      required:($required == "1"),trace_requested:($trace == "1"),
+      effective_environment:($environment | split("\n") | map(select(length > 0) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)}' \
+    > "${run_dir}/gpu-request.json"
+fi
 
 summary_json="${run_dir}/summary.json"
 fixture_summary_json="${run_dir}/fixture-summary.json"
@@ -171,6 +212,7 @@ docker_common_args=(
   -v "${parameter_cache_host}:/var/tmp/filecoin-proof-parameters:rw"
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
+  ${gpu_docker_args[@]+"${gpu_docker_args[@]}"}
 )
 if [[ "${backend}" == "zigzag" ]]; then
   source "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh"
@@ -189,7 +231,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     zigzag_malloc_arena_max="$(zigzag_cpu_setting BENCH_ZIGZAG_MALLOC_ARENA_MAX "${BENCH_ZIGZAG_MALLOC_ARENA_MAX}" 1 256)"
     docker_common_args+=(-e "MALLOC_ARENA_MAX=${zigzag_malloc_arena_max}")
   fi
-  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_precommit=info,zigzag_unseal=info,zigzag_gpu=info,bellperson=info,ec_gpu_gen=info,rust_gpu_tools=info")
 fi
 if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
   full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}"
@@ -940,6 +982,7 @@ docker run ${prewarm_remove_args[@]+"${prewarm_remove_args[@]}"} \
   "${docker_common_args[@]}" \
   ${zigzag_setup_args[@]+"${zigzag_setup_args[@]}"} \
   ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} \
+  ${prewarm_gpu_args[@]+"${prewarm_gpu_args[@]}"} \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/param-prewarm-telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \
@@ -1038,8 +1081,9 @@ if docker run ${measured_remove_args[@]+"${measured_remove_args[@]}"} \
   --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
+  -e "ZIGZAG_GPU_TRACE=${gpu_trace:-0}" -e "ZIGZAG_REQUIRE_GPU=${gpu_required:-0}" \
   "${image}" \
-  porep-proof-microbench \
+  "${measured_command[@]}" \
     --backend "${backend}" \
     --sector-size "${sector_size}" \
     --work-dir /bench-run/work \

@@ -16,6 +16,7 @@ export interface ComposeInspection {
 export interface ComposeRuntimeContract {
   curioImage: string;
   curioShortCommit: string;
+  curioGpu?: { backend: "cpu" | "cuda" | "opencl"; device: string; lockDirectory: string; memoryBytes: number };
   dataDirectory: string;
   actorNetworkBundle: "devnet" | "testing";
   firehorseHeight: string;
@@ -135,6 +136,9 @@ export function inspectRenderedCompose(
     contract.proofParametersDirectory,
     contract.zigzagSidecarDirectory,
   ].map((path) => resolve(path));
+  if (contract.curioGpu && contract.curioGpu.backend !== "cpu") {
+    allowedMountRoots.push(resolve(contract.curioGpu.lockDirectory));
+  }
 
   for (const name of names) {
     const service = record(services[name], `service ${name}`);
@@ -157,6 +161,23 @@ export function inspectRenderedCompose(
       if (service.image !== expectedImage) throw new Error(`${name} image mismatch`);
     }
     const environment = environmentRecord(service.environment);
+    if (name === "curio" && contract.curioGpu && contract.curioGpu.backend !== "cpu") {
+      const gpu = contract.curioGpu;
+      if (environment.FIL_PROOFS_ZIGZAG_GPU_BACKEND !== gpu.backend
+        || environment.TMPDIR !== "/var/tmp/filecoin-gpu-locks") {
+        throw new Error("curio GPU environment mismatch");
+      }
+      if (Number(service.mem_limit) !== gpu.memoryBytes || Number(service.memswap_limit) !== gpu.memoryBytes) {
+        throw new Error("curio GPU host memory budget mismatch");
+      }
+      const resources = record(record(service.deploy, "curio deploy").resources, "curio resources");
+      const devices = array(record(resources.reservations, "curio reservations").devices, "curio devices");
+      const device = devices.length === 1 ? record(devices[0], "curio GPU") : {};
+      if (device.driver !== "nvidia" || JSON.stringify(device.device_ids) !== JSON.stringify([gpu.device])
+        || JSON.stringify(device.capabilities) !== JSON.stringify(["gpu"])) {
+        throw new Error("curio must reserve exactly the selected GPU");
+      }
+    }
     if (
       (name === "lotus" || name === "curio")
       && environment.FIL_PROOFS_USE_ZIGZAG !== contract.filProofsUseZigZag
@@ -266,6 +287,10 @@ export function inspectRenderedCompose(
       return `${source}:${mount.target}:${mount.read_only === true ? "ro" : "rw"}`;
     }).sort();
     mounts.push(...actualMounts.map((mount) => `${name}:${mount}`));
+    if (name === "curio" && contract.curioGpu && contract.curioGpu.backend !== "cpu"
+      && !actualMounts.includes(`${resolve(contract.curioGpu.lockDirectory)}:/var/tmp/filecoin-gpu-locks:rw`)) {
+      throw new Error("curio shared GPU lock mount is missing");
+    }
 
     if (name === "contracts-bootstrap") {
       completionServices.push(name);
@@ -299,7 +324,7 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     if (separator <= 0) throw new Error(`compose environment line ${index + 1} is invalid`);
     const key = rawLine.slice(0, separator);
     const value = rawLine.slice(separator + 1);
-    if (!composeEnvironmentKeys.includes(key as typeof composeEnvironmentKeys[number])) {
+    if (![...composeEnvironmentKeys, "DEVNET_CURIO_GPU_BACKEND", "DEVNET_CURIO_GPU_DEVICE", "DEVNET_CURIO_GPU_MEMORY_BYTES", "DEVNET_GPU_LOCK_DIR"].includes(key)) {
       throw new Error(`compose environment key is unexpected: ${key}`);
     }
     if (key in values) throw new Error(`compose environment key is duplicated: ${key}`);
@@ -308,7 +333,18 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
     }
     values[key] = value;
   }
-  assertExactKeys(values, [...composeEnvironmentKeys], "compose environment");
+  const gpuKeys = ["DEVNET_CURIO_GPU_BACKEND", "DEVNET_CURIO_GPU_DEVICE", "DEVNET_CURIO_GPU_MEMORY_BYTES", "DEVNET_GPU_LOCK_DIR"];
+  const hasGpuContract = gpuKeys.some((key) => key in values);
+  assertExactKeys(values, [...composeEnvironmentKeys, ...(hasGpuContract ? gpuKeys : [])], "compose environment");
+  if (hasGpuContract) {
+    const backend = requiredValue(values, "DEVNET_CURIO_GPU_BACKEND");
+    if (!["cpu", "cuda", "opencl"].includes(backend)) throw new Error("invalid Curio GPU backend");
+    if (values.DEVNET_CURIO_GPU_MEMORY_BYTES !== "64424509440") throw new Error("invalid Curio GPU host memory budget");
+    if (!requiredValue(values, "DEVNET_GPU_LOCK_DIR").startsWith("/")) throw new Error("GPU lock directory must be absolute");
+    if (backend !== "cpu" && (values.DEVNET_PROOF_BACKEND !== "zigzag" || !/^GPU-[0-9a-fA-F-]+$/.test(requiredValue(values, "DEVNET_CURIO_GPU_DEVICE")))) {
+      throw new Error("GPU admission requires ZigZag and one device UUID");
+    }
+  }
   const sectorSizeSelector = sectorSizeSelectorValue(requiredValue(values, "DEVNET_SECTOR_SIZE"));
   const curioDisableActorMetadataTasks = requiredValue(values, "CURIO_DISABLE_ACTOR_METADATA_TASKS");
   if (curioDisableActorMetadataTasks !== disableActorMetadataTasksForSectorSize(sectorSizeSelector)) {
@@ -328,6 +364,12 @@ export function parseComposeRuntimeContract(source: string): ComposeRuntimeContr
   return {
     curioImage,
     curioShortCommit,
+    ...(hasGpuContract ? { curioGpu: {
+      backend: values.DEVNET_CURIO_GPU_BACKEND as "cpu" | "cuda" | "opencl",
+      device: requiredValue(values, "DEVNET_CURIO_GPU_DEVICE"),
+      lockDirectory: requiredValue(values, "DEVNET_GPU_LOCK_DIR"),
+      memoryBytes: Number(values.DEVNET_CURIO_GPU_MEMORY_BYTES),
+    } } : {}),
     dataDirectory: requiredValue(values, "DEVNET_DATA_DIR"),
     actorNetworkBundle: actorNetworkBundleValue(requiredValue(values, "LOTUS_DEVNET_NETWORK_BUNDLE")),
     firehorseHeight: requiredValue(values, "DEVNET_FIREHORSE_HEIGHT"),

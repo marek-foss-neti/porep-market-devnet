@@ -8,6 +8,7 @@ devnet_require_command jq
 devnet_require_command npm
 devnet_require_command grep
 devnet_require_command shasum
+export DEVNET_ZIGZAG_GPU_BACKEND="${DEVNET_ZIGZAG_GPU_BACKEND-opencl}"
 source "${DEVNET_ROOT}/scripts/zigzag-build-settings.sh"
 
 source_output="$(npm --prefix tools run cli -- sources verify)"
@@ -49,6 +50,8 @@ dockerfile_sha="$(shasum -a 256 docker/zigzag-curio.Dockerfile | awk '{print $1}
 platform="linux/$(devnet_normalize_architecture "$(docker info --format '{{.Architecture}}')")"
 image="${DEVNET_IMAGE_NAMESPACE}/curio-zigzag:${proofs_sha:0:12}-${overrides_sha:0:12}-${zigzag_build_settings_sha256:0:12}"
 
+zigzag_prepare_cuda_tools
+
 docker buildx build --load --provenance=false --progress plain \
   --platform "${platform}" --file docker/zigzag-curio.Dockerfile \
   --target zigzag-curio \
@@ -60,6 +63,9 @@ docker buildx build --load --provenance=false --progress plain \
   --build-arg "ZIGZAG_TARGET_CPU=${zigzag_target_cpu}" \
   --build-arg "ZIGZAG_LTO=${zigzag_lto}" \
   --build-arg "ZIGZAG_SHA_ASM=${zigzag_sha_asm}" \
+  --build-arg "ZIGZAG_GPU_BACKEND=${zigzag_gpu_backend}" \
+  --build-arg "ZIGZAG_CUDA_ARCH=${zigzag_cuda_arch}" \
+  --build-arg "ZIGZAG_CUDA_TOOLS_IMAGE=${zigzag_cuda_tools_image}" \
   --build-arg "BASE_CURIO_IMAGE=${base_image}" \
   --build-arg "CURIO_COMMIT=${curio_commit}" \
   --build-arg "CURIO_FFI_COMMIT=fbe802089480458d730cbce8a3ca83dcd84a4cd1" \
@@ -82,6 +88,7 @@ done
 
 mkdir -p "${DEVNET_BUILD_DIR}"
 manifest="${DEVNET_BUILD_DIR}/zigzag-curio-images.json"
+[[ "${zigzag_gpu_backend}" == opencl ]] || manifest="${DEVNET_BUILD_DIR}/zigzag-curio-${zigzag_gpu_backend}-images.json"
 temporary="$(mktemp "${manifest}.XXXXXX")"
 jq -n \
   --arg platform "${platform}" \
@@ -91,8 +98,10 @@ jq -n \
   --arg dockerfileSha256 "${dockerfile_sha}" --arg toolchainImage "${toolchain_image}" \
   --arg baseImage "${base_image}" --arg baseImageId "${base_id}" \
   --arg imageReference "${image}" --arg imageId "${image_id}" \
+  --arg gpuBackend "${zigzag_gpu_backend}" --arg cudaArch "${zigzag_cuda_arch}" \
+  --arg cudaToolsImage "${zigzag_cuda_tools_image}" --arg cudaToolsId "${zigzag_cuda_tools_id}" \
   --arg targetCpu "${zigzag_target_cpu}" --arg lto "${zigzag_lto}" --arg shaAsm "${zigzag_sha_asm}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId,zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,zigzagCompactParameters:true}' \
+  '{schemaVersion:1,gpuBuild:{backend:$gpuBackend,cuda_arch:$cudaArch,cuda_tools_image:$cudaToolsImage,cuda_tools_id:$cudaToolsId},platform:$platform,curioCommit:$curioCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,sourceOverridesSha256:$sourceOverridesSha256,dockerfileSha256:$dockerfileSha256,toolchainImage:$toolchainImage,cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},baseImage:$baseImage,baseImageId:$baseImageId,imageReference:$imageReference,imageId:$imageId,zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,zigzagCompactParameters:true}' \
   > "${temporary}"
 mv -- "${temporary}" "${manifest}"
 printf 'ZigZag Curio image=%s manifest=%s\n' "${image}" "${manifest}"

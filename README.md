@@ -1,17 +1,17 @@
 # PoRep Market DevNet ZigZag Benchmarks
 
-Use the `test-zigzag` branch to test and benchmark the local PoRep Market
+Use the `test-zigzag-gpu` branch to test and benchmark the local PoRep Market
 DevNet with either the Stacked DRG or ZigZag proof backend.
 
 ```sh
-git fetch origin test-zigzag
-git switch test-zigzag
+git fetch origin test-zigzag-gpu
+git switch test-zigzag-gpu
 git pull --ff-only
 ```
 
 This branch is self-contained for ZigZag testing. `just bootstrap` fetches the
 pinned managed sources from `versions.lock.yaml`, including
-`marek-foss-neti/rust-fil-proofs` at the `restore-zigzag` commit. A separate
+`marek-foss-neti/rust-fil-proofs` at the `restore-zigzag-gpu` commit. A separate
 `../rust-fil-proofs` checkout is not required for normal testing.
 
 ## Bare VPS
@@ -24,7 +24,7 @@ directly:
 ```sh
 apt-get update
 apt-get install -y git ca-certificates
-git clone --branch test-zigzag --single-branch https://github.com/marek-foss-neti/porep-market-devnet.git
+git clone --branch test-zigzag-gpu --single-branch https://github.com/marek-foss-neti/porep-market-devnet.git
 cd porep-market-devnet
 bash scripts/bootstrap.sh
 ```

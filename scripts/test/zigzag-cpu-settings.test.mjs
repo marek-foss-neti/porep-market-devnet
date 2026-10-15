@@ -42,7 +42,7 @@ test("defaults preserve encode settings and leave pool sizing to the container",
 
 test("native variables and benchmark overrides reach explicit docker -e arguments", () => {
   const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
-  const start = source.indexOf('if [[ "${backend}" == "zigzag" ]]; then\n  source');
+  const start = source.indexOf('if [[ "${backend}" == "zigzag" ]]; then\n  source "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh"');
   const end = source.indexOf('if [[ "${backend}" == "zigzag" &&', start);
   assert.ok(start > 0 && end > start);
   const block = source.slice(start, end);
@@ -167,6 +167,7 @@ test("actual Curio launcher resolves auto inside its cpuset before executing the
     mkdirSync(bin);
     mkdirSync(share, { recursive: true });
     writeFileSync(join(share, "cpu-settings.sh"), readFileSync(join(root, "scripts/zigzag-cpu-settings.sh")));
+    writeFileSync(join(share, "gpu-settings.sh"), readFileSync(join(root, "scripts/zigzag-gpu-settings.sh")));
     writeFileSync(join(bin, "nproc"), '#!/usr/bin/env bash\nprintf "3\\n"\n', { mode: 0o755 });
     for (const program of ["curio", "sptool"]) {
       writeFileSync(join(bin, program), readFileSync(join(root, "source-overrides/zigzag/curio/curio-cpu-launcher.sh")), { mode: 0o755 });
@@ -274,7 +275,7 @@ test("microbench generic passes portable BLST to tree, build and the actual mani
       for (const shaAsm of ["0", "1"]) {
         const env = { ...cleanEnv, PATH: `${bin}:${cleanEnv.PATH}`, CPU_TEST_CAPTURE_DIR: temporary,
           CPU_TEST_FEATURE_GRAPH: join(temporary, "cargo-features.txt"), ZIGZAG_TARGET_CPU: target,
-          ZIGZAG_SHA_ASM: shaAsm, ZIGZAG_LTO: "off", RUSTFLAGS: "" };
+          ZIGZAG_SHA_ASM: shaAsm, ZIGZAG_LTO: "off", ZIGZAG_GPU_BACKEND: "cpu", ZIGZAG_CUDA_ARCH: "120", RUSTFLAGS: "" };
         const result = spawnSync("sh", ["-c", command], { cwd: temporary, env, encoding: "utf8" });
         assert.equal(result.status, 0, result.stderr);
         const expected = ["multicore-sdr", "zigzag-bench", "zigzag-setup-status"];
@@ -298,6 +299,7 @@ test("microbench generic passes portable BLST to tree, build and the actual mani
           zigzag_overrides_sha256: "1".repeat(64), dockerfile_sha256: "2".repeat(64),
           image: "fixture:cpu", image_id: "sha256:" + "3".repeat(64),
           zigzag_target_cpu: target, zigzag_lto: "off", zigzag_sha_asm: shaAsm, temporary: manifestPath,
+          zigzag_gpu_backend: "cpu", zigzag_cuda_arch: "120", zigzag_cuda_tools_image: "unused", zigzag_cuda_tools_id: "",
         });
         assert.equal(manifestResult.status, 0, manifestResult.stderr);
         const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

@@ -1,0 +1,19 @@
+# Applied only to an explicitly selected dedicated ZigZag GPU worker.
+services:
+  curio:
+    environment:
+      FIL_PROOFS_ZIGZAG_GPU_BACKEND: ${DEVNET_CURIO_GPU_BACKEND}
+      BELLMAN_CPU_UTILIZATION: ${BELLMAN_CPU_UTILIZATION:-0}
+      RUST_LOG: ${RUST_LOG:-zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_gpu=info,bellperson=info,ec_gpu_gen=info,rust_gpu_tools=info}
+      TMPDIR: /var/tmp/filecoin-gpu-locks
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${DEVNET_CURIO_GPU_DEVICE}"]
+              capabilities: [gpu]
+    volumes:
+      - ${DEVNET_GPU_LOCK_DIR}:/var/tmp/filecoin-gpu-locks
+    mem_limit: ${DEVNET_CURIO_GPU_MEMORY_BYTES}
+    memswap_limit: ${DEVNET_CURIO_GPU_MEMORY_BYTES}

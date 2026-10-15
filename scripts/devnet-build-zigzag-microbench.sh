@@ -50,6 +50,8 @@ dockerfile_sha256="$(shasum -a 256 docker/zigzag-microbench.Dockerfile | awk '{p
 platform="linux/$(devnet_normalize_architecture "$(docker info --format '{{.Architecture}}')")"
 image="${DEVNET_IMAGE_NAMESPACE}/zigzag-microbench:${zigzag_source_sha256:0:12}-${zigzag_overrides_sha256:0:12}-${zigzag_build_settings_sha256:0:12}"
 
+zigzag_prepare_cuda_tools
+
 docker buildx build \
   --load \
   --provenance=false \
@@ -64,6 +66,9 @@ docker buildx build \
   --build-arg "ZIGZAG_TARGET_CPU=${zigzag_target_cpu}" \
   --build-arg "ZIGZAG_LTO=${zigzag_lto}" \
   --build-arg "ZIGZAG_SHA_ASM=${zigzag_sha_asm}" \
+  --build-arg "ZIGZAG_GPU_BACKEND=${zigzag_gpu_backend}" \
+  --build-arg "ZIGZAG_CUDA_ARCH=${zigzag_cuda_arch}" \
+  --build-arg "ZIGZAG_CUDA_TOOLS_IMAGE=${zigzag_cuda_tools_image}" \
   --build-arg "RUST_FIL_PROOFS_COMMIT=${zigzag_source_commit}" \
   --build-arg "RUST_FIL_PROOFS_SOURCE_SHA256=${zigzag_source_sha256}" \
   --build-arg "ZIGZAG_SOURCE_OVERRIDES_SHA256=${zigzag_overrides_sha256}" \
@@ -80,7 +85,8 @@ image_id="$(docker image inspect "${image}" --format '{{.Id}}')"
 
 mkdir -p "${DEVNET_BUILD_DIR}"
 manifest="${DEVNET_BUILD_DIR}/zigzag-microbench-images.json"
-temporary="$(mktemp "${DEVNET_BUILD_DIR}/zigzag-microbench-images.json.XXXXXX")"
+[[ "${zigzag_gpu_backend}" == cpu ]] || manifest="${DEVNET_BUILD_DIR}/zigzag-microbench-${zigzag_gpu_backend}-images.json"
+temporary="$(mktemp "${manifest}.XXXXXX")"
 jq -n \
   --arg platform "${platform}" \
   --arg curioCommit "${curio_commit}" \
@@ -94,8 +100,10 @@ jq -n \
   --arg dockerfileSha256 "${dockerfile_sha256}" \
   --arg imageReference "${image}" \
   --arg imageId "${image_id}" \
+  --arg gpuBackend "${zigzag_gpu_backend}" --arg cudaArch "${zigzag_cuda_arch}" \
+  --arg cudaToolsImage "${zigzag_cuda_tools_image}" --arg cudaToolsId "${zigzag_cuda_tools_id}" \
   --arg targetCpu "${zigzag_target_cpu}" --arg lto "${zigzag_lto}" --arg shaAsm "${zigzag_sha_asm}" \
-  '{schemaVersion:1,platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(["multicore-sdr","zigzag-bench","zigzag-setup-status"] + (if $targetCpu == "generic" then ["blst-portable"] else [] end) + (if $shaAsm == "1" then ["zigzag-sha-asm"] else [] end)),cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,zigzagCompactParameters:true,imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
+  '{schemaVersion:1,gpuBuild:{backend:$gpuBackend,cuda_arch:$cudaArch,cuda_tools_image:$cudaToolsImage,cuda_tools_id:$cudaToolsId},platform:$platform,curioCommit:$curioCommit,lotusCommit:$lotusCommit,blstCommit:$blstCommit,rustFilProofsCommit:$rustFilProofsCommit,rustFilProofsSourceSha256:$rustFilProofsSourceSha256,rustFilProofsSourceRelative:$rustFilProofsSourceRelative,rustToolchainImage:$rustToolchainImage,zigzagSourceOverridesSha256:$zigzagSourceOverridesSha256,dockerfileSha256:$dockerfileSha256,cargoFeatures:(["multicore-sdr","zigzag-bench","zigzag-setup-status"] + (if $gpuBackend == "cpu" then [] else [($gpuBackend + "-no-fvm")] end) + (if $targetCpu == "generic" then ["blst-portable"] else [] end) + (if $shaAsm == "1" then ["zigzag-sha-asm"] else [] end)),cpuBuild:{target_cpu:$targetCpu,lto:$lto,sha_asm:($shaAsm == "1"),feature_graph_container_path:"/usr/local/share/zigzag/cargo-features.txt"},zigzagSplitProving:true,zigzagTreeDReuse:true,zigzagFileBackedUnseal:true,zigzagC1Validation:true,zigzagCompactParameters:true,imageReference:$imageReference,images:[{reference:$imageReference,id:$imageId}]}' \
   > "${temporary}"
 mv -f -- "${temporary}" "${manifest}"
 printf 'ZigZag microbench image=%s manifest=%s\n' "${image}" "${manifest}"

@@ -1,6 +1,9 @@
 ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE=docker.io/library/rust:1.94.0-slim-bookworm@sha256:a86cada82e36ebd7a9bffed7548792c55a952fdb20718eea9278a936bcb76e62
 ARG GO_BUILDER_IMAGE=docker.io/library/golang:1.26-trixie@sha256:4ee9ffa999b4583ce281939cdff828763083610292f252279a0cee77473bd9a7
 ARG BASE_CURIO_IMAGE=porep-market-curio-devnet/curio:ce15c0c92209
+ARG ZIGZAG_GPU_BACKEND=opencl
+ARG ZIGZAG_CUDA_TOOLS_IMAGE=zigzag-cuda-tools:unbuilt
+FROM ${ZIGZAG_CUDA_TOOLS_IMAGE} AS cuda-tools
 
 FROM ${ZIGZAG_RUST_TOOLCHAIN_IMAGE} AS rust-toolchain
 
@@ -13,12 +16,29 @@ COPY --from=blst-source /bindings/ ./bindings/
 COPY --from=blst-source /LICENSE ./LICENSE
 RUN ./build.sh && test -s libblst.a
 
-FROM ${GO_BUILDER_IMAGE} AS curio-builder
+FROM ${GO_BUILDER_IMAGE} AS builder-base
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential ca-certificates clang git jq libhwloc-dev make \
       ocl-icd-libopencl1 ocl-icd-opencl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
+FROM builder-base AS builder-cpu
+FROM builder-base AS builder-opencl
+# CUDA 12.8 supports Bookworm's GCC/glibc headers. Trixie introduces
+# sinpi/cospi declarations incompatible with this nvcc; keep CPU builds intact.
+FROM rust-toolchain AS builder-cuda
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates clang git jq libhwloc-dev make \
+      ocl-icd-libopencl1 ocl-icd-opencl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=blst-builder /usr/local/go /usr/local/go
+COPY --from=cuda-tools /usr/local/cuda-12.8 /usr/local/cuda-12.8
+ENV PATH=/usr/local/cuda-12.8/bin:/usr/local/go/bin:${PATH} \
+    GOPATH=/go \
+    LIBRARY_PATH=/usr/local/cuda-12.8/lib64/stubs \
+    CUDA_PATH=/usr/local/cuda-12.8
+FROM builder-${ZIGZAG_GPU_BACKEND} AS curio-builder
 COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
 COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo \
@@ -50,12 +70,18 @@ ARG CURIO_FFI_COMMIT
 ARG ZIGZAG_TARGET_CPU=default
 ARG ZIGZAG_LTO=off
 ARG ZIGZAG_SHA_ASM=0
+ARG ZIGZAG_GPU_BACKEND
+ARG ZIGZAG_CUDA_ARCH=120
 RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/opt/curio/extern/filecoin-ffi/rust/target \
+    --mount=type=cache,id=zigzag-curio-go-${ZIGZAG_GPU_BACKEND},target=/root/.cache/go-build,sharing=locked \
+    --mount=type=cache,id=zigzag-curio-ffi-v2-${ZIGZAG_GPU_BACKEND}-${ZIGZAG_CUDA_ARCH},target=/opt/curio/extern/filecoin-ffi/rust/target,sharing=locked \
     set -eu; \
     toolchain="$(rustup default | awk '{print $1}')"; \
     export RUSTUP_TOOLCHAIN="${toolchain}"; \
+    export FFI_ZIGZAG_GPU_BACKEND="${ZIGZAG_GPU_BACKEND}"; \
+    export FFI_USE_OPENCL=0; \
+    if [ "${ZIGZAG_GPU_BACKEND}" = opencl ]; then export FFI_USE_OPENCL=1; fi; \
+    export EC_GPU_CUDA_NVCC_ARGS="--optimize=3 --threads=2 --fatbin --generate-code=arch=compute_${ZIGZAG_CUDA_ARCH},code=sm_${ZIGZAG_CUDA_ARCH} --generate-code=arch=compute_${ZIGZAG_CUDA_ARCH},code=compute_${ZIGZAG_CUDA_ARCH}"; \
     if [ "${ZIGZAG_TARGET_CPU}" = generic ]; then export FFI_PORTABLE=1; fi; \
     if [ "${ZIGZAG_TARGET_CPU}" = native ]; then export RUSTFLAGS='-C target-cpu=native'; fi; \
     if [ "${ZIGZAG_LTO}" != off ]; then export CARGO_PROFILE_RELEASE_LTO="${ZIGZAG_LTO}" CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1; fi; \
@@ -63,7 +89,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     touch build/.update-modules build/.blst-install; \
     RUSTUP_TOOLCHAIN="${toolchain}" \
     FFI_BUILD_FROM_SOURCE=1 FFI_GIT_COMMIT="${CURIO_FFI_COMMIT}" \
-    FFI_ZIGZAG_SHA_ASM="${ZIGZAG_SHA_ASM}" FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 \
+    FFI_ZIGZAG_SHA_ASM="${ZIGZAG_SHA_ASM}" DISABLE_SUPRASEAL=1 \
     FFI_ZIGZAG_CARGO_FEATURES_FILE=/opt/zigzag-cargo-features.txt \
     CARGO_BUILD_JOBS=2 GOMAXPROCS=2 \
     make build CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
@@ -74,6 +100,7 @@ FROM ${BASE_CURIO_IMAGE} AS zigzag-curio
 COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio-zigzag
 COPY --from=harness-overlay --chmod=755 source-overrides/zigzag/curio/curio-cpu-launcher.sh /usr/local/bin/curio
 COPY --from=harness-overlay scripts/zigzag-cpu-settings.sh /usr/local/share/zigzag/cpu-settings.sh
+COPY --from=harness-overlay scripts/zigzag-gpu-settings.sh /usr/local/share/zigzag/gpu-settings.sh
 COPY --from=curio-builder /opt/zigzag-cargo-features.txt /usr/local/share/zigzag/cargo-features.txt
 COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool-zigzag
 COPY --from=harness-overlay --chmod=755 source-overrides/zigzag/curio/curio-cpu-launcher.sh /usr/local/bin/sptool
@@ -86,7 +113,13 @@ ARG ZIGZAG_RUST_TOOLCHAIN_IMAGE
 ARG ZIGZAG_TARGET_CPU
 ARG ZIGZAG_LTO
 ARG ZIGZAG_SHA_ASM
+ARG ZIGZAG_GPU_BACKEND
+ARG ZIGZAG_CUDA_ARCH
+ENV ZIGZAG_COMPILED_GPU_BACKEND=${ZIGZAG_GPU_BACKEND} \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 LABEL io.porep-market.curio.commit="${CURIO_COMMIT}" \
+      io.porep-market.zigzag.gpu-backend="${ZIGZAG_GPU_BACKEND}" \
+      io.porep-market.zigzag.cuda-arch="${ZIGZAG_CUDA_ARCH}" \
       io.porep-market.zigzag.split-proving="1" \
       io.porep-market.zigzag.rust-fil-proofs.commit="${RUST_FIL_PROOFS_COMMIT}" \
       io.porep-market.zigzag.rust-fil-proofs.source-sha256="${RUST_FIL_PROOFS_SOURCE_SHA256}" \

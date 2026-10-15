@@ -254,8 +254,12 @@ devnet_compose() {
   local compose_files=(--file "${DEVNET_COMPOSE}")
   if [[ -f "${DEVNET_COMPOSE_ENV}" ]] && grep -qx 'DEVNET_PROOF_BACKEND=zigzag' "${DEVNET_COMPOSE_ENV}"; then
     compose_files+=(--file "${DEVNET_ROOT}/docker/compose.zigzag-cpu.yaml")
+    if grep -Eq '^DEVNET_CURIO_GPU_BACKEND=(cuda|opencl)$' "${DEVNET_COMPOSE_ENV}"; then
+      compose_files+=(--file "${DEVNET_ROOT}/docker/compose.zigzag-gpu.yaml")
+    fi
   fi
   env -u DEVNET_IMAGE_NAMESPACE -u DEVNET_CURIO_SHORT_COMMIT -u DEVNET_CURIO_IMAGE -u DEVNET_DATA_DIR \
+    -u DEVNET_CURIO_GPU_BACKEND -u DEVNET_CURIO_GPU_DEVICE -u DEVNET_CURIO_GPU_MEMORY_BYTES -u DEVNET_GPU_LOCK_DIR \
     -u DEVNET_PROOF_BACKEND -u DEVNET_SECTOR_SIZE -u DEVNET_PROOF_PARAMETERS_DIR -u DEVNET_PARENT_CACHE_DIR -u DEVNET_ZIGZAG_SIDECAR_DIR -u DEVNET_FIREHORSE_HEIGHT \
     -u DEVNET_CURIO_MARKET_CONFIG_TIMEOUT_SECONDS \
     -u DEVNET_FILECOIN_SERVICES_SOURCE -u DEVNET_MULTICALL3_SOURCE \
@@ -481,6 +485,14 @@ devnet_require_runtime_identity() {
   devnet_write_sector_size "${requested_sector_size}"
 }
 
+devnet_prepare_gpu_lock_directory() {
+  devnet_require_safe_write_path "$1" directory
+  mkdir -p "$1"
+  # Curio runs as root, benchmarks as the host user. New lock files must inherit
+  # this group; both dedicated launchers use a cooperative umask.
+  chmod 2770 "$1"
+}
+
 devnet_write_compose_env() {
   local source_output curio_commit lotus_commit blst_commit rust_fil_proofs_commit services_commit multicall_commit
   local manifest_zigzag_overrides manifest_zigzag_api
@@ -536,6 +548,8 @@ devnet_write_compose_env() {
   devnet_require_safe_write_path "${compose_environment_temporary}" file
   local proof_backend sector_size sector_size_bytes actor_network_bundle firehorse_height fil_proofs_use_zigzag fil_proofs_zigzag_generate_missing_params
   local parent_cache_dir parent_cache_window_nodes curio_image
+  local gpu_backend=cpu gpu_device=none gpu_lock_dir="${DEVNET_GPU_LOCK_DIR:-${DEVNET_ROOT}/.runtime/gpu-locks}"
+  local gpu_memory=64424509440
   local curio_disable_actor_metadata_tasks
   if [[ -f "${DEVNET_PROOF_BACKEND_FILE}" && ! -L "${DEVNET_PROOF_BACKEND_FILE}" ]]; then
     proof_backend="$(devnet_current_proof_backend)"
@@ -553,6 +567,13 @@ devnet_write_compose_env() {
   fil_proofs_use_zigzag="$(devnet_fil_proofs_use_zigzag "${proof_backend}")"
   curio_image="${DEVNET_IMAGE_NAMESPACE}/curio:${curio_commit:0:12}"
   if [[ "${proof_backend}" == zigzag ]]; then
+    gpu_backend="${DEVNET_ZIGZAG_CURIO_GPU_BACKEND-cpu}"
+    case "${gpu_backend}" in cpu|cuda|opencl) ;; *) devnet_die "invalid dedicated Curio GPU backend" ;; esac
+    if [[ "${gpu_backend}" != cpu ]]; then
+      gpu_device="${DEVNET_ZIGZAG_GPU_DEVICE:-}"
+      [[ "${gpu_device}" =~ ^GPU-[0-9a-fA-F-]+$ ]] || devnet_die "select one Curio GPU UUID with DEVNET_ZIGZAG_GPU_DEVICE"
+      devnet_prepare_gpu_lock_directory "${gpu_lock_dir}"
+    fi
     curio_image="$(devnet_zigzag_curio_image "${curio_commit}")"
   fi
   fil_proofs_zigzag_generate_missing_params="$(devnet_fil_proofs_zigzag_generate_missing_params "${proof_backend}")"
@@ -566,6 +587,10 @@ devnet_write_compose_env() {
 DEVNET_IMAGE_NAMESPACE=${DEVNET_IMAGE_NAMESPACE}
 DEVNET_CURIO_SHORT_COMMIT=${curio_commit:0:12}
 DEVNET_CURIO_IMAGE=${curio_image}
+DEVNET_CURIO_GPU_BACKEND=${gpu_backend}
+DEVNET_CURIO_GPU_DEVICE=${gpu_device}
+DEVNET_CURIO_GPU_MEMORY_BYTES=${gpu_memory}
+DEVNET_GPU_LOCK_DIR=${gpu_lock_dir}
 DEVNET_DATA_DIR=${DEVNET_DATA_DIR}
 DEVNET_PROOF_BACKEND=${proof_backend}
 DEVNET_SECTOR_SIZE=${sector_size}
@@ -1036,6 +1061,7 @@ devnet_zigzag_source_overrides_sha256() {
 }
 
 devnet_zigzag_microbench_overrides_sha256() {
+  local path
   local zigzag_lock="${DEVNET_ROOT}/source-overrides/zigzag-bench/Cargo.lock"
   [[ -f "${zigzag_lock}" && ! -L "${zigzag_lock}" ]] ||
     devnet_die "dedicated ZigZag benchmark Cargo.lock is missing"
@@ -1043,6 +1069,9 @@ devnet_zigzag_microbench_overrides_sha256() {
     devnet_zigzag_source_overrides_sha256
     devnet_zigzag_ffi_overrides_sha256
     shasum -a 256 "${zigzag_lock}" | awk '{print $1}'
+    for path in scripts/zigzag-gpu-run.sh scripts/summarize-zigzag-gpu.py docker/zigzag-cuda-tools.Dockerfile; do
+      shasum -a 256 "${DEVNET_ROOT}/${path}" | awk '{print $1}'
+    done
   } | shasum -a 256 | awk '{print $1}'
 }
 
@@ -1073,6 +1102,7 @@ devnet_zigzag_ffi_overrides_sha256() {
 
 devnet_zigzag_curio_overrides_sha256() {
   local task="${DEVNET_ROOT}/source-overrides/zigzag/curio/tasks/seal/task_porep.go"
+  local path
   [[ -f "${task}" && ! -L "${task}" ]] ||
     devnet_die "dedicated ZigZag Curio task override is missing or symbolic"
   {
@@ -1080,14 +1110,31 @@ devnet_zigzag_curio_overrides_sha256() {
     shasum -a 256 "${task}" | awk '{print $1}'
     shasum -a 256 "${DEVNET_ROOT}/source-overrides/zigzag/curio/curio-cpu-launcher.sh" | awk '{print $1}'
     shasum -a 256 "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh" | awk '{print $1}'
+    shasum -a 256 "${DEVNET_ROOT}/scripts/zigzag-gpu-settings.sh" | awk '{print $1}'
+    for path in ffiselect.go zigzag_gpu.go zigzag_gpu_test.go; do
+      shasum -a 256 "${DEVNET_ROOT}/source-overrides/zigzag/curio/lib/ffiselect/${path}" | awk '{print $1}'
+    done
   } | shasum -a 256 | awk '{print $1}'
 }
 
 devnet_zigzag_curio_image() {
   local curio_commit="$1" manifest="${DEVNET_BUILD_DIR}/zigzag-curio-images.json"
+  local runtime_backend="${DEVNET_ZIGZAG_CURIO_GPU_BACKEND-cpu}" build_backend
+  build_backend="${DEVNET_ZIGZAG_CURIO_GPU_BUILD-${runtime_backend}}"
+  # Preserve the existing default OpenCL-capable artifact as the CPU control.
+  if [[ -z "${DEVNET_ZIGZAG_CURIO_GPU_BUILD+x}" && "${runtime_backend}" == cpu ]]; then build_backend=opencl; fi
+  case "${build_backend}" in
+    opencl) ;;
+    cpu|cuda) manifest="${DEVNET_BUILD_DIR}/zigzag-curio-${build_backend}-images.json" ;;
+    *) devnet_die "invalid dedicated Curio GPU build" ;;
+  esac
+  [[ "${runtime_backend}" == cpu || "${runtime_backend}" == "${build_backend}" ]] || devnet_die "Curio GPU backend differs from selected build"
+  [[ "${build_backend}" != cuda || "${runtime_backend}" == cuda ]] ||
+    devnet_die "CUDA Curio requires the explicit GPU worker and driver passthrough; use the microbench for the CUDA-build CPU control"
   local image source_relative source_sha expected_id base_image base_id
   [[ -f "${manifest}" && ! -L "${manifest}" ]] ||
     devnet_die "dedicated ZigZag Curio image manifest is missing; run scripts/devnet-build-zigzag-curio.sh"
+  [[ "$(jq -r '.gpuBuild.backend // "opencl"' "${manifest}")" == "${build_backend}" ]] || devnet_die "Curio GPU manifest backend mismatch"
   [[ "$(jq -r '.schemaVersion' "${manifest}")" == 1 &&
      "$(jq -r '.curioCommit' "${manifest}")" == "${curio_commit}" ]] ||
     devnet_die "ZigZag Curio manifest identity mismatch"
@@ -1110,6 +1157,7 @@ devnet_zigzag_curio_image() {
   [[ "${image}" == "${DEVNET_IMAGE_NAMESPACE}/curio-zigzag:"* && "${expected_id}" == sha256:* ]] ||
     devnet_die "ZigZag Curio image identity is invalid"
   [[ "$(docker image inspect "${image}" --format '{{.Id}}')" == "${expected_id}" &&
+     "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.gpu-backend"}}')" == "${build_backend}" &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.split-proving"}}')" == 1 &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.rust-fil-proofs.source-sha256"}}')" == "${source_sha}" &&
      "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.source-overrides.sha256"}}')" == "$(jq -r '.sourceOverridesSha256' "${manifest}")" &&
@@ -1143,7 +1191,10 @@ devnet_docker_surface_sha256() {
 
 devnet_proof_microbench_manifest_for_backend() {
   case "$1" in
-    zigzag) printf '%s\n' "${BENCH_ZIGZAG_MICROBENCH_MANIFEST:-${DEVNET_BUILD_DIR}/zigzag-microbench-images.json}" ;;
+    zigzag)
+      local suffix=""
+      case "${BENCH_ZIGZAG_GPU_BUILD-cpu}" in cpu) ;; cuda|opencl) suffix="-${BENCH_ZIGZAG_GPU_BUILD}" ;; *) devnet_die "invalid BENCH_ZIGZAG_GPU_BUILD" ;; esac
+      printf '%s\n' "${BENCH_ZIGZAG_MICROBENCH_MANIFEST:-${DEVNET_BUILD_DIR}/zigzag-microbench${suffix}-images.json}" ;;
     stacked) printf '%s\n' "${DEVNET_BUILD_DIR}/images.json" ;;
     *) devnet_die "unknown proof microbench backend: $1" ;;
   esac
@@ -1186,6 +1237,10 @@ devnet_proof_microbench_image_for_backend() {
     devnet_die "image manifest has no image ID for ${image}"
   [[ "$(docker image inspect "${image}" --format '{{.Id}}')" == "${expected_id}" ]] ||
     devnet_die "image ID differs from its manifest: ${image}"
+  if [[ "${backend}" == zigzag ]]; then
+    [[ "$(docker image inspect "${image}" --format '{{index .Config.Labels "io.porep-market.zigzag.gpu-backend"}}')" == "$(jq -r '.gpuBuild.backend // "cpu"' "${manifest}")" ]] ||
+      devnet_die "ZigZag GPU backend label differs from its manifest"
+  fi
   docker run --rm --entrypoint sh "${image}" -c 'command -v porep-proof-microbench >/dev/null 2>&1' ||
     devnet_die "image ${image} does not contain porep-proof-microbench; rebuild the selected image"
   printf '%s\n' "${image}"

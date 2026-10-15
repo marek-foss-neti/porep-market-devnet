@@ -50,6 +50,14 @@ func zigzagPoRepEnabled() bool {
 	return os.Getenv("FIL_PROOFS_USE_ZIGZAG") == "1"
 }
 
+// The dedicated launcher validates the backend and enforces one visible GPU.
+// Reserve the whole device, including VRAM, against PoSt and other Harmony tasks.
+// This leaves Bellperson's existing low-priority proving behavior unchanged.
+func zigzagPoRepGPU() bool {
+	backend := os.Getenv("FIL_PROOFS_ZIGZAG_GPU_BACKEND")
+	return (backend == "cuda" || backend == "opencl") && os.Getenv("BELLMAN_NO_GPU") == "0"
+}
+
 func zigzagPoRepRam() uint64 {
 	switch os.Getenv("CURIO_NEW_MINER_SECTOR_SIZE") {
 	case "2kib":
@@ -236,6 +244,12 @@ func (p *PoRepTask) TypeDetails() harmonytask.TaskTypeDetails {
 		gpu = 0
 		mem = zigzagPoRepRam()
 		cpu = zigzagPoRepCpu()
+		if zigzagPoRepGPU() {
+			gpu = 1
+			// Host RAM is independent of the device's VRAM. Keep small-sector
+			// reservations, and cap large C2 admission at the tested CPU budget.
+			mem = min(mem, uint64(60<<30))
+		}
 	}
 	var maxLimiter taskhelp.Limiter
 	if !zigzag && p.cuzkClient != nil && p.cuzkClient.Enabled() {

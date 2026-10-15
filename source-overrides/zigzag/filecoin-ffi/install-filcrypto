@@ -180,7 +180,17 @@ build_from_source() {
     fi
 
     # Check for specified GPU support.
-    if [ "${FFI_USE_CUDA_SUPRASEAL}" == "1" ]; then
+    if [ -n "${FFI_ZIGZAG_GPU_BACKEND:-}" ]; then
+        # Dedicated images must never silently build a different backend.
+        case "${FFI_ZIGZAG_GPU_BACKEND}" in
+            cpu) gpu_flags="" ;;
+            opencl) gpu_flags=",opencl" ;;
+            cuda)
+                command -v nvcc >/dev/null || { echo 'CUDA build requires nvcc' >&2; exit 1; }
+                gpu_flags=",cuda" ;;
+            *) echo 'Invalid FFI_ZIGZAG_GPU_BACKEND' >&2; exit 1 ;;
+        esac
+    elif [ "${FFI_USE_CUDA_SUPRASEAL}" == "1" ]; then
         # If SupraSeal is enabled, just use the `cuda-supraseal` feature and
         # nothing else GPU related.
         gpu_flags=",cuda-supraseal"
@@ -264,7 +274,7 @@ build_from_source() {
     echo "Using additional build flags: ${additional_flags}"
     if [ -n "${FFI_ZIGZAG_CARGO_FEATURES_FILE:-}" ]; then
         # Use the same selected FFI feature flags as the immediately following build.
-        cargo tree --locked -e features ${additional_flags} > "${FFI_ZIGZAG_CARGO_FEATURES_FILE}"
+        cargo tree --locked -e features --format '{p} features=[{f}]' ${additional_flags} > "${FFI_ZIGZAG_CARGO_FEATURES_FILE}"
     fi
     if [ -n "${__release_flags}" ]; then
         RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=${__release_flags}" ./scripts/build-release.sh ${build} "${additional_flags}"

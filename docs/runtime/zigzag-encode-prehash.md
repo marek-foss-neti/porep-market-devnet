@@ -62,7 +62,7 @@ Configuration is also recorded in microbench output and provenance.
 ## Integration and acceptance
 
 The implementation is committed and pinned in devnet at Rust revision
-`1977b4edce2c27c019a3c302c595ad1adee59753`. Fetch the managed sources and rebuild
+`38c1803db561c7c94369b358813d0019b33484e6`. Fetch the managed sources and rebuild
 both dedicated images on the remote machine before running comparisons. Both
 build guards require `EncodePrehash`; this pin needs no development-source
 override. For future uncommitted changes, use an isolated source copy inside

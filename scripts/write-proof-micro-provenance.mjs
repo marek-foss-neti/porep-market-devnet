@@ -111,6 +111,9 @@ function toolVersions(repositoryRoot) {
 
 function selectedEnvironment() {
   const names = [
+    "BENCH_ZIGZAG_GPU_BUILD", "BENCH_ZIGZAG_GPU_BACKEND", "BENCH_ZIGZAG_GPU_DEVICE",
+    "BENCH_ZIGZAG_REQUIRE_GPU", "BENCH_ZIGZAG_GPU_TRACE", "BENCH_ZIGZAG_GPU_CPU_UTILIZATION",
+    "BELLMAN_NO_GPU", "BELLMAN_CPU_UTILIZATION", "EC_GPU_FRAMEWORK",
     "BENCH_PARENT_CACHE_WINDOW_NODES",
     "BENCH_PROOF_MICRO_LAYERS",
     "BENCH_PROOF_MICRO_PROFILE",
@@ -273,6 +276,7 @@ export function buildProvenance({
         zigzag_rust_fil_proofs_api_sha256: imageManifest.zigzagRustFilProofsApiSha256,
         cargo_features: cargoFeatures,
         cpu_build: imageManifest.cpuBuild ?? null,
+        gpu_build: imageManifest.gpuBuild ?? { backend: "cpu", scope: "legacy manifest without GPU build declaration" },
         zigzag_capabilities: backend === "zigzag" ? {
           split_proving: imageManifest.zigzagSplitProving,
           tree_d_reuse: imageManifest.zigzagTreeDReuse,

@@ -1,6 +1,21 @@
 #!/usr/bin/env node
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+export function readGpuSummary(runDirectory) {
+  let request = null;
+  try { request = JSON.parse(readFileSync(join(runDirectory, "gpu-request.json"), "utf8")); } catch {}
+  try { return { ...JSON.parse(readFileSync(join(runDirectory, "gpu-summary.json"), "utf8")), request }; }
+  catch {
+    return request === null ? null : {
+      request, backend: request.backend, cpu_control: request.backend === "cpu",
+      required: request.required, gpu_execution_confirmed: false, trace_complete: false,
+      errors: request.trace_requested ? ["CUDA execution summary unavailable"] : [],
+      evidence_scope: "No kernel trace; configuration alone is not evidence of GPU execution",
+    };
+  }
+}
 
 function fail(message) {
   throw new Error(`proof microbenchmark report: ${message}`);
@@ -135,6 +150,7 @@ export function composeReport({
   prewarm,
   prewarmTelemetry,
   measuredLog = null,
+  gpu = null,
 }) {
   if (benchmark.cpu_configuration) {
     benchmark = { ...benchmark, cpu_configuration: normalizeCpuConfiguration(benchmark.cpu_configuration) };
@@ -177,6 +193,8 @@ export function composeReport({
       scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
+    gpu,
+    gpu_admission: measuredLog === null ? [] : parseJsonDiagnostics(measuredLog, /\bzigzag_gpu (\{.*\})\s*$/),
     encode_prehash: measuredLog === null ? [] : parseEncodePrehashDiagnostics(measuredLog),
     layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
@@ -317,6 +335,16 @@ export function renderPhaseMarkdown(report) {
     lines.push("", "The query cache is local to one C2 and retains selected decoded families between batches. Its byte reservation is separate from the allowance for witness, FFT/MSM, other queries and file pages. A successful run does not establish an allocator-only saving. Query cache hit counts do not imply an additive wall-time saving.");
     lines.push("", "Per-family point counts, encoded/decoded sizes and decode times are in groth16_parameters. Query index sizes exclude VK, decoded points and mmap/page cache. Nested or overlapping operations are not added to C2 or sealing totals.");
   }
+  if (report.gpu) {
+    const gpu = report.gpu;
+    lines.push("", "## GPU configuration and execution evidence", "",
+      `Effective request: ${JSON.stringify(gpu.request ?? null)}.`, "",
+      `GPU FFT/MSM confirmed: **${gpu.gpu_execution_confirmed === true}**; CPU control: **${gpu.cpu_control === true}**; trace complete: **${gpu.trace_complete === true}**.`, "",
+      `Completed FFT kernels: ${value(gpu.fft_kernel_count)}; MSM kernels: ${value(gpu.msm_kernel_count)}.`, "",
+      `Sampled whole-device VRAM peak: ${value(gpu.sampled_device_vram_peak_bytes)} B. This includes other processes and is separate from host RAM.`, "",
+      `Errors/fallbacks: ${JSON.stringify(gpu.errors ?? [])}; ${JSON.stringify(gpu.known_fallbacks ?? [])}.`, "",
+      gpu.request?.trace_requested === false ? "No CUDA trace requested; configuration alone is not GPU execution evidence." : "Kernel, transfer and initialization API timings, when available, are in gpu-summary.json; intervals may overlap and profiling overhead is included. Device discovery alone is not GPU execution. The trace confirms both kernel families, not exclusive GPU execution of every operation.");
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -340,6 +368,7 @@ function main() {
     prewarm: optionalJson(prewarmPath),
     prewarmTelemetry: optionalJson(prewarmTelemetryPath),
     measuredLog: logPath && logPath !== "-" ? readFileSync(logPath, "utf8") : null,
+    gpu: readGpuSummary(dirname(outputPath)),
   });
   const temporary = `${outputPath}.temporary-${process.pid}`;
   writeFileSync(temporary, `${JSON.stringify(report, null, 2)}\n`, {

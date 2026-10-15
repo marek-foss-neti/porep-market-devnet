@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "1977b4edce2c27c019a3c302c595ad1adee59753";
+const rustFilProofsSourceCommit = "38c1803db561c7c94369b358813d0019b33484e6";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -1817,6 +1817,7 @@ async function createLifecycleFixture(): Promise<{
   for (const name of [
     "devnet-common.sh",
     "zigzag-cpu-settings.sh",
+    "zigzag-gpu-settings.sh",
     "zigzag-build-settings.sh",
     "devnet-up.sh",
     "devnet-down.sh",
@@ -1838,6 +1839,7 @@ printf '\\n' >> "$DEVNET_TEST_COMMAND_LOG"
 if [[ "$1" == image && "$2" == inspect ]]; then
   case "$*" in
     *"{{.Id}}"*) printf '%s\\n' "\${DEVNET_TEST_IMAGE_ID:-sha256:fixture}" ;;
+    *"io.porep-market.zigzag.gpu-backend"*) printf '%s\\n' cpu ;;
     *"io.porep-market.curio.commit"*) printf '%s\\n' "\${DEVNET_TEST_CURIO_COMMIT:-}" ;;
     *"io.porep-market.lotus.commit"*) printf '%s\\n' "\${DEVNET_TEST_LOTUS_COMMIT:-}" ;;
     *"io.porep-market.blst.commit"*) printf '%s\\n' "\${DEVNET_TEST_BLST_COMMIT:-}" ;;
@@ -1901,6 +1903,9 @@ async function prepareZigzagMicrobenchManifest(
   await writeFile(join(fixture.root, "docker/zigzag-microbench.Dockerfile"), dockerfile);
   await mkdir(join(fixture.root, "source-overrides/zigzag-bench"), { recursive: true });
   await writeFile(join(fixture.root, "source-overrides/zigzag-bench/Cargo.lock"), "fixture lock\n");
+  for (const path of ["scripts/zigzag-gpu-run.sh", "scripts/summarize-zigzag-gpu.py", "docker/zigzag-cuda-tools.Dockerfile"]) {
+    await cp(join(repositoryRoot, path), join(fixture.root, path));
+  }
   const sourceRelative = `.cache/sources/rust_fil_proofs/${rustFilProofsSourceCommit}`;
   const hashes = spawnSync("bash", ["-c",
     'set -e; source "$1"; devnet_zigzag_microbench_overrides_sha256; devnet_rust_fil_proofs_content_sha256 "$2"',
@@ -1951,7 +1956,9 @@ printf 'docker' >> "$DEVNET_TEST_COMMAND_LOG"
 printf ' <%s>' "$@" >> "$DEVNET_TEST_COMMAND_LOG"
 printf '\\n' >> "$DEVNET_TEST_COMMAND_LOG"
 if [[ "$1 $2" == "image inspect" ]]; then
-  if [[ "$*" == *'{{.Id}}'* ]]; then echo sha256:fixture; else echo '{"Id":"sha256:fixture"}'; fi
+  if [[ "$*" == *'{{.Id}}'* ]]; then echo sha256:fixture
+  elif [[ "$*" == *'io.porep-market.zigzag.gpu-backend'* ]]; then echo cpu
+  else echo '{"Id":"sha256:fixture"}'; fi
 elif [[ "$1" == info ]]; then echo '{}'
 elif [[ "$1" == version ]]; then echo docker-fixture
 elif [[ "$1" == run && "$*" != *'--entrypoint sh'* ]]; then

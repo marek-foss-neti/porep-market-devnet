@@ -78,7 +78,7 @@ sums only the main phases.
 ## Integration and acceptance
 
 The pipeline implementation is committed and pinned in `versions.lock.yaml` at
-`1977b4edce2c27c019a3c302c595ad1adee59753`. Fetch the managed sources and rebuild
+`38c1803db561c7c94369b358813d0019b33484e6`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Dedicated builds require
 `LayerPipelineConfig`; no development-source override is needed for this pin.
 For further uncommitted development, use an isolated copy inside the devnet
