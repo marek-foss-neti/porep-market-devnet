@@ -20,7 +20,7 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`bcb7d508f995b2ccec94e4473c156cb92d17a775`, including CPU/cache tuning controls,
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2
@@ -60,6 +60,13 @@ machines on 12 October 2026. Use this preset for comparisons of subsequent
 optimizations. The wrapper passes the values explicitly to the full runner,
 which records them in provenance and reports effective configuration in JSON/MD.
 Applicable settings also reach its prewarm container.
+
+With the deferred TreeR policy, `BENCH_ZIGZAG_TREE_R_DONTNEED=1` releases pages
+only at C2 entry, after all C1 work and validation. The flag and default stay
+the same, but the eviction boundary differs from the historical runs above.
+Compare full sealing time and C1 I/O, not only PC1 RAM; the OS can still reclaim
+pages under memory pressure before C1. Rebuild the images from the current pin
+to apply this implementation change.
 
 The optional [Groth16 query cache](zigzag-query-cache.md) is explicitly off in
 this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`, with

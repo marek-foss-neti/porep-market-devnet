@@ -225,11 +225,12 @@ test("Groth16 query and batch boundaries retain sizes, anon/file RSS, cgroup I/O
   assert.match(markdown, /Remaining RSS is not a measurement of free allocator memory/);
 });
 
-test("Groth16 operation excludes loading and vanilla while the enclosing phase retains their cost", () => {
+test("Groth16 operation excludes vanilla, TreeR release and loading while the phase retains their cost", () => {
   const intervals = [
-    [1, "groth16_parameter_load", 0, 10, 0, 20],
-    [2, "vanilla_proving", 10, 50, 20, 100],
-    [3, "vanilla_verification", 50, 60, 100, 120],
+    [1, "vanilla_proving", 0, 40, 0, 80],
+    [2, "vanilla_verification", 40, 50, 80, 100],
+    [5, "groth16_tree_r_cache_release", 50, 55, 100, 105],
+    [3, "groth16_parameter_load", 55, 60, 105, 120],
     [4, "groth16_c2", 60, 90, 120, 240],
   ];
   const samples = [sample(0, 0, 0, "phase_start")];
@@ -245,8 +246,9 @@ test("Groth16 operation excludes loading and vanilla while the enclosing phase r
   samples.push(sample(samples.length, 100, 250, "phase_end", { phase_completed: true }));
   const telemetry = summarize(samples.map((entry) => ({ ...entry, phase: "commit_phase2_groth16" })));
   const result = report(telemetry, [{ name: "commit_phase2_groth16", phase_id: 1, wall_ms: 100, cpu_ms: 250 }]);
-  assert.deepEqual(result.c2_suboperations.map((operation) => operation.name), ["groth16_parameter_load", "groth16_c2"]);
-  const c2 = result.c2_suboperations[1];
+  assert.deepEqual(result.c2_suboperations.map((operation) => operation.name), ["groth16_tree_r_cache_release", "groth16_parameter_load", "groth16_c2"]);
+  assert.equal(result.c2_suboperations[0].wall_ms, 5);
+  const c2 = result.c2_suboperations[2];
   assert.equal(c2.wall_ms, 30);
   assert.equal(c2.cpu_ms, 120);
   assert.deepEqual(c2.overlapping_operation_ids, []);

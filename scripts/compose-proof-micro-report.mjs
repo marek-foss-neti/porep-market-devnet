@@ -76,7 +76,7 @@ export function parseCpuDiagnostics(raw) {
   // diagnostic messages from their actual modules, retaining target-based logs
   // from other formatters without collecting unrelated ZigZag phase messages.
   const module = /\bstorage_proofs_porep::zigzag::(?:cache_policy|vanilla::(?:cores|parent_table|vde))\b/;
-  const diagnostic = /\b(?:encode (?:affinity|producers=)|zigzag (?:encode affinity|multicore encode L3 affinity)|parent records mmap_window_nodes=|DONTNEED (?:advised_bytes=|unavailable:))/;
+  const diagnostic = /\b(?:encode (?:affinity|producers=)|zigzag (?:encode affinity|multicore encode L3 affinity)|parent records mmap_window_nodes=|DONTNEED (?:advised_bytes=|unavailable:|at C2|skipped at C2))/;
   return raw.split(/\r?\n/).flatMap((line, index) => {
     const matches = /\bzigzag_(cpu|cache)\b/.test(line) || (module.test(line) && diagnostic.test(line));
     return matches ? [{ line_number: index + 1, source: "stderr.log", message: line }] : [];
@@ -339,7 +339,7 @@ export function renderPhaseMarkdown(report) {
       "Loader: " + (report.parameter_loader ?? "unavailable") + ". Effective container RAM limit: " + value(report.memory_budget?.memory_limit_bytes) + " B; swap limit: " + value(report.memory_budget?.swap_limit_bytes) + " B.", "",
       "Allocator configuration: " + JSON.stringify(report.allocator_configuration ?? null) + ".",
       "Before/after process anon/file RSS, cgroup counters, I/O and PSI are recorded in boundary_snapshots in report.json. The batch end is after Bellperson releases circuits/query builders. Remaining RSS is not a measurement of free allocator memory.",
-      "groth16_c2 measures circuit/batch proving in both API paths. Parameter loading, vanilla proving/validation, API-level VK lookup and final seal-proof serialization are outside this operation; the enclosing benchmark phase still includes them.", "", ...header);
+      "groth16_c2 measures circuit/batch proving in both API paths. TreeR cache release, parameter loading, vanilla proving/validation, API-level VK lookup and final seal-proof serialization are outside this operation; the enclosing benchmark phase still includes them.", "", ...header);
     for (const operation of report.c2_suboperations ?? []) {
       lines.push(row(operation.name + " id=" + operation.id + " " + JSON.stringify(operation.details ?? {}), operation));
     }

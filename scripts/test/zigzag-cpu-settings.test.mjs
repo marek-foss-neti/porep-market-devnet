@@ -250,6 +250,17 @@ test("CPU diagnostics accept target format and fil_logger JSON without changing 
   })));
 });
 
+test("C2 TreeR release diagnostics preserve successful and skipped advice", () => {
+  const lines = [
+    'INFO storage_proofs_porep::zigzag::cache_policy > TreeR DONTNEED at C2 {"advised_files":11,"advised_bytes":11811115008,"skipped_files":0}',
+    'WARN storage_proofs_porep::zigzag::cache_policy > TreeR DONTNEED skipped at C2 layer=0: missing store',
+    'INFO other > unrelated message',
+  ];
+  assert.deepEqual(parseCpuDiagnostics(lines.join("\n")), lines.slice(0, 2).map((message, index) => ({
+    line_number: index + 1, source: "stderr.log", message,
+  })));
+});
+
 test("microbench generic passes portable BLST to tree, build and the actual manifest", () => {
   const dockerfile = readFileSync(join(root, "docker/zigzag-microbench.Dockerfile"), "utf8");
   const cargoRun = dockerfile.match(/RUN set -eu; toolchain=.*?(?=\n\nFROM)/s)?.[0];

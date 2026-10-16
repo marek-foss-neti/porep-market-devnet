@@ -106,7 +106,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 now pins the committed implementation, including the cgroup-root fix, at
-`bcb7d508f995b2ccec94e4473c156cb92d17a775`. Fetch the managed sources and rebuild
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. Fetch the managed sources and rebuild
 the dedicated images to use this revision. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed
 checkout. The build guard requires the adapter API. Keep all development changes

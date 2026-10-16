@@ -71,7 +71,9 @@ not an exact measurement of dirty OS pages, the active replica, clean page cache
 or total cgroup memory. The sequential binary reference retains its existing
 advisory writeback path. This refinement does not change the next-layer barrier:
 the snapshot writer is still joined before starting the next encode.
-The existing synchronized TreeR DONTNEED advice still applies after publication.
+TreeR DONTNEED is deferred until C2 entry, after all C1 work and validation.
+Publication keeps its durability syncs without discarding pages needed by C1;
+see [cache policy](zigzag-cpu-tuning.md#bounded-records-and-advice).
 
 The tree pool is created before encoder affinity binds the calling thread.
 The requested count is clipped to leave scheduling capacity for the encoder
@@ -142,7 +144,7 @@ and its image manifests were left unchanged; builds used an isolated copy.
 
 The pipeline implementation, including background writeback and wait metrics,
 is committed and pinned in `versions.lock.yaml` at
-`bcb7d508f995b2ccec94e4473c156cb92d17a775`. Fetch the managed sources and rebuild
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Dedicated builds require
 `LayerPipelineConfig`; no development-source override is needed for this pin.
 For further uncommitted development, use an isolated copy inside the devnet

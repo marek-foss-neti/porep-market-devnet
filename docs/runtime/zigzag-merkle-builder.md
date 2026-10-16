@@ -60,7 +60,9 @@ There is no sector-sized node vector or vector of all chunk tasks.
 
 These limits cover builder-owned buffers, not the replica, OS page cache,
 shared Poseidon constants, Rayon or other sealing allocations. The existing
-60 GiB benchmark cgroup and synchronized TreeR DONTNEED policy remain in place.
+60 GiB benchmark cgroup remains in place. TreeR DONTNEED runs only at C2 entry,
+after C1 validation, rather than after individual tree builds; builder syncs
+still guarantee durability.
 No additional Groth16 query retention is enabled.
 
 The existing full benchmark records `tree_r_snapshot`, `tree_r_build` and
@@ -103,7 +105,7 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned in `versions.lock.yaml` at
-`bcb7d508f995b2ccec94e4473c156cb92d17a775`. Fetch the managed sources and rebuild
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.
 The pinned [layer-pipeline integration](zigzag-layer-pipeline.md) additionally

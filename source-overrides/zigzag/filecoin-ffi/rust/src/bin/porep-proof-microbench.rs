@@ -1377,11 +1377,12 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
         })?;
         drop(serialized_phase1);
         let commit = measure(&mut phases, "commit_phase2_groth16", || {
-            zigzag::zigzag_commit_phase2::<zigzag::constants::ZigZagTree>(
+            zigzag::zigzag_commit_phase2_with_cache::<zigzag::constants::ZigZagTree>(
                 &porep_config,
                 commit_phase1,
                 PROVER_ID,
                 sector_id,
+                Some(&cache_dir),
             )
         })?;
         commit

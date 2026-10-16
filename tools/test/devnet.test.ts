@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "bcb7d508f995b2ccec94e4473c156cb92d17a775";
+const rustFilProofsSourceCommit = "7a94e1cfe322a9908dd17ab5a09c9cf96029b073";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -947,6 +947,7 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
   const apiPath = join(source, "filecoin-proofs/src/api/zigzag.rs");
   const apis = [
     "zigzag_commit_phase1_from_cache", "zigzag_commit_phase2",
+    "zigzag_commit_phase2_with_cache",
     "zigzag_pre_commit_phase1_with_tree_d", "zigzag_unseal_range_with_scratch",
     "zigzag_validate_commit_phase1",
   ];

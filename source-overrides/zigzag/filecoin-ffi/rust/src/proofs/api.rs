@@ -83,6 +83,10 @@ struct ZigZagCommitPhase1Envelope {
     zigzag: String,
     version: u8,
     registered_proof: i32,
+    // Optional local hint, never required for proof generation on a different C2 host.
+    // The Rust C2 entry validates C1 and checks store roots/lengths before advising pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tree_r_cache_path: Option<std::path::PathBuf>,
     phase1: zigzag::ZigZagCommitPhase1Output<zigzag::ZigZagTree>,
 }
 
@@ -406,11 +410,12 @@ fn prove_zigzag_commit_phase2(
             .seed
             .context("ZigZag C1 result has no interactive seed")?,
     );
-    let output = zigzag::zigzag_commit_phase2::<zigzag::ZigZagTree>(
+    let output = zigzag::zigzag_commit_phase2_with_cache::<zigzag::ZigZagTree>(
         &porep_config,
         phase1,
         prover_id,
         zigzag_sector_id(sector_id),
+        envelope.tree_r_cache_path.as_deref(),
     )?;
     write_zigzag_proof_sidecar(
         registered_proof,
@@ -916,10 +921,11 @@ fn seal_commit_phase1(
 
             let porep_config = zigzag_porep_config(registered_proof)?;
             let c1_path = zigzag_commit_phase1_path(&cache_dir);
+            let tree_r_cache_path = fs::canonicalize(&cache_dir).ok();
             let _c1_lock = lock_zigzag_commit_phase1(&cache_dir)?;
             if c1_path.is_file() {
                 let saved = fs::read(&c1_path).context("read saved ZigZag C1 result")?;
-                if let Ok(Some(saved_output)) = parse_zigzag_commit_phase1(&saved) {
+                if let Ok(Some(mut saved_output)) = parse_zigzag_commit_phase1(&saved) {
                     if saved_output.registered_proof
                         == registered_seal_proof_as_i32(registered_proof)
                         && saved_output.phase1.sector_id == sector_id
@@ -944,7 +950,17 @@ fn seal_commit_phase1(
                             *prover_id,
                             zigzag_sector_id(sector_id),
                         ) {
-                            Ok(()) => return Ok(saved.into_boxed_slice().into()),
+                            Ok(()) => {
+                                // Refresh an older/moved envelope's locality hint only after
+                                // semantic validation. No TreeR pages are dropped during C1.
+                                if saved_output.tree_r_cache_path != tree_r_cache_path {
+                                    saved_output.tree_r_cache_path = tree_r_cache_path;
+                                    let updated = serde_json::to_vec(&saved_output)?;
+                                    write_zigzag_commit_phase1(&c1_path, &updated)?;
+                                    return Ok(updated.into_boxed_slice().into());
+                                }
+                                return Ok(saved.into_boxed_slice().into());
+                            }
                             Err(error) => {
                                 log::warn!("regenerating invalid saved ZigZag C1: {:#}", error)
                             }
@@ -970,6 +986,7 @@ fn seal_commit_phase1(
                 zigzag: ZIGZAG_ENVELOPE_KIND.to_string(),
                 version: ZIGZAG_COMMIT_PHASE1_VERSION,
                 registered_proof: registered_seal_proof_as_i32(registered_proof),
+                tree_r_cache_path,
                 phase1,
             })?;
             write_zigzag_commit_phase1(&c1_path, &result)?;
@@ -3049,6 +3066,20 @@ pub mod tests {
         );
         let good = first.as_ref().to_vec();
         let path = zigzag_commit_phase1_path(cache.path());
+        // The same v2 C1 without the optional hint remains readable. A C1 retry binds
+        // it to the current local cache only after semantic validation and persists it.
+        let mut old = parse_zigzag_commit_phase1(&good)?.unwrap();
+        old.tree_r_cache_path = None;
+        let old_bytes = serde_json::to_vec(&old)?;
+        assert!(parse_zigzag_commit_phase1(&old_bytes)?
+            .unwrap()
+            .tree_r_cache_path
+            .is_none());
+        fs::write(&path, &old_bytes)?;
+        let upgraded = invoke();
+        assert_eq!(upgraded.status_code, FCPResponseStatus::NoError);
+        assert_eq!(upgraded.as_ref().to_vec(), good);
+        assert_eq!(fs::read(&path)?, good);
         for kind in [
             "envelope-root",
             "vanilla-parent",
