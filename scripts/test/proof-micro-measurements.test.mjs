@@ -8,6 +8,7 @@ import test from "node:test";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 import { composeReport, parseEncodePrehashDiagnostics, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { writeFailureReport } from "../write-proof-micro-failure.mjs";
+import { readMemoryBudget } from "../write-proof-micro-provenance.mjs";
 
 function sample(sequence, elapsed, cpu, trigger = "interval", extra = {}) {
   return {
@@ -445,14 +446,24 @@ test("CLI produces JSON and Markdown from the same measurements", () => {
     const paths = ["report.json", "benchmark.json", "telemetry.json", "provenance.json"].map((file) => join(directory, file));
     writeFileSync(paths[1], JSON.stringify({ phases: [{ name: "pre_commit_phase1", phase_id: 1, wall_ms: 10, cpu_ms: 20 }] }));
     writeFileSync(paths[2], JSON.stringify(telemetry));
-    writeFileSync(paths[3], JSON.stringify({ invocation: { outer_wall_ms: 20 } }));
+    assert.equal(readMemoryBudget(directory), null); // Historical runs have no configured split.
+    const budget = { policy: "base-plus-query-cache", base_memory_bytes: 53687091200,
+      query_cache_extra_bytes: 4294967296, measured_memory_limit_bytes: 57982058496,
+      prewarm_memory_limit_bytes: 53687091200 };
+    writeFileSync(join(directory, "memory-budget.json"), JSON.stringify(budget));
+    writeFileSync(paths[3], JSON.stringify({ invocation: { outer_wall_ms: 20,
+      memory_budget: readMemoryBudget(directory), memory_limit_bytes: 57982058496 } }));
     const script = new URL("../compose-proof-micro-report.mjs", import.meta.url);
     const composed = spawnSync(process.execPath, [script.pathname, paths[0], "full", ...paths.slice(1), "-", "-"], { encoding: "utf8" });
     assert.equal(composed.status, 0, composed.stderr);
     const output = JSON.parse(readFileSync(paths[0], "utf8"));
+    assert.deepEqual(output.memory_budget.configured, budget);
+    assert.equal(output.memory_budget.memory_limit_bytes, 57982058496);
     const rendered = spawnSync(process.execPath, [script.pathname, "--phase-markdown", paths[0]], { encoding: "utf8" });
     assert.equal(rendered.status, 0, rendered.stderr);
     assert.equal(rendered.stdout, renderPhaseMarkdown(output));
+    assert.match(rendered.stdout, /base 53687091200 B \+ query cache 4294967296 B = measured container 57982058496 B/);
+    assert.match(rendered.stdout, /Prewarm limit: 53687091200 B/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

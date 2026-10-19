@@ -8,7 +8,7 @@ defaults remain affinity on, two producers, stride 128 and lookahead 4096.
 Record buffering and both DONTNEED options default to off in the general runner
 and Curio. `just bench-zigzag-512` applies its own
 [comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
-options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 60 GiB RAM.
+options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 50 GiB RAM.
 Optional [layer overlap and streaming snapshots](zigzag-layer-pipeline.md) use
 a separate bounded TreeR pool and snapshot buffers; the baseline remains
 sequential until full performance acceptance.
@@ -28,7 +28,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 60 GiB |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | 60129542144 (56 GiB); positive allowance for uncached prover work |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (50 GiB); generic Rust/Curio: 56 GiB |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; 1–64, screen 1/2/3/4 |
@@ -125,9 +125,16 @@ binary builder durability, preallocation and ENOSPC handling remain unchanged.
 No TreeD, replica, parent-cache or parameter file is advised by this operation.
 
 DONTNEED is advisory, not a RAM cap. Include C1 rereads and total sealing when
-deciding whether it helps. Full 512 MiB/32 GiB containers default to 60 GiB
-(64424509440 bytes), with memory-swap equal to memory. Explicit overrides are
-capped at 80 GiB (85899345920 bytes); larger overrides fail.
+deciding whether it helps. All ZigZag benchmark modes default to a 50 GiB
+(53687091200-byte) base budget. Full runs add requested query cache on top,
+including 32 GiB sectors: 4 GiB cache gives a 54 GiB limit. The cache reserve
+defaults to the base; explicit mismatches are rejected. Prewarm, fixture
+preparation and standalone unseal use only the base. Standalone prewarm retains
+its separate override. Docker memory-swap equals memory, disabling extra swap.
+Active-cache totals must fit the loader's 60 GiB ceiling; other overrides are
+capped at 80 GiB. SDR and Curio services do not inherit these limits. Docker
+enforces the total, not separate base/cache partitions. The new memory policy
+requires full-run acceptance on the remote machine.
 
 ## Curio and build variants
 

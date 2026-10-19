@@ -161,8 +161,9 @@ BENCH_ZIGZAG_TREE_R_BUILDER=binary BENCH_ZIGZAG_LAYER_PIPELINE=stream just bench
 ```
 
 These are explicit variants of the existing full benchmark, not new phase-only
-benchmarks or an automatically scheduled matrix. Keep the 60 GiB comparison
-budget and account for other services. Pipeline modes also introduce bounded
+benchmarks or an automatically scheduled matrix. Keep the same RAM limit for
+all variants (currently 50 GiB base plus any requested query cache) and account for other services.
+Pipeline modes also introduce bounded
 dirty writes, so their difference from sequential includes that I/O policy.
 Compare full PC1, later C1 reads and total sealing, not summed nested timers.
 Correctness tests alone do not establish a speedup.

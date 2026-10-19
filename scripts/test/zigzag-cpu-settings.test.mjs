@@ -42,11 +42,11 @@ test("defaults preserve encode settings and leave pool sizing to the container",
 
 test("native variables and benchmark overrides reach explicit docker -e arguments", () => {
   const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
-  const start = source.indexOf('if [[ "${backend}" == "zigzag" ]]; then\n  source');
-  const end = source.indexOf('if [[ "${backend}" == "zigzag" &&', start);
+  const start = source.indexOf('  # This is a disposable benchmark on a shared host.');
+  const end = source.indexOf('zigzag_setup_args=()', start);
   assert.ok(start > 0 && end > start);
   const block = source.slice(start, end);
-  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; backend="$2"; docker_common_args=(); ' + block + '\nif [[ "$backend" == zigzag ]]; then printf "%s\\0" "${docker_common_args[@]}"; fi';
+  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; backend="$2"; docker_common_args=(); if [[ "$backend" == zigzag ]]; then source "$1/scripts/zigzag-cpu-settings.sh"; ' + block + '\nif [[ "$backend" == zigzag ]]; then printf "%s\\0" "${docker_common_args[@]}"; fi';
   const result = shell(code, {
     RAYON_NUM_THREADS: "12", EC_GPU_NUM_THREADS: "8", BENCH_RAYON_NUM_THREADS: "6",
     BENCH_ZIGZAG_ENCODE_AFFINITY: "false", BENCH_ZIGZAG_ENCODE_PRODUCERS: "3",
@@ -181,23 +181,78 @@ test("actual Curio launcher resolves auto inside its cpuset before executing the
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
 
-test("full benchmark defaults to 60 GiB with equal memory/swap limits and an 80 GiB override ceiling", () => {
+test("ZigZag adds query cache above the base only for full runs, with separate prewarm and SDR limits", () => {
   const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
-  const start = source.indexOf('if [[ "${backend}" == "zigzag" && ( "${sector_size}"');
-  const end = source.indexOf("zigzag_setup_args=()", start);
+  const start = source.indexOf("benchmark_limit_args=()");
+  const end = source.indexOf("\nbench_epoch_ms()", start);
   assert.ok(start > 0 && end > start);
-  for (const sector of ["512mib", "32gib"]) {
-    const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; backend=zigzag; sector_size="$2"; mode=full; docker_common_args=(--user 1); ' + source.slice(start, end) + '\nprintf "%s\\n" "${docker_common_args[@]}"';
-    const defaults = shell(code, {}, [sector]);
-    assert.equal(defaults.status, 0, defaults.stderr);
-    assert.ok(defaults.stdout.includes("--memory\n64424509440\n--memory-swap\n64424509440\n"));
-    for (const bytes of ["85899345920", "68719476736", "64424509440", "42949672960"]) {
-      const result = shell(code, { BENCH_ZIGZAG_FULL_MEMORY_BYTES: bytes }, [sector]);
-      assert.equal(result.status, 0, result.stderr);
-      assert.ok(result.stdout.includes(`--memory\n${bytes}\n--memory-swap\n${bytes}\n`));
-    }
-    for (const bytes of ["110000000000", "85899345921", "0"]) assert.notEqual(shell(code, { BENCH_ZIGZAG_FULL_MEMORY_BYTES: bytes }, [sector]).status, 0);
+  const temporary = mkdtempSync(join(tmpdir(), "zigzag-memory-settings-"));
+  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; run_dir="$2"; sector_size="$3"; mode="$4"; backend="$5"; docker_common_args=(--user 1); ' + source.slice(start, end) +
+    '\nprintf "%s\\0" MEASURED ${benchmark_limit_args[@]+"${benchmark_limit_args[@]}"} PREWARM ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} COMMON "${docker_common_args[@]}" ${zigzag_setup_args[@]+"${zigzag_setup_args[@]}"}';
+  const run = (sector, mode, backend, env = {}) => shell(code, env, [temporary, sector, mode, backend]);
+  function assertLimits(result, measured, prewarm = measured, extra = "0") {
+    assert.equal(result.status, 0, result.stderr);
+    const args = result.stdout.split("\0").filter(Boolean);
+    const measuredArgs = args.slice(1, args.indexOf("PREWARM"));
+    const prewarmArgs = args.slice(args.indexOf("PREWARM") + 1, args.indexOf("COMMON"));
+    assert.deepEqual(measuredArgs, ["--memory", measured, "--memory-swap", measured]);
+    assert.deepEqual(prewarmArgs, ["--memory", prewarm, "--memory-swap", prewarm]);
+    assert.ok(!args.slice(args.indexOf("COMMON") + 1).includes("--memory"));
+    assert.ok(args.includes("FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=42949672960"));
+    assert.deepEqual(JSON.parse(readFileSync(join(temporary, "memory-budget.json"), "utf8")), {
+      policy: "base-plus-query-cache", base_memory_bytes: Number(prewarm), query_cache_extra_bytes: Number(extra),
+      measured_memory_limit_bytes: Number(measured), prewarm_memory_limit_bytes: Number(prewarm),
+    });
+    return args;
   }
+  try {
+    for (const sector of ["2kib", "8mib", "512mib", "32gib"]) {
+      for (const mode of ["full", "prepare-fixture", "unseal-only", "prewarm-only"]) {
+        assertLimits(run(sector, mode, "zigzag"), "53687091200");
+        const extra = mode === "full" ? "4294967296" : "0";
+        const args = assertLimits(run(sector, mode, "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" }),
+          mode === "full" ? "57982058496" : "53687091200", "53687091200", extra);
+        assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=53687091200"));
+        if (mode !== "prewarm-only") {
+          const stacked = run(sector, mode, "stacked", {
+            BENCH_ZIGZAG_FULL_MEMORY_BYTES: "invalid", BENCH_ZIGZAG_SETUP_MEMORY_BYTES: "invalid",
+            BENCH_ZIGZAG_QUERY_CACHE_BYTES: "invalid",
+          });
+          assert.equal(stacked.status, 0, stacked.stderr);
+          assert.ok(!stacked.stdout.includes("--memory"));
+          assert.ok(!stacked.stdout.includes("FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES"));
+        }
+      }
+    }
+    for (const mode of ["full", "prewarm-only"]) {
+      const selected = mode === "full" ? "BENCH_ZIGZAG_FULL_MEMORY_BYTES" : "BENCH_ZIGZAG_SETUP_MEMORY_BYTES";
+      const other = mode === "full" ? "BENCH_ZIGZAG_SETUP_MEMORY_BYTES" : "BENCH_ZIGZAG_FULL_MEMORY_BYTES";
+      for (const bytes of ["85899345920", "64424509440", "53687091200", "42949672960"]) {
+        assertLimits(run("32gib", mode, "zigzag", { [selected]: bytes, [other]: "invalid" }), bytes);
+      }
+      for (const bytes of ["110000000000", "85899345921", "0", "invalid", "18446744073709551617"]) {
+        assert.notEqual(run("32gib", mode, "zigzag", { [selected]: bytes }).status, 0);
+      }
+    }
+    const native = { FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" };
+    assertLimits(run("32gib", "full", "zigzag", native), "57982058496", "53687091200", "4294967296");
+    assertLimits(run("32gib", "full", "zigzag", { ...native, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "0" }), "53687091200");
+    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "9663676416" }), "63350767616", "53687091200", "9663676416");
+    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418240" }), "64424509440", "53687091200", "10737418240");
+    for (const env of [
+      { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418241" },
+      { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
+      { ...native, BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "60129542144" },
+      { ...native, FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "42949672960" },
+    ]) assert.notEqual(run("512mib", "full", "zigzag", env).status, 0, JSON.stringify(env));
+    assertLimits(run("512mib", "full", "zigzag", {
+      ...native, BENCH_ZIGZAG_FULL_MEMORY_BYTES: "60129542144", BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "60129542144",
+    }), "64424509440", "60129542144", "4294967296");
+    // The real launch sites must use the same arrays exercised above.
+    const launches = source.match(/(?:if )?docker run [\s\S]*?porep-proof-microbench/g) ?? [];
+    assert.ok(launches.some((launch) => launch.includes('${benchmark_limit_args[@]+')));
+    assert.equal((source.match(/\$\{prewarm_limit_args\[@\]\+/g) ?? []).length, 3);
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
 
 test("CPU configuration and affinity/fallback logs are preserved in JSON and Markdown", () => {

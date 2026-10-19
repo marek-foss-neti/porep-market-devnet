@@ -222,12 +222,12 @@ POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
 bash scripts/bench-proof-micro.sh zigzag 512mib prewarm-only
 ```
 
-The setup container uses `--memory=85899345920` and
-`--memory-swap=85899345920` (80 GiB RAM, with swap disabled). Its report records
+The setup container defaults to `--memory=53687091200` and
+`--memory-swap=53687091200` (50 GiB RAM, with swap disabled). Its report records
 the kernel `memory.peak`, actual cgroup limits, swap, setup phases, disk use, image provenance, and
 SHA-256 digests of `.params/.vk/.meta`. The default generator limits are
 `BENCH_ZIGZAG_SETUP_BATCH_POINTS=65536`, `BENCH_ZIGZAG_SETUP_WORKERS=16`, and
-`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=75161927680` (70 GiB), leaving 10 GiB between
+`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=42949672960` (40 GiB), leaving 10 GiB between
 the setup allocation estimate and the container limit for overhead and file cache.
 The parameter directory is persistent and may be used for a second `prewarm-only` call with
 `BENCH_ZIGZAG_SETUP_REQUIRE_MISS` unset; its summary must report a cache hit.
@@ -318,6 +318,15 @@ parameters, parent cache, and ZigZag sidecars, counting each configured path
 once. The prewarm process has a separate telemetry stream and is not folded
 into the measured sealing process.
 
+ZigZag benchmarks use a 50 GiB base RAM budget. Full runs add requested query
+cache on top: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512`
+uses 54 GiB for the measured container and 50 GiB for prewarm, with no extra
+swap. This also applies to 32 GiB sectors. The cache reserve follows the base;
+an explicit mismatched reserve is rejected. The current loader permits at most
+60 GiB base plus cache (10 GiB cache at the default base). See the
+[query-cache policy](docs/runtime/zigzag-query-cache.md). SDR and Curio service
+limits are unchanged; cache remains off unless requested.
+
 Each successful run publishes:
 
 ```text
@@ -325,6 +334,7 @@ summary.json                       benchmark-native phase result
 telemetry.ndjson                   raw timestamped samples
 telemetry-summary.json             validated overall and per-phase aggregate
 provenance.json                    worktrees, image, host, Docker and tool identity
+memory-budget.json                 ZigZag base, additional cache and container limits
 report.json                        canonical combined machine-readable report
 summary.md                         human-readable benchmark and telemetry tables
 param-prewarm-telemetry.ndjson     separate prewarm samples in full mode

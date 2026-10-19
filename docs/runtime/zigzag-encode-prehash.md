@@ -97,7 +97,7 @@ BENCH_ZIGZAG_ENCODE_PREHASH=1 just bench-zigzag-512
 ```
 
 These are explicit comparison runs, not an automatic benchmark matrix. Keep
-the 60 GiB preset and no extra container swap; start only when the shared host
+the current 50 GiB base preset (plus any explicitly requested query cache) and no extra container swap; start only when the shared host
 has enough headroom for its other services. Compare encode, full PC1 and total
 sealing. A histogram with many prepared blocks alone does not establish a
 benefit: feeders and the consumer still contend for CPU/cache bandwidth.

@@ -172,9 +172,10 @@ export function composeReport({
     parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? provenance.invocation.parameter_loader ?? null,
     allocator_configuration: benchmark.cpu_configuration?.allocator_configuration ?? provenance.invocation.allocator_configuration ?? null,
     memory_budget: {
+      configured: provenance.invocation.memory_budget ?? null,
       memory_limit_bytes: telemetry.overall.cgroup.memory_max_bytes ?? provenance.invocation.memory_limit_bytes ?? null,
       swap_limit_bytes: telemetry.overall.cgroup.swap_max_bytes ?? provenance.invocation.swap_limit_bytes ?? null,
-      scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
+      scope: "effective container cgroup; ZigZag benchmarks default to 50 GiB base plus requested C2 query cache in full runs; prewarm uses only the base; SDR is unchanged; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
     encode_prehash: measuredLog === null ? [] : parseEncodePrehashDiagnostics(measuredLog),
@@ -333,6 +334,14 @@ export function renderPhaseMarkdown(report) {
       `Encode: affinity=${cpu.encode_affinity}, producers=${value(cpu.encode_producers)}, stride=${value(cpu.encode_stride)}, lookahead=${value(cpu.encode_lookahead)}. Parent cache=${cpu.parent_cache}, requested mmap window=${value(cpu.parent_cache_window_nodes)} nodes.`, "",
       `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
       "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
+  }
+  if (report.memory_budget?.configured) {
+    const budget = report.memory_budget.configured;
+    lines.push("", "Configured RAM: base " + value(budget.base_memory_bytes) +
+      " B + query cache " + value(budget.query_cache_extra_bytes) +
+      " B = measured container " + value(budget.measured_memory_limit_bytes) +
+      " B. Prewarm limit: " + value(budget.prewarm_memory_limit_bytes) +
+      " B. Docker enforces the total, not separate base/cache partitions; actual cache retention can be smaller.");
   }
   if (report.parameter_loader || report.c2_suboperations?.length) {
     lines.push("", "## Groth16 parameters and batch memory", "",

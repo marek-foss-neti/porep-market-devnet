@@ -63,10 +63,23 @@ The effective point-storage budget is:
 min(requested_cache, max(0, min(detected_cgroup_limit, 60 GiB) - reserve))
 ```
 
-The default reserve is **56 GiB** for witness, FFT/MSM, other query families,
-transient decoding, mmap/file residency, allocator and cache metadata overhead.
-It is a planning allowance, **not** a reservation enforced by the kernel or a
-measurement of live RSS. The cgroup enforces the whole-process limit. Retaining
+The generic Rust/Curio reserve remains **56 GiB**. The benchmark runner instead
+sets it to the base budget, **50 GiB** by default, for witness, FFT/MSM, other
+query families, transient decoding, mmap/file residency and allocator overhead.
+For full runs, requested cache is added **on top**: a 4 GiB request gives a
+54 GiB measured container and a 50 GiB reserve, so the cache can retain up to
+4 GiB. Full-run prewarm, fixture preparation and standalone unseal receive only
+the base budget; standalone prewarm retains its separate 50 GiB default.
+This applies to all ZigZag sector sizes, including 512 MiB and 32 GiB.
+
+The reserve is a planning allowance, not a separate kernel-enforced partition
+or live-RSS measurement. Docker enforces the sum for the whole container.
+The current Rust adapter still clamps its calculation at 60 GiB: the runner
+rejects active-cache configurations whose base plus cache exceeds 60 GiB
+(default base therefore permits at most 10 GiB of cache). An explicit reserve
+must equal the base; unset old 56 GiB reserve overrides when using the 50 GiB
+base. This avoids silently reducing the requested cache. The 80 GiB global
+container ceiling remains available for runs without active cache. Retaining
 points can increase reclaim even when anonymous RSS fits, so acceptance must
 check full C2 time, faults, I/O, PSI and OOM as well as peak RAM.
 
@@ -83,12 +96,22 @@ native source and does not use this adapter.
 | Benchmark override | Rust / dedicated Curio variable | Default |
 | --- | --- | ---: |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `60129542144` (56 GiB) |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, normally `53687091200` (50 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
 
 Values are integer bytes, capped at 60 GiB; the reserve must be positive. The
 benchmark explicitly forwards both variables into its ZigZag containers and
-records them in provenance. Dedicated Curio launchers and Compose use the same
-native variables. Prewarm does not run C2 and does not populate this cache.
+records the effective configuration in `memory-budget.json`, provenance,
+`report.json` and `summary.md`. Configured cache allowance and actual retained
+families are reported separately. Dedicated Curio launchers and Compose use the
+same native variables but do not inherit this benchmark memory policy. Prewarm
+does not run C2 and does not populate this cache.
+
+```bash
+BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
+```
+
+This requests 50 GiB base + 4 GiB cache = 54 GiB RAM, with swap disabled.
+Cache remains disabled by default; changing this runner policy needs no rebuild.
 
 `groth16_parameters` in `report.json` contains `query_cache` configuration,
 selected families and reserved bytes, plus per-family `query_cache_access`
@@ -122,14 +145,14 @@ then compares a hit with Bellperson using identical randomness and verifies the
 proof. Runner tests cover defaults, overrides, invalid budgets, Compose and
 JSON/Markdown records.
 
-For a candidate full run after rebuilding the dedicated image:
-
-```sh
-BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
-```
-
-The reference is the same command with `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`.
-Keep the existing 60 GiB, batch 1 and other comparison defaults. Check one B-G1
+The historical candidate used `BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296`
+and a 60 GiB container, with the reference using `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`.
+With the current 50 GiB base, cache off uses a 50 GiB container and a 4 GiB
+cache request uses 54 GiB. This compares base-plus-cache configurations, not
+cache alone at a fixed total RAM limit. For a fixed-total comparison, use a
+54 GiB base with cache off versus a 50 GiB base plus 4 GiB cache; record the
+different base budgets. Neither configuration has been validated by the
+historical 60 GiB run. Keep batch 1 and the other settings identical. Check one B-G1
 decode followed by nine hits, all ten proofs, verification and unseal. Compare
 C2 and the full sealing path with comparable host load/cache state. Batch 2
 requires its own on/off comparison and memory check; do not add its expected

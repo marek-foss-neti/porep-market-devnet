@@ -53,7 +53,7 @@ just bench-zigzag-512
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | `4` |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
-| `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `64424509440` (60 GiB) |
+| `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `53687091200` (50 GiB base; query cache is additional) |
 
 These are the settings used by the three successful full runs on the remote
 machines on 12 October 2026. Use this preset for comparisons of subsequent
@@ -69,10 +69,12 @@ pages under memory pressure before C1. Rebuild the images from the current pin
 to apply this implementation change.
 
 The optional [Groth16 query cache](zigzag-query-cache.md) is explicitly off in
-this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`, with
-`BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144` (56 GiB allowance when
-retention is requested). It does not inherit a Curio cache setting from the
-host. An explicit benchmark override enables the experiment.
+this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`. An explicit benchmark override
+enables it and adds the requested cache budget on top of the base RAM budget.
+The runner defaults the reserve to that base (50 GiB), so requesting 4 GiB
+cache gives a 54 GiB full-run container. The wrapper does not inherit the
+native Curio cache-size setting from the host. Explicit reserve overrides must
+match the base when cache is enabled.
 
 The [binary TreeR builder](zigzag-merkle-builder.md) is also selected explicitly
 for its full comparison: `BENCH_ZIGZAG_TREE_R_BUILDER=binary just bench-zigzag-512`.
@@ -108,13 +110,19 @@ in the reports describe the parameter directory, not a guaranteed cold RAM
 cache. Parameter preparation and loading are recorded separately from the
 measured cycle and remain visible in each report.
 
-The full-run prewarm and measured cycle, including sealing, C2 and unseal,
-default to 60 GiB (64,424,509,440 bytes) with no additional swap. The wrapper
-passes `BENCH_ZIGZAG_FULL_MEMORY_BYTES` to the full runner; an explicit override
-changes the limit for both containers. The separate setup command also defaults
-to 60 GiB. Its 50 GiB setup allocation budget remains below the container limit.
-Explicit container-limit overrides remain capped at 80 GiB. The 60 GiB default
-is a configured budget, not a measured guarantee that the full run fits.
+The base RAM budget is 50 GiB (53,687,091,200 bytes), with no additional swap.
+The wrapper forwards `BENCH_ZIGZAG_FULL_MEMORY_BYTES` as the base for both
+prewarm and the measured cycle. Only the full measured container adds the
+requested query cache: 4 GiB cache means a 54 GiB limit. The same policy applies
+to 32 GiB and other ZigZag sectors. Fixture preparation and standalone unseal
+use only the base. Standalone prewarm uses `BENCH_ZIGZAG_SETUP_MEMORY_BYTES`,
+also defaulting to 50 GiB. Its 40 GiB setup allocation check is a lower-bound
+estimate, not a guarantee of headroom. SDR and Curio service limits are separate.
+Active-cache runs require base plus cache <= 60 GiB under the pinned loader's
+policy; other container-limit overrides remain capped at 80 GiB. Docker enforces
+the total, not a hard partition between base work and cache. The new policy
+requires remote acceptance; historical 60 GiB runs are not direct performance
+baselines for 50 GiB base plus cache. Reports record both the base and total.
 
 Each run checks the effective setup before parameter generation, then verifies
 that the full run used the same cache identifier and profile. It requires a

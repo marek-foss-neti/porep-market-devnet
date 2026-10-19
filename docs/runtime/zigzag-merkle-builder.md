@@ -60,7 +60,7 @@ There is no sector-sized node vector or vector of all chunk tasks.
 
 These limits cover builder-owned buffers, not the replica, OS page cache,
 shared Poseidon constants, Rayon or other sealing allocations. The existing
-60 GiB benchmark cgroup remains in place. TreeR DONTNEED runs only at C2 entry,
+benchmark cgroup caps the whole workload at 50 GiB base plus any requested query cache. TreeR DONTNEED runs only at C2 entry,
 after C1 validation, rather than after individual tree builds; builder syncs
 still guarantee durability.
 No additional Groth16 query retention is enabled.
@@ -155,7 +155,8 @@ Validation on 2026-10-14:
   A full 2 KiB FFI cycle used `binary`, produced a verified 192-byte proof and
   passed byte-for-byte unseal. `curio --version` and `sptool --version` passed.
   No live Curio task/lifecycle or standard SDR lifecycle was run.
-- A full bench-512 at the unchanged 60 GiB comparison limit remains pending
+- A full bench-512 comparison was pending at this validation. Future comparisons
+  must use the same limit for both variants (currently 50 GiB base plus any requested query cache), with
   sufficient memory headroom for the other services on the remote machine.
   No service was stopped and the benchmark limit was not raised or lowered.
 - Locally, 26 focused JS runner/report tests, the mandatory-API build guard,

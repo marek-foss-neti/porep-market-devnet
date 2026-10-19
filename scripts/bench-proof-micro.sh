@@ -172,8 +172,47 @@ docker_common_args=(
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+benchmark_limit_args=()
+prewarm_limit_args=()
 if [[ "${backend}" == "zigzag" ]]; then
   source "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh"
+  # The base budget excludes retained C2 queries. Only the full measured
+  # container gets the cache allowance; prewarm/fixture/unseal do not use it.
+  memory_variable=BENCH_ZIGZAG_FULL_MEMORY_BYTES
+  base_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-53687091200}"
+  if [[ "${mode}" == "prewarm-only" ]]; then
+    memory_variable=BENCH_ZIGZAG_SETUP_MEMORY_BYTES
+    base_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-53687091200}"
+  fi
+  [[ "${base_memory_bytes}" =~ ^[0-9]{1,11}$ ]] ||
+    devnet_die "${memory_variable} must be positive and at most 80 GiB"
+  base_memory_bytes=$((10#${base_memory_bytes}))
+  ((base_memory_bytes > 0 && base_memory_bytes <= 85899345920)) ||
+    devnet_die "${memory_variable} must be positive and at most 80 GiB"
+  cache_setting="$(zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0)"
+  query_cache_bytes="${cache_setting#*=}"
+  # Keep the generic helper/Curio defaults unchanged. The benchmark reserve
+  # follows its base budget (bounded by the loader's accepted integer range).
+  default_reserve_bytes=$((base_memory_bytes < 64424509440 ? base_memory_bytes : 64424509440))
+  BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${default_reserve_bytes}}}"
+  reserve_setting="$(zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES}" 1)"
+  query_cache_extra_bytes=0
+  if [[ "${mode}" == "full" ]] && ((query_cache_bytes > 0)); then
+    query_cache_extra_bytes="${query_cache_bytes}"
+    # The pinned Rust loader clamps its budget calculation to 60 GiB.
+    # Reject an incompatible request rather than silently shrinking the cache.
+    ((base_memory_bytes + query_cache_extra_bytes <= 64424509440)) ||
+      devnet_die "base RAM plus query cache must not exceed the current loader's 60 GiB ceiling"
+    (( ${reserve_setting#*=} == base_memory_bytes )) ||
+      devnet_die "query cache reserve must equal the base RAM budget; unset BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES / FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES or set it to ${base_memory_bytes}"
+  fi
+  measured_memory_bytes=$((base_memory_bytes + query_cache_extra_bytes))
+  benchmark_limit_args=(--memory "${measured_memory_bytes}" --memory-swap "${measured_memory_bytes}")
+  prewarm_limit_args=(--memory "${base_memory_bytes}" --memory-swap "${base_memory_bytes}")
+  jq -n --argjson base "${base_memory_bytes}" --argjson cache "${query_cache_extra_bytes}" \
+    --argjson measured "${measured_memory_bytes}" \
+    '{policy:"base-plus-query-cache",base_memory_bytes:$base,query_cache_extra_bytes:$cache,
+      measured_memory_limit_bytes:$measured,prewarm_memory_limit_bytes:$base}' > "${run_dir}/memory-budget.json"
   # This is a disposable benchmark on a shared host. Prefer it as an OOM
   # victim over unrelated services; cgroup memory limits still apply.
   docker_common_args+=(--oom-score-adj 1000)
@@ -191,14 +230,7 @@ if [[ "${backend}" == "zigzag" ]]; then
   fi
   docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
-if [[ "${backend}" == "zigzag" && ( "${sector_size}" == "512mib" || "${sector_size}" == "32gib" ) && "${mode}" == "full" ]]; then
-  full_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-64424509440}"
-  [[ "${full_memory_bytes}" =~ ^[0-9]+$ ]] && ((full_memory_bytes > 0 && full_memory_bytes <= 85899345920)) ||
-    devnet_die "BENCH_ZIGZAG_FULL_MEMORY_BYTES must be positive and at most 80 GiB"
-  docker_common_args+=(--memory "${full_memory_bytes}" --memory-swap "${full_memory_bytes}")
-fi
 zigzag_setup_args=()
-prewarm_limit_args=()
 if [[ "${backend}" == "zigzag" ]]; then
   zigzag_default_batch_size=2
   case "${sector_size}" in
@@ -213,7 +245,7 @@ if [[ "${backend}" == "zigzag" ]]; then
   )
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
   setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
-  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-53687091200}"
+  setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-42949672960}"
   for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
     [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
       devnet_die "ZigZag setup batch, workers, and budget must be positive integers"
@@ -227,10 +259,6 @@ if [[ "${backend}" == "zigzag" ]]; then
     -e "FIL_PROOFS_ZIGZAG_SETUP_PHASE_FILE=/bench-run/zigzag-setup-phase.txt"
   )
   if [[ "${mode}" == "prewarm-only" ]]; then
-    setup_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-64424509440}"
-    [[ "${setup_memory_bytes}" =~ ^[0-9]+$ ]] && (( setup_memory_bytes > 0 && setup_memory_bytes <= 85899345920 )) ||
-      devnet_die "BENCH_ZIGZAG_SETUP_MEMORY_BYTES must be positive and at most 80 GiB"
-    prewarm_limit_args=(--memory "${setup_memory_bytes}" --memory-swap "${setup_memory_bytes}")
     if [[ "${BENCH_ZIGZAG_SETUP_REQUIRE_MISS:-0}" == "1" ]]; then
       [[ -z "$(find "${parameter_cache_host}" -maxdepth 1 -type f -name 'v28-zigzag-proof-of-replication-*.params' -print -quit)" ]] ||
         devnet_die "ZigZag setup acceptance requires a cache miss; select an empty parameter directory"
@@ -662,6 +690,7 @@ run_prepare_fixture() {
   docker run --rm \
     --cidfile "${cidfile}" \
     "${docker_common_args[@]}" \
+    ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} \
     -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=${telemetry_container_path}" \
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
@@ -703,6 +732,7 @@ run_unseal_only_benchmark() {
   docker run --rm \
     --cidfile "${unseal_cidfile}" \
     "${docker_common_args[@]}" \
+    ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} \
     -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
@@ -994,7 +1024,7 @@ if [[ "${mode}" == "prewarm-only" ]]; then
     "${prewarm_telemetry_summary_json}" "${prewarm_summary_json}"
   bench_compose_report \
     "prewarm-only" "${prewarm_summary_json}" "${prewarm_telemetry_summary_json}" - -
-  jq -e --argjson limit "${setup_memory_bytes}" \
+  jq -e --argjson limit "${base_memory_bytes}" \
     --argjson page_size "$(getconf PAGESIZE)" \
     '.benchmark.verifying_key_matches_params == true
       and .derived.cgroup_memory_peak_bytes <= $limit
@@ -1037,6 +1067,7 @@ fi
 if docker run ${measured_remove_args[@]+"${measured_remove_args[@]}"} \
   --cidfile "${measured_cidfile}" \
   "${docker_common_args[@]}" \
+  ${benchmark_limit_args[@]+"${benchmark_limit_args[@]}"} \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
   "${image}" \
   porep-proof-microbench \

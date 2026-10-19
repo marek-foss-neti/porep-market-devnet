@@ -53,21 +53,29 @@ Use that opt-in only on a machine with enough memory, disk, proof parameters, an
 time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
-Full ZigZag runs for `512mib` and `32gib` limit both their prewarm and measured
-containers to 64,424,509,440 bytes (60 GiB) of RAM by default, with swap disabled. Override
-this with `BENCH_ZIGZAG_FULL_MEMORY_BYTES`. The full-run prewarm inherits the same
-limit as sealing, C2 and unseal. Standalone `prewarm-only` uses
-`BENCH_ZIGZAG_SETUP_MEMORY_BYTES` with the same 60 GiB default. Both overrides
-retain the global ceiling of 80 GiB. The remote 32 GiB run
+All ZigZag benchmark modes and sector sizes default to a 53,687,091,200-byte
+(50 GiB) base RAM budget, with swap disabled. `BENCH_ZIGZAG_FULL_MEMORY_BYTES`
+sets this base. Full measured runs add `BENCH_ZIGZAG_QUERY_CACHE_BYTES` on top:
+4 GiB of cache gives a 54 GiB Docker limit and a 50 GiB cache reserve. Full-run
+prewarm, fixture preparation and `unseal-only` receive only the base budget.
+Standalone `prewarm-only` instead uses `BENCH_ZIGZAG_SETUP_MEMORY_BYTES`, also
+50 GiB. Active-cache runs must fit within the current loader's 60 GiB policy
+ceiling and any explicit cache reserve must equal the base; incompatible
+settings fail before the workload starts. Runs without active cache retain the
+80 GiB override ceiling. `memory-budget.json`, provenance and JSON/Markdown
+reports distinguish the base, cache addition and prewarm limit. Docker enforces
+the sum, not separate base/cache partitions. The cap is per container, shared by
+all its processes and threads, not a combined budget for concurrent benchmarks.
+These benchmark settings do not cap SDR, Curio services or other host processes. The remote 32 GiB run
 `2026-09-29T21-03-21-645Z-bench-proof-micro-zigzag-32gib` completed successfully
 with seal verification and raw-unseal byte comparison passing, no OOM events
 or OOM kills, and zero swap usage. Its kernel cgroup memory peak reached the
 effective limit of 109,999,996,928 bytes (approximately 102.45 GiB), corresponding
 to the former 110 GB limit. This validates that historical run at its configured
 limit; it does not establish memory headroom or guarantee success with the
-current 60 GiB default or concurrent runs.
-The default setup allocation budget is 50 GiB
-(`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=53687091200`); it checks an allocation lower
+current 50 GiB default or concurrent runs.
+The default setup allocation budget is 40 GiB
+(`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=42949672960`); it checks an allocation lower
 bound and is not a runtime memory limit.
 
 The full runner generates the deterministic input on demand and checks unsealed

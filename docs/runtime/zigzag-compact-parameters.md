@@ -70,9 +70,9 @@ it does not bypass validation or allow concurrent duplicate initialization.
 | --- | --- | --- |
 | Full microbench and prewarm | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped` |
 | Rust API and dedicated Curio | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped` |
-| Full benchmark RAM | `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | 64,424,509,440 (60 GiB); positive overrides up to 80 GiB |
-| Standalone prewarm RAM | `BENCH_ZIGZAG_SETUP_MEMORY_BYTES` | 64,424,509,440 (60 GiB); positive overrides up to 80 GiB |
-| Setup allocation check | `BENCH_ZIGZAG_SETUP_BUDGET_BYTES` | 53,687,091,200 (50 GiB); lower-bound check, not a runtime cap |
+| ZigZag benchmark base RAM (except standalone prewarm) | `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | 53,687,091,200 (50 GiB); full-run query cache is added on top |
+| Standalone prewarm RAM | `BENCH_ZIGZAG_SETUP_MEMORY_BYTES` | 53,687,091,200 (50 GiB); positive overrides up to 80 GiB |
+| Setup allocation check | `BENCH_ZIGZAG_SETUP_BUDGET_BYTES` | 42,949,672,960 (40 GiB); lower-bound check, not a runtime cap |
 
 The benchmark override takes precedence over the native loader setting and is
 passed explicitly to Docker. The dedicated Curio Compose override and launchers
@@ -80,9 +80,14 @@ use the native setting. Selection is fixed for the lifetime of a process;
 comparison requires separate processes. Standard SDR does not receive it.
 The existing memory/swap contract stays in place: Docker memory-swap equals
 memory, meaning no additional swap. A lower explicit RAM limit is supported;
-the default is 60 GiB and the global ceiling for explicit overrides stays 80 GiB.
-The full 512 MiB workload subsequently passed at this default in the three
-2026-10-12 runs described below; this does not establish a 32 GiB result.
+the base default is 50 GiB. Full runs add the requested query cache on top
+and default its reserve to the base; prewarm receives only the base. Active-cache
+totals must fit the current loader's 60 GiB ceiling. Runs without active cache
+retain the 80 GiB override ceiling. See [query-cache policy](zigzag-query-cache.md).
+The full 512 MiB workload passed at the former 60 GiB default in the three
+2026-10-12 runs described below; this establishes neither a 50 GiB acceptance
+nor a 32 GiB result. The benchmark cap is container-wide and applies to all
+ZigZag benchmark modes; SDR and Curio services are outside this setting.
 
 The full runner records `groth16_parameter_load`, `groth16_query_*`,
 `groth16_batch` and `groth16_c2` boundaries. Batch details identify the zero-based
@@ -238,7 +243,7 @@ machine with ready parameters and sufficient host memory throughout the run.
 Record explicit allocator, batch and CPU settings; compare identical settings
 when evaluating the loader. Acceptance requires all ten partitions, proof
 verification and byte-for-byte unseal, plus memory, I/O, PSI, OOM and swap data.
-The 60 GiB default passed the recorded 512 MiB runs above; no 32 GiB result is
-established by those runs. No local benchmark or prewarm should be
+The former 60 GiB default passed the recorded 512 MiB runs above; no 50 GiB or
+32 GiB result is established by those runs. No local benchmark or prewarm should be
 started, and diagnostic changes must remain unstaged for manual review; never
 stage files or create commits automatically.
