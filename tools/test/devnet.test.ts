@@ -886,8 +886,9 @@ jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_di
   --arg manifest "$manifest" --arg manifestSha "$(shasum -a 256 "$manifest" | awk '{print $1}')" \\
   --arg sourceSha "\${DEVNET_TEST_REPORT_SOURCE_SHA:-$(jq -r .rustFilProofsSourceSha256 "$manifest")}" \\
   --argjson sectorBytes "\${DEVNET_TEST_REPORTED_SECTOR_BYTES:-${preset.bytes}}" \\
+  --arg backend "\${DEVNET_TEST_REPORTED_BACKEND:-zig-zag}" \\
   --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
-  {backend: "zigzag", sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
+  {backend: $backend, sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
    porep_layers: 11, porep_partitions: 10, minimum_total_challenges: 176,
    challenges_per_layer_per_partition: 18, registered_seal_proof_id: 8,
    profile: ${preset.nativeProfile ? '{total_challenge_instances: 1980}' : 'null'}} as $geometry |
@@ -946,6 +947,13 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     const wrongGeometry = run(commit, { DEVNET_TEST_REPORTED_SECTOR_BYTES: "2048" });
     assert.notEqual(wrongGeometry.status, 0);
     assert.match(wrongGeometry.stderr, /proof geometry or correctness validation failed/);
+    // Real Rust summaries use kebab-case "zig-zag", not the CLI's "zigzag".
+    // Reject both a different backend and an incorrect report spelling.
+    for (const backend of ["stacked", "zigzag"]) {
+      const invalid = run(commit, { DEVNET_TEST_REPORTED_BACKEND: backend });
+      assert.notEqual(invalid.status, 0);
+      assert.match(invalid.stderr, /proof geometry or correctness validation failed/);
+    }
     const lowerLimit = run(commit, {
       BENCH_ZIGZAG_FULL_MEMORY_BYTES: "42949672960",
       DEVNET_TEST_EXPECTED_MEMORY_BYTES: "42949672960",

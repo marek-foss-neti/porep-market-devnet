@@ -120,10 +120,12 @@ for repetition in 1; do
       and .provenance.build.image.reference == $image
       and .provenance.build.image.id == $imageId' "${report}" >/dev/null ||
     devnet_die "${baseline_profile} run ${repetition} used a different ZigZag image or source"
+  # Rust serializes Backend::ZigZag with serde kebab-case as "zig-zag";
+  # the CLI selector is "zigzag", but that is not the report's backend value.
   jq -e --arg sector "${sector_size}" --argjson bytes "${sector_bytes}" \
     --argjson unsealed "${unsealed_bytes}" '
     def geometry:
-      .backend == "zigzag" and .sector_size_label == $sector and .sector_size_bytes == $bytes
+      .backend == "zig-zag" and .sector_size_label == $sector and .sector_size_bytes == $bytes
       and .porep_layers == 11 and .porep_partitions == 10
       and .minimum_total_challenges == 176 and .challenges_per_layer_per_partition == 18;
     (.benchmark | geometry) and (.prewarm | geometry)
