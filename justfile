@@ -70,6 +70,9 @@ bench-proof-micro backend='stacked' sector_size='8mib':
 bench-zigzag-512:
     @bash scripts/bench-zigzag-512.sh
 
+bench-zigzag-32g:
+    @bash scripts/bench-zigzag.sh 32gib
+
 bench-proof-micro-prepare-fixture backend='stacked' sector_size='8mib' fixture='':
     @bash scripts/bench-proof-micro.sh '{{backend}}' '{{sector_size}}' prepare-fixture '{{fixture}}'
 

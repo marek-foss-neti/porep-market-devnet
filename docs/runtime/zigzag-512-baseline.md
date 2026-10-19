@@ -38,7 +38,10 @@ just build
 just bench-zigzag-512
 ```
 
-`just bench-zigzag-512` applies the following comparison preset automatically:
+`just bench-zigzag-512` and `just bench-zigzag-32g` apply the following comparison
+preset automatically, from one shared [runner](../../scripts/bench-zigzag.sh).
+The latter uses the native 32 GiB sector configuration; see
+[shared benchmark commands](zigzag-benchmarks.md).
 
 | Variable | Default |
 | --- | --- |
@@ -52,12 +55,14 @@ just bench-zigzag-512
 | `BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB` | `64` |
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | `4` |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
+| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
 | `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `53687091200` (50 GiB base; query cache is additional) |
 
-These are the settings used by the three successful full runs on the remote
-machines on 12 October 2026. Use this preset for comparisons of subsequent
-optimizations. The wrapper passes the values explicitly to the full runner,
+The earlier version of this preset used by the three successful runs on
+12 October 2026 had a 60 GiB RAM limit; the current memory policy is described
+below. Use identical settings for comparisons of subsequent optimizations.
+The wrapper passes the values explicitly to the full runner,
 which records them in provenance and reports effective configuration in JSON/MD.
 Applicable settings also reach its prewarm container.
 
@@ -84,7 +89,7 @@ the other comparison settings above are unchanged.
 Explicit `BENCH_*` values override the preset for deliberate experiments; `0`
 disables parent buffering or either DONTNEED option. For these settings, the
 profile's `BENCH_*` defaults take precedence over inherited native
-`FIL_PROOFS_*` variables. The preset belongs to this command, not the general
+`FIL_PROOFS_*` variables. The preset belongs to both dedicated commands, not the general
 `bench-proof-micro` command or Curio. For an allocator reference without an arena
 override, use the general runner with `BENCH_PROOF_MICRO_PROFILE=zigzag-512` and
 `BENCH_ZIGZAG_MALLOC_ARENA_MAX` unset.
@@ -102,7 +107,7 @@ when explicitly set. If that checkout is absent, its Git state is `null`; the
 image manifest still supplies the built revision.
 
 The command uses the persistent `.cache/zigzag-512-parameters` cache and a
-run-local parent-cache directory, then runs one full seal → prove → verify →
+run-local parent-cache directory (or `BENCH_ZIGZAG_PARENT_CACHE_DIR`), then runs one full seal → prove → verify →
 unseal cycle. Set `BENCH_ZIGZAG_512_PARAMETER_DIR` to reuse another prepared
 cache. Prewarm validates existing parameters and generates them only on a miss. The runner
 does not force the operating system page cache to a cold state, so the labels

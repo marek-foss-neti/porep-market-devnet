@@ -186,6 +186,20 @@ ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
 
+For development and production-size acceptance with the same ZigZag settings:
+
+```sh
+just bench-zigzag-512
+just bench-zigzag-32g
+```
+
+Run these sequentially on the remote machine. Both commands use the same
+comparison preset and dedicated image, run one full seal/prove/verify/unseal
+cycle, and use 50 GiB base RAM plus any requested query cache. They differ in
+sector geometry and parameter-cache namespace. See
+[the shared benchmark commands](docs/runtime/zigzag-benchmarks.md) for cache
+reuse, overrides and the limits of extrapolating from 512 MiB to 32 GiB.
+
 ### ZigZag 512 MiB parameter setup
 
 Build the dedicated ZigZag microbench image with the reviewed source, then generate the exact 512 MiB,
