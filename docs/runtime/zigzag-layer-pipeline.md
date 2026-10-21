@@ -52,12 +52,28 @@ publication. No extra historical layer file is created beside TreeR leaves.
 
 ## Resources and measurements
 
-Both pipeline variants limit unsynchronized builder writes to 64 MiB per
-store. Writes and periodic `sync_data` are serialized at that threshold; final
-file and directory sync remain mandatory. With a current snapshot and an older
-tree, at most two such stores write concurrently. This bounds these stores'
-dirty data, not the active replica, clean page cache or total cgroup memory.
-The existing synchronized TreeR DONTNEED advice still applies after publication.
+Both pipeline variants keep a 64 MiB outstanding-write window per active store.
+Reservations count before positioned writes begin; completed writes remain
+charged until a background `sync_data` finishes. The worker starts flushing at
+32 MiB, or sooner when a writer cannot reserve its next chunk. Hash workers and
+the snapshot writer can use the remaining credits during that flush. No mutex
+is held across writes or flushes. A flush retires only writes completed before
+it started; concurrent completions stay charged for a later flush. Thus moving
+I/O into the background does not create an unlimited dirty-write queue.
+
+There is one flush worker per active store. In the bounded builder it replaces
+the advisory writeback thread; streaming additionally has its leaf writer and
+the current snapshot's flush worker. At most two stores write concurrently.
+The last partial window is flushed and every worker is joined before returning,
+including on I/O error, cancellation or panic. Final file and directory sync
+remain mandatory. This is a conservative bound on outstanding write bytes,
+not an exact measurement of dirty OS pages, the active replica, clean page cache
+or total cgroup memory. The sequential binary reference retains its existing
+advisory writeback path. This refinement does not change the next-layer barrier:
+the snapshot writer is still joined before starting the next encode.
+TreeR DONTNEED is deferred until C2 entry, after all C1 work and validation.
+Publication keeps its durability syncs without discarding pages needed by C1;
+see [cache policy](zigzag-cpu-tuning.md#bounded-records-and-advice).
 
 The tree pool is created before encoder affinity binds the calling thread.
 The requested count is clipped to leave scheduling capacity for the encoder
@@ -75,14 +91,65 @@ and must not be summed. `capture_ready_ms` includes preallocation, encode,
 capture and relevant waits; it is not an additional phase. Total sealing still
 sums only the main phases.
 
+Completed snapshot records additionally report `writer_input_wait`,
+`writer_write_ns` and `dirty_budget`. The encoder's joined-writer record reports
+`snapshot_buffer_wait` and `writer_finish_wait_ns`. Each wait has `events` and
+`elapsed_ns`; an event is one observed wait episode, not a polling iteration.
+Clocks for queue waits start only when no item/buffer is immediately available.
+`dirty_budget` records limit/flush threshold, peak outstanding credits, retired
+bytes, flush count/time and summed writer `budget_wait`. The same object is
+reported in TreeR builder `stats`. Budget waits are already included in
+`write_ns`/`writer_write_ns`; background flush time overlaps writes and hashing.
+JSON preserves the records and Markdown has separate wait/writeback tables.
+These intervals must not be added to PC1 or interpreted as exclusive CPU time.
+Older reports without the fields have unavailable measurements, not zero waits.
+
+The refinement is wired into shared ZigZag PC1, including FFI/Curio; it does not
+alter SDR, commitments, parameters, memory presets or feature defaults. It is
+included in the pinned Rust revision; fetch the managed sources and rebuild
+the dedicated images to use it.
+
+## Validation — 15 October 2026: background writeback and wait metrics
+
+The final remote source-content SHA-256 is
+`bcf3356dd0f167d1bd4d46c39909b2d0e002ba7c5d5df3473d73976bd1f9f20c`,
+based on Rust commit `1977b4edce2c27c019a3c302c595ad1adee59753` plus
+uncommitted changes at validation time. These sources are now committed as
+`bcb7d508f995b2ccec94e4473c156cb92d17a775`; the digest matches that revision
+and both built images.
+
+- 62 remote Rust tests passed: six writeback, eight builder, six pipeline,
+  40 vanilla/encoder and two prehash tests. Two optional large-store/ENOSPC
+  builder fixtures remained ignored. New tests cover progress during a blocked
+  flush, retaining credits for concurrent and in-flight writes, strict bounds,
+  final partial-window flushing, cancellation, I/O errors and worker panics.
+- Four full 2 KiB cycles passed Groth16 verification and byte-identical unseal:
+  legacy/no-prehash reference, and binary/prehash with sequential, overlap and
+  stream. Every persisted replica/tree file matched the reference. Actual JSON
+  and Markdown contained the new wait records and bounded-writeback counters;
+  every dirty window respected its limit and retired all written bytes.
+- Both dedicated microbench and Curio images built. Curio and sptool startup
+  passed. Rust tests used 8 GiB/four CPUs and full fixtures 12 GiB/four CPUs,
+  with no additional swap. Heavy work ran remotely and sequentially.
+- 30 lightweight report/configuration tests passed locally, together with Rust
+  formatting, JavaScript syntax and diff whitespace checks.
+
+[Validation evidence and JSON/Markdown reports](../../.runtime/remote-runs/fidl-lab/2026-10-15-cpu-writeback-validation/validation.json)
+establish correctness, not a PC1 speedup. No new 512 MiB/32 GiB performance run
+was started. Compare the existing full benchmark at identical settings before
+changing feature defaults or claiming a time saving. The main remote checkout
+and its image manifests were left unchanged; builds used an isolated copy.
+
 ## Integration and acceptance
 
-The pipeline implementation is committed and pinned in `versions.lock.yaml` at
-`38c1803db561c7c94369b358813d0019b33484e6`. Fetch the managed sources and rebuild
-both dedicated images to use this revision. Dedicated builds require
-`LayerPipelineConfig`; no development-source override is needed for this pin.
-For further uncommitted development, use an isolated copy inside the devnet
-context via `DEVNET_RUST_FIL_PROOFS_SOURCE`. Never edit managed source checkouts,
+The pipeline, background writeback and wait metrics are committed and pinned at
+`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+[combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
+Fetch the managed sources and rebuild both dedicated images. Dedicated builds
+require `LayerPipelineConfig`; this pin needs no development-source override.
+For further uncommitted changes, select an isolated copy of the complete Rust
+source inside the devnet context via
+`DEVNET_RUST_FIL_PROOFS_SOURCE`. Never edit managed source checkouts,
 stage files or create commits automatically.
 
 Run heavy checks only on the remote machine and sequentially. Compare fresh
@@ -95,8 +162,9 @@ BENCH_ZIGZAG_TREE_R_BUILDER=binary BENCH_ZIGZAG_LAYER_PIPELINE=stream just bench
 ```
 
 These are explicit variants of the existing full benchmark, not new phase-only
-benchmarks or an automatically scheduled matrix. Keep the 60 GiB comparison
-budget and account for other services. Pipeline modes also introduce bounded
+benchmarks or an automatically scheduled matrix. Keep the same RAM limit for
+all variants (currently 50 GiB base plus any requested query cache) and account for other services.
+Pipeline modes also introduce bounded
 dirty writes, so their difference from sequential includes that I/O policy.
 Compare full PC1, later C1 reads and total sealing, not summed nested timers.
 Correctness tests alone do not establish a speedup.

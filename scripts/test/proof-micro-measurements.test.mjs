@@ -8,6 +8,7 @@ import test from "node:test";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 import { composeReport, parseEncodePrehashDiagnostics, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { writeFailureReport } from "../write-proof-micro-failure.mjs";
+import { readMemoryBudget } from "../write-proof-micro-provenance.mjs";
 
 function sample(sequence, elapsed, cpu, trigger = "interval", extra = {}) {
   return {
@@ -225,11 +226,12 @@ test("Groth16 query and batch boundaries retain sizes, anon/file RSS, cgroup I/O
   assert.match(markdown, /Remaining RSS is not a measurement of free allocator memory/);
 });
 
-test("Groth16 operation excludes loading and vanilla while the enclosing phase retains their cost", () => {
+test("Groth16 operation excludes vanilla, TreeR release and loading while the phase retains their cost", () => {
   const intervals = [
-    [1, "groth16_parameter_load", 0, 10, 0, 20],
-    [2, "vanilla_proving", 10, 50, 20, 100],
-    [3, "vanilla_verification", 50, 60, 100, 120],
+    [1, "vanilla_proving", 0, 40, 0, 80],
+    [2, "vanilla_verification", 40, 50, 80, 100],
+    [5, "groth16_tree_r_cache_release", 50, 55, 100, 105],
+    [3, "groth16_parameter_load", 55, 60, 105, 120],
     [4, "groth16_c2", 60, 90, 120, 240],
   ];
   const samples = [sample(0, 0, 0, "phase_start")];
@@ -245,8 +247,9 @@ test("Groth16 operation excludes loading and vanilla while the enclosing phase r
   samples.push(sample(samples.length, 100, 250, "phase_end", { phase_completed: true }));
   const telemetry = summarize(samples.map((entry) => ({ ...entry, phase: "commit_phase2_groth16" })));
   const result = report(telemetry, [{ name: "commit_phase2_groth16", phase_id: 1, wall_ms: 100, cpu_ms: 250 }]);
-  assert.deepEqual(result.c2_suboperations.map((operation) => operation.name), ["groth16_parameter_load", "groth16_c2"]);
-  const c2 = result.c2_suboperations[1];
+  assert.deepEqual(result.c2_suboperations.map((operation) => operation.name), ["groth16_tree_r_cache_release", "groth16_parameter_load", "groth16_c2"]);
+  assert.equal(result.c2_suboperations[0].wall_ms, 5);
+  const c2 = result.c2_suboperations[2];
   assert.equal(c2.wall_ms, 30);
   assert.equal(c2.cpu_ms, 120);
   assert.deepEqual(c2.overlapping_operation_ids, []);
@@ -443,14 +446,24 @@ test("CLI produces JSON and Markdown from the same measurements", () => {
     const paths = ["report.json", "benchmark.json", "telemetry.json", "provenance.json"].map((file) => join(directory, file));
     writeFileSync(paths[1], JSON.stringify({ phases: [{ name: "pre_commit_phase1", phase_id: 1, wall_ms: 10, cpu_ms: 20 }] }));
     writeFileSync(paths[2], JSON.stringify(telemetry));
-    writeFileSync(paths[3], JSON.stringify({ invocation: { outer_wall_ms: 20 } }));
+    assert.equal(readMemoryBudget(directory), null); // Historical runs have no configured split.
+    const budget = { policy: "base-plus-query-cache", base_memory_bytes: 53687091200,
+      query_cache_extra_bytes: 4294967296, measured_memory_limit_bytes: 57982058496,
+      prewarm_memory_limit_bytes: 53687091200 };
+    writeFileSync(join(directory, "memory-budget.json"), JSON.stringify(budget));
+    writeFileSync(paths[3], JSON.stringify({ invocation: { outer_wall_ms: 20,
+      memory_budget: readMemoryBudget(directory), memory_limit_bytes: 57982058496 } }));
     const script = new URL("../compose-proof-micro-report.mjs", import.meta.url);
     const composed = spawnSync(process.execPath, [script.pathname, paths[0], "full", ...paths.slice(1), "-", "-"], { encoding: "utf8" });
     assert.equal(composed.status, 0, composed.stderr);
     const output = JSON.parse(readFileSync(paths[0], "utf8"));
+    assert.deepEqual(output.memory_budget.configured, budget);
+    assert.equal(output.memory_budget.memory_limit_bytes, 57982058496);
     const rendered = spawnSync(process.execPath, [script.pathname, "--phase-markdown", paths[0]], { encoding: "utf8" });
     assert.equal(rendered.status, 0, rendered.stderr);
     assert.equal(rendered.stdout, renderPhaseMarkdown(output));
+    assert.match(rendered.stdout, /base 53687091200 B \+ query cache 4294967296 B = measured container 57982058496 B/);
+    assert.match(rendered.stdout, /Prewarm limit: 53687091200 B/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -542,4 +555,36 @@ test("encode prehash diagnostics retain histogram and bounded state memory witho
   assert.match(markdown, /\[1,3,10,2\]/);
   assert.match(markdown, /not a speedup/);
   assert.deepEqual(report(telemetry, []).encode_prehash, []);
+});
+
+test("pipeline wait and flush metrics remain nested and never change phase totals", () => {
+  const wait = { events: 3, elapsed_ns: 2500000 };
+  const dirty = { limit_bytes: 64, flush_threshold_bytes: 32, peak_outstanding_bytes: 60,
+    flushed_bytes: 128, flush_count: 4, flush_ns: 9000000, budget_wait: wait };
+  const encode = { enabled: true, reversed: false, nodes: 16, feeder_sha_blocks: 40,
+    prefix_blocks_histogram: [0, 0, 8, 8], midstate_ring_bytes: 512,
+    consumer_ready_wait: wait, feeders: [{ producer: 0, ring_full_wait: { events: 0, elapsed_ns: 0 }, publication_wait: wait }] };
+  const capture = { layer: 1, writer_input_wait: wait, dirty_budget: dirty };
+  const joined = { layer: 1, snapshot_buffer_wait: wait, writer_finish_wait_ns: 7000000 };
+  const tree = { layer: 1, builder: "binary", stats: { dirty_budget: dirty } };
+  const raw = [`zigzag_encode_prehash ${JSON.stringify(encode)}`, `zigzag_pipeline ${JSON.stringify(capture)}`,
+    JSON.stringify({ message: `zigzag_pipeline ${JSON.stringify(joined)}` }), `zigzag_merkle ${JSON.stringify(tree)}`].join("\n");
+  const telemetry = summarize([sample(0, 0, 0, "phase_start"), sample(1, 10, 10, "phase_end", { phase_completed: true })]);
+  const result = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }], { measuredLog: raw });
+  assert.deepEqual(result.encode_prehash[0].consumer_ready_wait, wait);
+  assert.deepEqual(result.layer_pipeline[0].dirty_budget, dirty);
+  assert.deepEqual(result.tree_r_builds[0].stats.dirty_budget, dirty);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  assert.equal(result.derived.sealing_cpu_ms, 20);
+  const markdown = renderPhaseMarkdown(result);
+  assert.match(markdown, /consumer waiting for prepared nodes \| 3 \| 2\.5/);
+  assert.match(markdown, /ring full \| 0 \| 0/);
+  assert.match(markdown, /ordered publication \| 3 \| 2\.5/);
+  assert.match(markdown, /encoder waiting for free buffer \| 3 \| 2\.5/);
+  assert.match(markdown, /writer waiting for captured chunk \| 3 \| 2\.5/);
+  assert.match(markdown, /final writer join \| 1 \| 7/);
+  assert.match(markdown, /TreeR layer 1 \| 64 \| 32 \| 60 \| 128 \| 4 \| 9/);
+  assert.match(markdown, /not measured OS dirty-page memory/);
+  const historical = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }]);
+  assert.doesNotMatch(renderPhaseMarkdown(historical), /CPU pipeline waits|Bounded background writeback/);
 });

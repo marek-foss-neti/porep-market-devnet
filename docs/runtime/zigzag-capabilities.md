@@ -12,7 +12,9 @@ The GPU branch also provides explicit [native Bellperson GPU Groth16](zigzag-gpu
 builds through `just build-zigzag-gpu`; GPU runtime acceptance remains pending.
 
 The lock pins `rust-fil-proofs` to
-`38c1803db561c7c94369b358813d0019b33484e6`. This revision includes
+`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+[combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
+Fetch the managed sources before rebuilding these updated adapters. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -37,6 +39,7 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Required capability | Required Rust API |
 | --- | --- |
 | Separate C1 vanilla and C2 Groth16 proving | `zigzag_commit_phase1_from_cache`, `zigzag_commit_phase2` |
+| Optional local TreeR eviction after C1 validation, before parameter loading | `zigzag_commit_phase2_with_cache` |
 | Validated TreeD import | `zigzag_pre_commit_phase1_with_tree_d` |
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
@@ -67,6 +70,13 @@ Both build scripts require all APIs before building; an older selected source
 fails with a message naming the missing API. `DEVNET_RUST_FIL_PROOFS_SOURCE`
 remains available for development, but also requires the complete API.
 Compilation independently enforces the Rust signatures through direct calls.
+
+The pinned revision includes `zigzag_commit_phase2_with_cache`, which defers
+TreeR eviction until C2 after C1 validation and before parameter loading. Fetch
+the managed sources and rebuild the dedicated images; no development-source
+override is required. Neither the portable Rust C1 payload nor the FFI v2
+envelope version changes. Its optional local path hint is described in
+[cache policy](zigzag-cpu-tuning.md#bounded-records-and-advice).
 
 Validation of this always-on policy on 2026-10-01 used the clean managed
 checkout of the then-pinned revision

@@ -8,7 +8,7 @@ defaults remain affinity on, two producers, stride 128 and lookahead 4096.
 Record buffering and both DONTNEED options default to off in the general runner
 and Curio. `just bench-zigzag-512` applies its own
 [comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
-options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 60 GiB RAM.
+options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 50 GiB RAM.
 Optional [layer overlap and streaming snapshots](zigzag-layer-pipeline.md) use
 a separate bounded TreeR pool and snapshot buffers; the baseline remains
 sequential until full performance acceptance.
@@ -28,7 +28,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 60 GiB |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | 60129542144 (56 GiB); positive allowance for uncached prover work |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (50 GiB); generic Rust/Curio: 56 GiB |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; 1–64, screen 1/2/3/4 |
@@ -104,17 +104,37 @@ the same rule. No active feeder range or interrupted traversal is advised.
 Finer reclamation behind a shared frontier is deferred until profiles justify
 tracking all readers, including idle feeders.
 
-TreeR DONTNEED syncs each completed historical tree before advising full pages.
-Sync errors fail replication; advice errors log fallback. All leaves/nodes and
-roots remain available for C1. Sync/advice stays in that layer's TreeR interval.
-The FFI still syncs files/directories and publishes AUX last. Preallocation,
-private copies, retry and ENOSPC behavior remain. The active replica is never
-advised; unsupported systems retain normal residency.
+TreeR DONTNEED runs at C2 entry, after vanilla generation, C1 serialization and
+semantic validation, immediately before loading Groth16 parameters. PC1 and C1
+do not discard TreeR pages. The same boundary applies to the full benchmark,
+FFI/Curio and the ordinary Rust proving API. Parent-cache advice is unchanged.
+
+The optional local cache hint identifies only the expected layer stores. Each
+regular file must match the validated C1 root and expected size before sync and
+advice; symlinks are not followed. Missing, moved or inaccessible stores and
+sync/advice failures are logged and skipped without failing C2. The portable
+Rust C1 result and the original cache-independent C2 API remain unchanged. The
+FFI v2 envelope carries an optional `tree_r_cache_path`; older envelopes remain
+readable, and a successful C1 retry refreshes the hint after validation. A C2
+worker on another host can prove without these files.
+
+Reports record `groth16_tree_r_cache_release` inside the C2 phase, separately
+from parameter loading and `groth16_c2`. `cpu_diagnostics` retains advice counts
+and fallback logs. The FFI still syncs files/directories and publishes AUX last;
+binary builder durability, preallocation and ENOSPC handling remain unchanged.
+No TreeD, replica, parent-cache or parameter file is advised by this operation.
 
 DONTNEED is advisory, not a RAM cap. Include C1 rereads and total sealing when
-deciding whether it helps. Full 512 MiB/32 GiB containers default to 60 GiB
-(64424509440 bytes), with memory-swap equal to memory. Explicit overrides are
-capped at 80 GiB (85899345920 bytes); larger overrides fail.
+deciding whether it helps. All ZigZag benchmark modes default to a 50 GiB
+(53687091200-byte) base budget. Full runs add requested query cache on top,
+including 32 GiB sectors: 4 GiB cache gives a 54 GiB limit. The cache reserve
+defaults to the base; explicit mismatches are rejected. Prewarm, fixture
+preparation and standalone unseal use only the base. Standalone prewarm retains
+its separate override. Docker memory-swap equals memory, disabling extra swap.
+Active-cache totals must fit the loader's 60 GiB ceiling; other overrides are
+capped at 80 GiB. SDR and Curio services do not inherit these limits. Docker
+enforces the total, not separate base/cache partitions. The new memory policy
+requires full-run acceptance on the remote machine.
 
 ## Curio and build variants
 
@@ -161,16 +181,21 @@ inspect the actual graph/backend separately on other architectures.
 
 ## Acceptance
 
-Run builds, Rust fixtures and benchmarks only over SSH on the authorized host,
-in `~/filecoin/porep-market-devnet`. The lock pins the published Rust revision
-`38c1803db561c7c94369b358813d0019b33484e6`, including the cache_policy module,
+Run builds, Rust fixtures and benchmarks only in the checkout on the remote
+machine. The lock pins Rust revision
+`c1b6d0d3776a8f98967653e738002e24e8d61013`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
-circuit-preparation measurements. Query retention remains off by default. Fetch the updated
-managed sources and rebuild both dedicated images from the same source digest.
+circuit-preparation measurements. Query retention remains off by default.
+This is the [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
+Fetch the updated managed sources and rebuild both dedicated images from the same source digest.
 For further uncommitted development,
 use an isolated copy selected by DEVNET_RUST_FIL_PROOFS_SOURCE; never edit managed
 checkouts.
+
+The pinned revision includes the deferred TreeR policy described in
+[required capabilities](zigzag-capabilities.md). Fetch the managed sources and
+rebuild the dedicated images. Keep further source edits unstaged for manual review.
 
 Remote Rust tests cover cache_policy, buffered records across mmap boundaries,
 both traversals, uncached-reference encode with 1/2/3/4 producers, ring wrapping,
@@ -203,4 +228,32 @@ been selected; other candidate defaults require separate acceptance.
 Local checks: `npm --prefix tools run test:cpu-settings`,
 `npm --prefix tools run test:measurements`, shell/Node syntax, Rust formatting
 and locked offline Cargo metadata. Mock workers/Docker and small report data
-do not establish PoRep correctness or speedup. No remote result is claimed.
+do not establish PoRep correctness or speedup.
+
+### Deferred TreeR advice validation (2026-10-16)
+
+An isolated development checkout on the remote machine built the dedicated
+microbench image with Rust source digest
+`702a4a79f1bd7e0fa59108cf0907c45580e4b4f0d7ee31fb504a6dfa6c322095`.
+These sources are now committed as
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073` on `restore-zigzag`.
+Their GPU-branch port is included in the combined revision pinned above.
+Five cache-policy tests passed, including mismatched roots/lengths, missing
+stores, symlinks/FIFOs, disabled advice and preservation of file contents.
+The integration fixture passed in five fresh processes: legacy/sequential,
+binary/sequential, binary/overlap, binary/stream, and binary/stream with advice
+disabled. It checks C1 validation before release, release before the parameter
+loader in split and ordinary APIs, and missing-cache/cache-independent C2.
+The FFI C1 retry test passed, including older v2 envelopes without the hint.
+
+Three full 2 KiB cycles (legacy advice on, stream advice on/off) passed proof
+verification and byte-for-byte unseal, with identical persisted trees/replicas.
+Their reports place `groth16_tree_r_cache_release` only in C2, after all C1
+phases and before loading. Tiny 2 KiB stores have no complete discardable page;
+the 16 KiB cache-policy fixture exercises actual full-page advice. These are
+correctness checks, not a 512 MiB/32 GiB residency or performance acceptance.
+Tests used 8 GiB/4 CPU containers, full cycles 12 GiB/4 CPU, with no extra swap.
+Evidence is retained in `.runtime/tree-r-c2-20261016` on the remote machine.
+Local checks passed 31 report/configuration tests and the required-API guard
+test, plus formatting and syntax checks. No full 512 MiB benchmark or live
+Curio sealing was run for this change.

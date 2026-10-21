@@ -91,7 +91,7 @@ export function parseCpuDiagnostics(raw) {
   // diagnostic messages from their actual modules, retaining target-based logs
   // from other formatters without collecting unrelated ZigZag phase messages.
   const module = /\bstorage_proofs_porep::zigzag::(?:cache_policy|vanilla::(?:cores|parent_table|vde))\b/;
-  const diagnostic = /\b(?:encode (?:affinity|producers=)|zigzag (?:encode affinity|multicore encode L3 affinity)|parent records mmap_window_nodes=|DONTNEED (?:advised_bytes=|unavailable:))/;
+  const diagnostic = /\b(?:encode (?:affinity|producers=)|zigzag (?:encode affinity|multicore encode L3 affinity)|parent records mmap_window_nodes=|DONTNEED (?:advised_bytes=|unavailable:|at C2|skipped at C2))/;
   return raw.split(/\r?\n/).flatMap((line, index) => {
     const matches = /\bzigzag_(cpu|cache)\b/.test(line) || (module.test(line) && diagnostic.test(line));
     return matches ? [{ line_number: index + 1, source: "stderr.log", message: line }] : [];
@@ -188,9 +188,10 @@ export function composeReport({
     parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? provenance.invocation.parameter_loader ?? null,
     allocator_configuration: benchmark.cpu_configuration?.allocator_configuration ?? provenance.invocation.allocator_configuration ?? null,
     memory_budget: {
+      configured: provenance.invocation.memory_budget ?? null,
       memory_limit_bytes: telemetry.overall.cgroup.memory_max_bytes ?? provenance.invocation.memory_limit_bytes ?? null,
       swap_limit_bytes: telemetry.overall.cgroup.swap_max_bytes ?? provenance.invocation.swap_limit_bytes ?? null,
-      scope: "effective container cgroup; 60 GiB is the configured default, 80 GiB is the override ceiling; successful sealing at the selected limit requires validation",
+      scope: "effective container cgroup; ZigZag benchmarks default to 50 GiB base plus requested C2 query cache in full runs; prewarm uses only the base; SDR is unchanged; successful sealing at the selected limit requires validation",
     },
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
     gpu,
@@ -293,6 +294,50 @@ export function renderPhaseMarkdown(report) {
     }
     lines.push("", "Read/convert/hash/write are summed hash-worker intervals; writeback submit measures one I/O thread and overlaps hashing. Buffer counts cover builder-owned vectors only, excluding shared Poseidon constants, Rayon and file pages. Snapshot/preallocation, internal-node construction and final sync/reopen have separate operation boundaries above; their nested intervals are not additive to total TreeR. Byte counts and fallback reasons are preserved in tree_r_builds in report.json.");
   }
+  const waits = [];
+  const dirtyWindows = [];
+  const addWait = (scope, reason, wait) => {
+    if (wait && typeof wait.events === "number" && typeof wait.elapsed_ns === "number") {
+      waits.push(`| ${scope} | ${reason} | ${wait.events} | ${wait.elapsed_ns / 1e6} |`);
+    }
+  };
+  const addDirty = (scope, stats) => {
+    if (!stats) return;
+    addWait(scope, "dirty window full", stats.budget_wait);
+    const ms = typeof stats.flush_ns === "number" ? stats.flush_ns / 1e6 : "unavailable";
+    dirtyWindows.push(`| ${scope} | ${stats.limit_bytes ?? "unavailable"} | ${stats.flush_threshold_bytes ?? "unavailable"} | ${stats.peak_outstanding_bytes ?? "unavailable"} | ${stats.flushed_bytes ?? "unavailable"} | ${stats.flush_count ?? "unavailable"} | ${ms} |`);
+  };
+  for (const [index, entry] of (report.encode_prehash ?? []).entries()) {
+    const scope = `Encode record ${index + 1} (reversed=${entry.reversed})`;
+    addWait(scope, "consumer waiting for prepared nodes", entry.consumer_ready_wait);
+    for (const feeder of entry.feeders ?? []) {
+      addWait(`${scope}, feeder ${feeder.producer}`, "ring full", feeder.ring_full_wait);
+      addWait(`${scope}, feeder ${feeder.producer}`, "ordered publication", feeder.publication_wait);
+    }
+  }
+  for (const entry of report.layer_pipeline ?? []) {
+    const scope = `Snapshot layer ${entry.layer ?? "unknown"}`;
+    addWait(scope, "encoder waiting for free buffer", entry.snapshot_buffer_wait);
+    addWait(scope, "writer waiting for captured chunk", entry.writer_input_wait);
+    if (typeof entry.writer_finish_wait_ns === "number") {
+      addWait(scope, "final writer join", { events: 1, elapsed_ns: entry.writer_finish_wait_ns });
+    }
+    addDirty(scope, entry.dirty_budget);
+  }
+  for (const build of report.tree_r_builds ?? []) {
+    addDirty(`TreeR layer ${build.layer}`, build.stats?.dirty_budget);
+  }
+  if (waits.length) {
+    lines.push("", "CPU pipeline waits (wall-time episodes, not exclusive CPU time):", "",
+      "| Scope | Wait reason | Episodes | Wait ms |", "| --- | --- | ---: | ---: |", ...waits,
+      "", "Clocks start only after contention is observed; episode counts are not polling iterations. Feeder waits are per thread. Dirty-window waits are summed across writers and already included in builder write or snapshot writer-write intervals. Waits and flushes overlap each other and encode/PC1; do not add them to sealing totals. Missing fields in older reports mean unavailable, not zero. Ordered-publication waits are distinct from a full ring; neither histogram nor wait time alone measures spare CPU capacity.");
+  }
+  if (dirtyWindows.length) {
+    lines.push("", "Bounded background writeback:", "",
+      "| Scope | Limit B | Flush threshold B | Peak outstanding B | Retired B | Flushes | Flush ms |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | ---: |", ...dirtyWindows,
+      "", "Outstanding bytes include reserved/in-flight writes and completed writes awaiting flush. Each flush retires only bytes completed before it started; concurrently completed writes stay charged. Peak is a conservative byte-credit bound, not measured OS dirty-page memory. One flush worker per active store; final file/directory publication sync remains mandatory.");
+  }
   lines.push("", "Layer numbers are zero-based. Operation IDs, start/end intervals and overlaps are preserved in JSON. CPU and RAM cover the whole process during each operation; overlapping windows must not be summed or treated as exclusive worker usage.", "", "## Auxiliary C2 timers", "");
   if (report.auxiliary_c2_timings === null) lines.push("Bellperson synthesis/prover timers unavailable; full C2 remains in the phase table.");
   else {
@@ -308,12 +353,20 @@ export function renderPhaseMarkdown(report) {
       `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
       "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
   }
+  if (report.memory_budget?.configured) {
+    const budget = report.memory_budget.configured;
+    lines.push("", "Configured RAM: base " + value(budget.base_memory_bytes) +
+      " B + query cache " + value(budget.query_cache_extra_bytes) +
+      " B = measured container " + value(budget.measured_memory_limit_bytes) +
+      " B. Prewarm limit: " + value(budget.prewarm_memory_limit_bytes) +
+      " B. Docker enforces the total, not separate base/cache partitions; actual cache retention can be smaller.");
+  }
   if (report.parameter_loader || report.c2_suboperations?.length) {
     lines.push("", "## Groth16 parameters and batch memory", "",
       "Loader: " + (report.parameter_loader ?? "unavailable") + ". Effective container RAM limit: " + value(report.memory_budget?.memory_limit_bytes) + " B; swap limit: " + value(report.memory_budget?.swap_limit_bytes) + " B.", "",
       "Allocator configuration: " + JSON.stringify(report.allocator_configuration ?? null) + ".",
       "Before/after process anon/file RSS, cgroup counters, I/O and PSI are recorded in boundary_snapshots in report.json. The batch end is after Bellperson releases circuits/query builders. Remaining RSS is not a measurement of free allocator memory.",
-      "groth16_c2 measures circuit/batch proving in both API paths. Parameter loading, vanilla proving/validation, API-level VK lookup and final seal-proof serialization are outside this operation; the enclosing benchmark phase still includes them.", "", ...header);
+      "groth16_c2 measures circuit/batch proving in both API paths. TreeR cache release, parameter loading, vanilla proving/validation, API-level VK lookup and final seal-proof serialization are outside this operation; the enclosing benchmark phase still includes them.", "", ...header);
     for (const operation of report.c2_suboperations ?? []) {
       lines.push(row(operation.name + " id=" + operation.id + " " + JSON.stringify(operation.details ?? {}), operation));
     }

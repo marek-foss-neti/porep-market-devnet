@@ -53,20 +53,40 @@ are reported; existing parent/input vectors and allocator overhead are separate.
 Feeders accumulate small local histograms and combine them after joining. One
 `zigzag_encode_prehash` JSON record is emitted per successful multicore encode
 call, with orientation, node count, blocks prepared and histogram bins indexed
-by prepared data-block count. There are no per-node log messages, clocks or
-shared statistics atomics. Interrupted calls do not emit a successful summary.
+by prepared data-block count. There are no per-node log messages or shared
+statistics atomics. Wait clocks run only when a loop observes contention, not
+on every node or poll. Interrupted calls do not emit a successful summary.
 Records are preserved in `report.json` under `encode_prehash` and in the Markdown
 phase report. They describe work distribution, not a speedup or another phase.
 Configuration is also recorded in microbench output and provenance.
 
+Each successful record now includes `consumer_ready_wait` and a `feeders`
+array indexed by `producer`. Each feeder records `ring_full_wait` (cannot reuse
+a slot until the consumer advances) and `publication_wait` (an earlier stride
+must publish first), as well as its prefix histogram. Wait values contain
+`events` and `elapsed_ns`. Accumulation is thread-local and collected after
+joining. These are elapsed wait intervals including scheduling, not exclusive
+CPU time or a count of yields. They work with prehash both on and off.
+
+The full report renders these waits beside snapshot-buffer starvation, writer
+input waits and bounded-writeback metrics. They can distinguish consumer
+starvation from full-ring backpressure or ordered-publication blocking; the
+histogram alone cannot. Waits across threads overlap, and feeder backpressure
+may originate in a slow snapshot writer. Do not sum them into encode/PC1 or
+assume they prove spare feeder CPU capacity. Two feeders remain the default;
+three/four already work through the existing producer setting. Tune that
+setting, stride and lookahead only after comparing the complete PC1 workload.
+
 ## Integration and acceptance
 
-The implementation is committed and pinned in devnet at Rust revision
-`38c1803db561c7c94369b358813d0019b33484e6`. Fetch the managed sources and rebuild
-both dedicated images on the remote machine before running comparisons. Both
-build guards require `EncodePrehash`; this pin needs no development-source
-override. For future uncommitted changes, use an isolated source copy inside
-the devnet context with `DEVNET_RUST_FIL_PROOFS_SOURCE`. Never modify managed
+The prehash implementation and encoder wait metrics are committed and pinned at
+`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+[combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
+Fetch the managed sources and rebuild both dedicated images on the remote
+machine. Both build guards require `EncodePrehash`; this pin needs no
+development-source override. For further uncommitted changes, select an
+isolated copy of the complete Rust source inside the devnet context with
+`DEVNET_RUST_FIL_PROOFS_SOURCE`. Never modify managed
 checkouts, stage changes or create commits automatically.
 
 Use the existing full benchmark on the remote machine, with identical memory,
@@ -78,11 +98,20 @@ BENCH_ZIGZAG_ENCODE_PREHASH=1 just bench-zigzag-512
 ```
 
 These are explicit comparison runs, not an automatic benchmark matrix. Keep
-the 60 GiB preset and no extra container swap; start only when the shared host
+the current 50 GiB base preset (plus any explicitly requested query cache) and no extra container swap; start only when the shared host
 has enough headroom for its other services. Compare encode, full PC1 and total
 sealing. A histogram with many prepared blocks alone does not establish a
 benefit: feeders and the consumer still contend for CPU/cache bandwidth.
 Do not change producer count without evidence of consumer starvation.
+
+The wait-metric refinement was validated before its commit on 15 October 2026 together
+with background writeback: 62 remote Rust tests, four full 2 KiB cycles with
+identical replica/tree bytes and valid proof/unseal, both dedicated image builds
+and 30 lightweight report/configuration tests. Actual records were checked with
+prehash both off and on. See the [writeback validation](zigzag-layer-pipeline.md#validation--15-october-2026-background-writeback-and-wait-metrics)
+for the source digest and evidence. No new 512 MiB performance claim follows
+from these small correctness runs. The current Rust pin includes the refinement;
+normal builds use it after fetching the managed sources and rebuilding.
 
 
 ## Validation — 14 October 2026

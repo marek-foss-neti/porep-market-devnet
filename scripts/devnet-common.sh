@@ -959,6 +959,7 @@ devnet_require_zigzag_apis() {
   for api in \
     zigzag_commit_phase1_from_cache \
     zigzag_commit_phase2 \
+    zigzag_commit_phase2_with_cache \
     zigzag_pre_commit_phase1_with_tree_d \
     zigzag_unseal_range_with_scratch \
     zigzag_validate_commit_phase1; do

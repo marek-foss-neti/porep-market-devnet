@@ -2,9 +2,28 @@
 
 The dedicated ZigZag worker can compile native Bellperson 0.27.0 with CUDA or OpenCL. CUDA is the initial acceptance backend. This uses the existing batched prover and compact `ParameterSource`; it does not fork Bellperson, change the circuit, regenerate parameters, or change SDR images. Parameter prewarm still runs on the CPU with the disk-backed generator.
 
+## CPU updates and dependency pin
+
+The GPU working tree now includes the CPU changes from `test-zigzag` through
+`692de35`: background-writeback and pipeline-wait reporting, TreeR eviction at
+C2, the 50 GiB base budget with query cache on top, and the shared 512 MiB/32 GiB
+benchmark runner. The corresponding Rust CPU reference is
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`.
+
+`versions.lock.yaml` pins the combined CPU/GPU implementation to
+`c1b6d0d3776a8f98967653e738002e24e8d61013` on `restore-zigzag-gpu`.
+It includes background writeback, wait metrics and the
+`zigzag_commit_phase2_with_cache` API required by the updated FFI and
+microbench, while preserving native Bellperson GPU proving and device
+admission. Publish the Rust revision before fetching managed sources on the
+remote machine, then rebuild the dedicated images. This pin needs no
+development-source override. For further uncommitted Rust changes, use an
+isolated source copy selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`.
+Keep changes unstaged for manual review.
+
 ## Build variants
 
-Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `38c1803db561c7c94369b358813d0019b33484e6` on `restore-zigzag-gpu`. During implementation, an isolated development source copy is selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
+Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `c1b6d0d3776a8f98967653e738002e24e8d61013` on `restore-zigzag-gpu`. For further uncommitted development, an isolated source copy can be selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
 
 After the reviewed pins have been fetched and the standard Curio base image exists:
 
@@ -30,7 +49,7 @@ For OpenCL, use `DEVNET_ZIGZAG_GPU_BACKEND=opencl just build-zigzag`. The device
 
 ## Three full-benchmark controls
 
-Run these only after repairing the remote machine's driver and confirming sufficient host RAM. Set the selected device UUID once; do not use `all`. The commands use the same full `bench-zigzag-512`, existing parameter cache/VK, compact loader, batch 1 and default **60 GiB host RAM with no additional swap**. Preserve the same query cache, PC1 options and CPU pool sizes for every comparison.
+Run these only after repairing the remote machine's driver and confirming sufficient host RAM. Set the selected device UUID once; do not use `all`. The commands use the same full `bench-zigzag-512`, existing parameter cache/VK, compact loader, batch 1 and default **50 GiB base RAM plus requested query cache, with no additional swap**. Prewarm uses the base budget only. Query cache defaults to zero; 10 GiB of requested cache gives a 60 GiB measured-container limit. `just bench-zigzag-32g` uses the same preset and GPU selection for native 32 GiB sectors. Preserve the same query cache, PC1 options and CPU pool sizes for every comparison.
 
 ```sh
 export BENCH_ZIGZAG_GPU_DEVICE="GPU-<selected-device-uuid>"

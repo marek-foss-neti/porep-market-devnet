@@ -175,6 +175,11 @@ function selectedEnvironment() {
   return Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]));
 }
 
+export function readMemoryBudget(runDirectory) {
+  const path = resolve(runDirectory, "memory-budget.json");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
+}
+
 export function buildProvenance({
   repositoryRoot,
   imageManifestPath,
@@ -248,6 +253,7 @@ export function buildProvenance({
       finished_unix_ms: Number(finishedUnixMs),
       outer_wall_ms: Number(finishedUnixMs) - Number(startedUnixMs),
       environment: selectedEnvironment(),
+      memory_budget: backend === "zigzag" ? readMemoryBudget(runDirectory) : null,
       parameter_loader: benchmark.cpu_configuration?.parameter_loader ?? null,
       allocator_configuration: normalizeCpuConfiguration(benchmark.cpu_configuration)?.allocator_configuration ?? null,
       memory_limit_bytes: telemetry.overall?.cgroup?.memory_max_bytes ?? null,

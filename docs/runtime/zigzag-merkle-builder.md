@@ -60,7 +60,9 @@ There is no sector-sized node vector or vector of all chunk tasks.
 
 These limits cover builder-owned buffers, not the replica, OS page cache,
 shared Poseidon constants, Rayon or other sealing allocations. The existing
-60 GiB benchmark cgroup and synchronized TreeR DONTNEED policy remain in place.
+benchmark cgroup caps the whole workload at 50 GiB base plus any requested query cache. TreeR DONTNEED runs only at C2 entry,
+after C1 validation, rather than after individual tree builds; builder syncs
+still guarantee durability.
 No additional Groth16 query retention is enabled.
 
 The existing full benchmark records `tree_r_snapshot`, `tree_r_build` and
@@ -102,11 +104,12 @@ settings identical. Compare full TreeR including sync, all of PC1, C1 rereads
 and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
-The Rust implementation is committed and pinned in `versions.lock.yaml` at
-`38c1803db561c7c94369b358813d0019b33484e6`. Fetch the managed sources and rebuild
-both dedicated images to use this revision. Both build guards require the
+The Rust implementation is committed and pinned at
+`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+[combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
+Fetch the managed sources and rebuild both dedicated images. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.
-The pinned [layer-pipeline integration](zigzag-layer-pipeline.md) additionally
+The [layer-pipeline integration](zigzag-layer-pipeline.md) additionally
 requires `LayerPipelineConfig` and provides opt-in `overlap` and `stream` modes.
 For further uncommitted development, use an isolated source copy inside the
 devnet context selected by `DEVNET_RUST_FIL_PROOFS_SOURCE`; do not edit managed
@@ -153,7 +156,8 @@ Validation on 2026-10-14:
   A full 2 KiB FFI cycle used `binary`, produced a verified 192-byte proof and
   passed byte-for-byte unseal. `curio --version` and `sptool --version` passed.
   No live Curio task/lifecycle or standard SDR lifecycle was run.
-- A full bench-512 at the unchanged 60 GiB comparison limit remains pending
+- A full bench-512 comparison was pending at this validation. Future comparisons
+  must use the same limit for both variants (currently 50 GiB base plus any requested query cache), with
   sufficient memory headroom for the other services on the remote machine.
   No service was stopped and the benchmark limit was not raised or lowered.
 - Locally, 26 focused JS runner/report tests, the mandatory-API build guard,

@@ -4,7 +4,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, renderPhaseMarkdown, readGpuSummary } from "./compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "./summarize-proof-micro-telemetry.mjs";
-import { buildProvenance } from "./write-proof-micro-provenance.mjs";
+import { buildProvenance, readMemoryBudget } from "./write-proof-micro-provenance.mjs";
 
 function writeJson(path, value) {
   const temporary = `${path}.temporary-${process.pid}`;
@@ -81,6 +81,10 @@ export function writeFailureReport(options) {
     };
   }
   const measuredLog = read(options.stderrPath) ?? "";
+  if (options.backend === "zigzag" && !provenance.invocation.memory_budget) {
+    try { provenance.invocation.memory_budget = readMemoryBudget(runDirectory); }
+    catch (error) { errors.push(`memory budget: ${error.message}`); }
+  }
   let cpu = null;
   const configuration = measuredLog.match(/ZigZag CPU configuration: (\{[^\n]*\})/);
   if (configuration) { try { cpu = JSON.parse(configuration[1]); } catch {} }
@@ -104,7 +108,7 @@ export function writeFailureReport(options) {
     gpu: readGpuSummary(runDirectory),
     parameter_loader: cpu?.parameter_loader ?? null,
     allocator_configuration: cpu?.allocator_configuration ?? null,
-    memory_budget: { memory_limit_bytes: provenance.invocation.memory_limit_bytes, swap_limit_bytes: provenance.invocation.swap_limit_bytes, scope: "Docker final configuration; cgroup samples unavailable" },
+    memory_budget: { configured: provenance.invocation.memory_budget ?? null, memory_limit_bytes: provenance.invocation.memory_limit_bytes, swap_limit_bytes: provenance.invocation.swap_limit_bytes, scope: "Docker final configuration; cgroup samples unavailable" },
     groth16_parameters: parseParameterDiagnostics(measuredLog),
     prewarm: null, prewarm_telemetry: null,
     derived: {

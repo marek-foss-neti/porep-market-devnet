@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "38c1803db561c7c94369b358813d0019b33484e6";
+const rustFilProofsSourceCommit = "c1b6d0d3776a8f98967653e738002e24e8d61013";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -838,12 +838,16 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(script, /Proof backend benchmark comparison/);
 });
 
-test("zigzag-512 baseline passes the comparison preset and overrides and records the image revision", async () => {
+for (const preset of [
+  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [] },
+  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"] },
+]) test(`${preset.name} baseline passes the shared preset and overrides and validates geometry and image revision`, async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
   const imageManifest = join(fixture.root, ".runtime/devnet/build/zigzag-microbench-images.json");
   try {
     await cp(join(repositoryRoot, "scripts/bench-zigzag-512.sh"), join(fixture.root, "scripts/bench-zigzag-512.sh"));
+    await cp(join(repositoryRoot, "scripts/bench-zigzag.sh"), join(fixture.root, "scripts/bench-zigzag.sh"));
     const manifest = await prepareZigzagMicrobenchManifest(fixture, commit);
     await assert.rejects(lstat(join(fixture.root, ".runtime/devnet/build/images.json")), { code: "ENOENT" });
     await assert.rejects(lstat(join(fixture.root, "../rust-fil-proofs")), { code: "ENOENT" });
@@ -854,7 +858,18 @@ printf '%s\\n' '${"d".repeat(40)}'
     await chmod(join(fixture.stubBin, "git"), 0o755);
     await writeFile(join(fixture.root, "scripts/bench-proof-micro.sh"), `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-64424509440}" ]] || exit 98
+[[ "$*" == "zigzag ${preset.sector} full" ]] || exit 98
+[[ "$BENCH_PROOF_MICRO_PROFILE" == "${preset.nativeProfile}" ]] || exit 98
+[[ "$POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS" == 1 ]] || exit 98
+[[ "$BENCH_PROOF_PARAMETERS_DIR" == "\${DEVNET_TEST_EXPECTED_PARAMETER_DIR:-$DEVNET_TEST_ROOT/.cache/${preset.name}-parameters}" ]] || exit 98
+if [[ -n "\${DEVNET_TEST_EXPECTED_PARENT_DIR:-}" ]]; then
+  [[ "$BENCH_ZIGZAG_PARENT_CACHE_DIR" == "$DEVNET_TEST_EXPECTED_PARENT_DIR" ]] || exit 98
+fi
+[[ "$BENCH_ZIGZAG_ENCODE_PREHASH" == "\${DEVNET_TEST_EXPECTED_ENCODE_PREHASH:-0}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_LAYER_PIPELINE" == "\${DEVNET_TEST_EXPECTED_LAYER_PIPELINE:-sequential}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_TREE_R_THREADS" == "auto" ]] || exit 98
+[[ "$BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB" == "64" ]] || exit 98
+[[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-53687091200}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARENT_BUFFER_NODES" == "\${DEVNET_TEST_EXPECTED_PARENT_BUFFER_NODES:-32768}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARENT_CACHE_DONTNEED" == "\${DEVNET_TEST_EXPECTED_PARENT_CACHE_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
@@ -862,7 +877,7 @@ set -euo pipefail
 [[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_BUILDER" == "\${DEVNET_TEST_EXPECTED_TREE_R_BUILDER:-legacy}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-0}" ]] || exit 98
-[[ "$BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES:-60129542144}" ]] || exit 98
+[[ "\${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-}" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES-}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
 touch "$run_dir/summary.md"
@@ -870,19 +885,26 @@ manifest="$DEVNET_TEST_ROOT/.runtime/devnet/build/zigzag-microbench-images.json"
 jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_dir")" \\
   --arg manifest "$manifest" --arg manifestSha "$(shasum -a 256 "$manifest" | awk '{print $1}')" \\
   --arg sourceSha "\${DEVNET_TEST_REPORT_SOURCE_SHA:-$(jq -r .rustFilProofsSourceSha256 "$manifest")}" \\
+  --argjson sectorBytes "\${DEVNET_TEST_REPORTED_SECTOR_BYTES:-${preset.bytes}}" \\
+  --arg backend "\${DEVNET_TEST_REPORTED_BACKEND:-zig-zag}" \\
   --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
+  {backend: $backend, sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
+   porep_layers: 11, porep_partitions: 10, minimum_total_challenges: 176,
+   challenges_per_layer_per_partition: 18, registered_seal_proof_id: 8,
+   profile: ${preset.nativeProfile ? '{total_challenge_instances: 1980}' : 'null'}} as $geometry |
   {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit, rust_fil_proofs_source_sha256: $sourceSha},
      image_manifest_path: $manifest, image_manifest_sha256: $manifestSha, image: {reference: $image, id: $imageId}}},
-   benchmark: {verify_seal: true, raw_unseal_bytes_match: true, proof_len: 1920,
-     profile: {total_challenge_instances: 1980}}}
+   prewarm: ($geometry + {verifying_key_matches_params: true}),
+   benchmark: ($geometry + {verify_seal: true, raw_unseal_bytes_match: true, proof_len: 1920,
+     unsealed_bytes: ${preset.bytes / 128 * 127}})}
 ' > "$run_dir/report.json"
 printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
 `);
     const cleanBenchEnv = Object.fromEntries(Object.entries(process.env).filter(
-      ([name]) => !/^(BENCH_|FIL_PROOFS_|DEVNET_TEST_)/.test(name),
+      ([name]) => !/^(BENCH_|FIL_PROOFS_|DEVNET_TEST_|POREP_PROOF_MICROBENCH_)/.test(name),
     ));
     const run = (reportCommit: string, overrides: Record<string, string> = {}) => spawnSync(
-      "bash", [join(fixture.root, "scripts/bench-zigzag-512.sh")], {
+      "bash", [join(fixture.root, "scripts", preset.script), ...preset.args], {
         encoding: "utf8",
         timeout: 30_000,
         env: {
@@ -901,12 +923,37 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     assert.equal(run(commit, { FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" }).status, 0);
     const queryCache = run(commit, { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "4294967296", DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES: "4294967296" });
     assert.equal(queryCache.status, 0, queryCache.stderr);
-    const baselinePath = result.stdout.match(/^zigzag-512 baseline: (.+)$/m)?.[1];
+    const baselinePath = result.stdout.match(new RegExp(`^${preset.name} baseline: (.+)$`, "m"))?.[1];
     assert.ok(baselinePath);
     const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
     assert.equal(baseline.rust_fil_proofs_head, commit);
     assert.equal(baseline.rust_fil_proofs_commit_source, "image manifest");
     assert.equal(baseline.completed_runs, 1);
+    assert.equal(baseline.command, `just bench-${preset.name}`);
+    assert.equal(baseline.runs[0].sector_size_bytes, preset.bytes);
+    assert.equal(baseline.runs[0].total_challenge_instances, 1980);
+    const reuse = run(commit, {
+      [preset.sector === "512mib" ? "BENCH_ZIGZAG_512_PARAMETER_DIR" : "BENCH_ZIGZAG_32G_PARAMETER_DIR"]: join(fixture.root, "prepared-parameters"),
+      BENCH_ZIGZAG_PARENT_CACHE_DIR: join(fixture.root, "prepared-parents"),
+      DEVNET_TEST_EXPECTED_PARAMETER_DIR: join(fixture.root, "prepared-parameters"),
+      DEVNET_TEST_EXPECTED_PARENT_DIR: join(fixture.root, "prepared-parents"),
+    });
+    assert.equal(reuse.status, 0, reuse.stderr);
+    for (const name of ["BENCH_PROOF_MICRO_LAYERS", "POREP_PROOF_MICROBENCH_LAYERS"]) {
+      const invalid = run(commit, { [name]: "2" });
+      assert.notEqual(invalid.status, 0);
+      assert.match(invalid.stderr, /has fixed layers/);
+    }
+    const wrongGeometry = run(commit, { DEVNET_TEST_REPORTED_SECTOR_BYTES: "2048" });
+    assert.notEqual(wrongGeometry.status, 0);
+    assert.match(wrongGeometry.stderr, /proof geometry or correctness validation failed/);
+    // Real Rust summaries use kebab-case "zig-zag", not the CLI's "zigzag".
+    // Reject both a different backend and an incorrect report spelling.
+    for (const backend of ["stacked", "zigzag"]) {
+      const invalid = run(commit, { DEVNET_TEST_REPORTED_BACKEND: backend });
+      assert.notEqual(invalid.status, 0);
+      assert.match(invalid.stderr, /proof geometry or correctness validation failed/);
+    }
     const lowerLimit = run(commit, {
       BENCH_ZIGZAG_FULL_MEMORY_BYTES: "42949672960",
       DEVNET_TEST_EXPECTED_MEMORY_BYTES: "42949672960",
@@ -916,6 +963,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     for (const [setting, value] of Object.entries({
       PARENT_BUFFER_NODES: "0", PARENT_CACHE_DONTNEED: "0", TREE_R_DONTNEED: "0",
       MALLOC_ARENA_MAX: "2", PARAMETER_LOADER: "mapped", GROTH16_BATCH_SIZE: "2",
+      TREE_R_BUILDER: "binary", ENCODE_PREHASH: "1", LAYER_PIPELINE: "stream",
     })) {
       changedSettings[`BENCH_ZIGZAG_${setting}`] = value;
       changedSettings[`DEVNET_TEST_EXPECTED_${setting}`] = value;
@@ -947,6 +995,7 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
   const apiPath = join(source, "filecoin-proofs/src/api/zigzag.rs");
   const apis = [
     "zigzag_commit_phase1_from_cache", "zigzag_commit_phase2",
+    "zigzag_commit_phase2_with_cache",
     "zigzag_pre_commit_phase1_with_tree_d", "zigzag_unseal_range_with_scratch",
     "zigzag_validate_commit_phase1",
   ];
@@ -1975,7 +2024,7 @@ elif [[ "$1" == run && "$*" != *'--entrypoint sh'* ]]; then
 elif [[ "$1" == inspect ]]; then
   [[ "$DEVNET_TEST_SCENARIO" != inspect-unavailable ]] || exit 1
   oom=true; [[ "$DEVNET_TEST_SCENARIO" != killed ]] || oom=false
-  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":64424509440,"memory_swap_limit_bytes":64424509440}\\n' "$oom"
+  printf '{"id":"${"1".repeat(64)}","state":{"Running":false,"OOMKilled":%s,"ExitCode":137,"Error":""},"memory_limit_bytes":53687091200,"memory_swap_limit_bytes":53687091200}\\n' "$oom"
 elif [[ "$1" == rm ]]; then
   run_dir="$(cat "$DEVNET_TEST_RUN_DIRECTORY_FILE")"
   [[ -s "$run_dir/prewarm-container.json" ]] || exit 97
@@ -2003,8 +2052,13 @@ fi
       const log = await readFile(fixture.commandLog, "utf8");
       const prewarm = log.split("\n").find((line) => line.includes("<--cidfile>"));
       assert.ok(prewarm);
-      assert.match(prewarm, /<--memory> <64424509440> <--memory-swap> <64424509440>/);
-      assert.match(prewarm, /<FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=53687091200>/);
+      assert.match(prewarm, /<--memory> <53687091200> <--memory-swap> <53687091200>/);
+      assert.match(prewarm, /<FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=42949672960>/);
+      assert.deepEqual(report.memory_budget.configured, {
+        policy: "base-plus-query-cache", base_memory_bytes: 53687091200,
+        query_cache_extra_bytes: 0, measured_memory_limit_bytes: 53687091200,
+        prewarm_memory_limit_bytes: 53687091200,
+      });
       assert.doesNotMatch(prewarm, /<--rm>/);
       if (scenario === "inspect-unavailable") {
         assert.equal(report.derived.docker_oom_killed, null);
