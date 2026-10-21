@@ -7,6 +7,7 @@
     "test": "tsx --test test/*.test.ts",
     "test:measurements": "node --test ../scripts/test/proof-micro-measurements.test.mjs",
     "test:cpu-settings": "node --test ../scripts/test/zigzag-cpu-settings.test.mjs",
+    "test:build-resources": "node --test ../scripts/test/build-resources.test.mjs",
     "typecheck": "tsc --noEmit",
     "cli": "tsx src/cli.ts"
   },

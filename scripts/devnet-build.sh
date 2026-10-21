@@ -15,6 +15,7 @@ devnet_require_command docker
 devnet_require_command node
 devnet_require_command npm
 devnet_require_command shasum
+devnet_build_parallelism
 
 mkdir -p "${DEVNET_BUILD_DIR}" "${DEVNET_LOG_DIR}"
 build_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -283,6 +284,7 @@ docker buildx build \
   --progress plain \
   --file "${dockerfile_relative}" \
   --target curio-all-in-one \
+  "${devnet_build_parallelism_args[@]}" \
   --build-context "blst-source=${blst_source_relative}" \
   --build-context "harness-overlay=." \
   --build-context "lotus-source=${lotus_source_relative}" \

@@ -14,6 +14,7 @@ if [[ -f versions.lock.yaml ]]; then
     scripts/bootstrap.sh
     scripts/devnet-common.sh
     scripts/devnet-build.sh
+    scripts/build-resources.sh
     scripts/devnet-build-zigzag-curio.sh
     scripts/devnet-build-zigzag-microbench.sh
     scripts/devnet-up.sh
@@ -74,7 +75,7 @@ if [[ -f versions.lock.yaml ]]; then
 
   bash -n scripts/bootstrap.sh scripts/devnet-common.sh scripts/devnet-build.sh scripts/devnet-build-zigzag-microbench.sh scripts/devnet-build-zigzag-curio.sh scripts/devnet-up.sh scripts/devnet-down.sh scripts/devnet-reset.sh scripts/devnet-logs.sh scripts/contracts-test-target.sh scripts/devnet-upgrade.sh scripts/devnet-test-upgrade.sh scripts/bench-proof-backends.sh scripts/bench-proof-micro.sh scripts/bench-zigzag-512.sh
   node --check scripts/cleanup-proof-micro-artifacts.mjs
-  bash -n scripts/zigzag-build-settings.sh scripts/zigzag-cpu-settings.sh scripts/bench-zigzag.sh source-overrides/zigzag/curio/curio-cpu-launcher.sh
+  bash -n scripts/build-resources.sh scripts/zigzag-build-settings.sh scripts/zigzag-cpu-settings.sh scripts/bench-zigzag.sh source-overrides/zigzag/curio/curio-cpu-launcher.sh
   node --check scripts/write-proof-micro-provenance.mjs
   node --check scripts/compose-proof-micro-report.mjs
   node --check scripts/summarize-proof-micro-telemetry.mjs

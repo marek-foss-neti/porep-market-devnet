@@ -50,6 +50,9 @@ ARG CURIO_FFI_COMMIT
 ARG ZIGZAG_TARGET_CPU=default
 ARG ZIGZAG_LTO=off
 ARG ZIGZAG_SHA_ASM=0
+ARG DEVNET_BUILD_JOBS=auto
+ARG DEVNET_BUILD_GO_PROCS=auto
+COPY --from=harness-overlay --chmod=755 scripts/build-resources.sh /usr/local/bin/devnet-build-exec
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/opt/curio/extern/filecoin-ffi/rust/target \
@@ -65,8 +68,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     FFI_BUILD_FROM_SOURCE=1 FFI_GIT_COMMIT="${CURIO_FFI_COMMIT}" \
     FFI_ZIGZAG_SHA_ASM="${ZIGZAG_SHA_ASM}" FFI_USE_OPENCL=1 DISABLE_SUPRASEAL=1 \
     FFI_ZIGZAG_CARGO_FEATURES_FILE=/opt/zigzag-cargo-features.txt \
-    CARGO_BUILD_JOBS=2 GOMAXPROCS=2 \
-    make build CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
+    /usr/local/bin/devnet-build-exec 1 make build CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
       CURIO_TAGS="cunative debug nosupraseal"; \
     test -s /opt/zigzag-cargo-features.txt
 

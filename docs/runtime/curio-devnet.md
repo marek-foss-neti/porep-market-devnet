@@ -72,6 +72,12 @@ BuildKit output is retained under `.runtime/devnet/logs/` on success or
 failure. Re-running `just build` safely reuses the same pinned tags and
 BuildKit cache.
 
+Compilation automatically sizes Cargo jobs and Go concurrency from CPU affinity,
+cgroup CPU/memory limits and available RAM inside the builder. The standard
+image shares resources across its three possible concurrent build branches;
+dedicated ZigZag images build sequentially with a single-branch budget. See
+[build parallelism](build-parallelism.md) for the policy and manual overrides.
+
 ## Contract targets and deployments
 
 `test-contracts` and `deploy` use the clean PoRep Market revision from

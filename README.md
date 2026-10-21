@@ -101,6 +101,11 @@ benchmark or generate proof parameters. Use `just build-zigzag` to rebuild only
 the dedicated ZigZag images. Capability names and upgrade notes are described in
 [ZigZag build capabilities](docs/runtime/zigzag-capabilities.md).
 
+Build parallelism is automatic: Cargo jobs and Go concurrency use the CPU and
+available RAM visible inside each Docker build container. Manual overrides and
+the resource budget are described in
+[build parallelism](docs/runtime/build-parallelism.md).
+
 ## Canonical Run
 
 ```sh

@@ -374,10 +374,12 @@ test("microbench generic passes portable BLST to tree, build and the actual mani
     mkdirSync(bin);
     mkdirSync(join(temporary, "extern/filecoin-ffi/rust"), { recursive: true });
     writeFileSync(join(bin, "rustup"), '#!/bin/sh\nprintf "stable (default)\\n"\n', { mode: 0o755 });
+    writeFileSync(join(bin, "devnet-build-exec"), '#!/bin/sh\nshift\nexec "$@"\n', { mode: 0o755 });
     writeFileSync(join(bin, "cargo"), '#!/bin/sh\nprintf "%s\\0" "$@" > "$CPU_TEST_CAPTURE_DIR/$1.argv"\nprintf "%s\\0" "${RUSTFLAGS-}" > "$CPU_TEST_CAPTURE_DIR/$1.env"\nprintf "mock cargo feature graph\\n"\n', { mode: 0o755 });
     // Exercise the Dockerfile shell with mock tools and a temporary graph path.
     // No Docker invocation or compilation takes place.
     const command = cargoRun.replace(/^RUN /, "").replace(/\\\r?\n\s*/g, " ")
+      .replaceAll("/usr/local/bin/devnet-build-exec", "devnet-build-exec")
       .replaceAll("/opt/zigzag-cargo-features.txt", '"${CPU_TEST_FEATURE_GRAPH}"');
     for (const target of ["default", "generic", "native"]) {
       for (const shaAsm of ["0", "1"]) {

@@ -169,6 +169,7 @@ const dockerSurfaceInputs = [
   "docker/curio/Dockerfile",
   "docker/piece-server/Dockerfile",
   "docker/indexer/Dockerfile",
+  "scripts/build-resources.sh",
 ] as const;
 const sourceOverrideInputs = [
   "source-overrides/curio/cmd/curio/tasks/tasks.go",
