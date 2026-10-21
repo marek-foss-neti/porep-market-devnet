@@ -81,7 +81,7 @@ setting, stride and lookahead only after comparing the complete PC1 workload.
 
 The prehash implementation, including encoder wait metrics, is committed and
 pinned in devnet at Rust revision
-`b1cec2213b8132adc6164ccb5a289c35e279eadf`. Fetch the managed sources and rebuild
+`74d72f778664c10d19105b5401976205864f0b9d`. Fetch the managed sources and rebuild
 both dedicated images on the remote machine before running comparisons. Both
 build guards require `EncodePrehash`; this pin needs no development-source
 override. For future uncommitted changes, use an isolated source copy inside
