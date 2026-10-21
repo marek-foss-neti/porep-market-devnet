@@ -5,7 +5,7 @@ pipeline variants. Ordinary and split PC1 in the dedicated FFI/Curio adapter
 use the same code. SDR, TreeD, KDF, graph traversal, commitments, circuit and
 Groth16 parameters are unchanged.
 
-| Setting | Default | Meaning |
+| Setting | General runner / native default | Meaning |
 | --- | --- | --- |
 | `BENCH_ZIGZAG_TREE_R_BUILDER` | `legacy` | Select `binary` for either pipeline variant. |
 | `BENCH_ZIGZAG_LAYER_PIPELINE` | `sequential` | `sequential`, `overlap`, or `stream`. |
@@ -16,8 +16,11 @@ For Rust and dedicated Curio, replace `BENCH_ZIGZAG_` with
 `FIL_PROOFS_ZIGZAG_`. Both adapters forward the settings explicitly. Empty or
 invalid values fail. A nonsequential pipeline requires the binary builder,
 Linux and the exact binary Poseidon DiskStore shape; it does not silently fall
-back. The current default remains `legacy` + `sequential` until full comparable
-performance acceptance. Thread and buffer overrides affect the pipeline modes.
+back. The general runner and native defaults remain `legacy` + `sequential`.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset selects
+`binary` + `stream`, automatic TreeR threads and 64 MiB snapshot buffers.
+A legacy comparison must also select `sequential`. Thread and buffer overrides
+affect the pipeline modes.
 
 ## Ownership and execution
 

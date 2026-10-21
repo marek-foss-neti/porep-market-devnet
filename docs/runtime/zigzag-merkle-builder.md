@@ -89,18 +89,19 @@ and do not claim to instrument every allocation inside dependency libraries.
 `BENCH_ZIGZAG_TREE_R_BUILDER` selects `binary` or `legacy` in the full benchmark.
 The native variable for Rust and dedicated Curio is
 `FIL_PROOFS_ZIGZAG_TREE_R_BUILDER`. Empty and unknown values fail validation.
-The default is **`legacy`** in Rust, the general runner, the bench-512 preset
-and dedicated Curio. The implementation is integrated but remains opt-in until
-a full comparable bench-512 confirms the performance result, including C1.
-The single-tree timing below is insufficient to change that default.
+The default is **`legacy`** in Rust, the general runner and dedicated Curio.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset selects
+**`binary`** with the **`stream`** layer pipeline. Full comparable runs,
+including C1, remain necessary to assess performance; the single-tree timing
+below does not establish a full-sealing speedup.
 The runner forwards the selection to Docker and records it in provenance and
 `cpu_configuration`; per-layer records identify the path actually used.
 
 For a controlled comparison on the remote machine, use fresh full runs:
 
 ```sh
-BENCH_ZIGZAG_TREE_R_BUILDER=legacy just bench-zigzag-512
-BENCH_ZIGZAG_TREE_R_BUILDER=binary just bench-zigzag-512
+BENCH_ZIGZAG_TREE_R_BUILDER=legacy BENCH_ZIGZAG_LAYER_PIPELINE=sequential just bench-zigzag-512
+BENCH_ZIGZAG_TREE_R_BUILDER=binary BENCH_ZIGZAG_LAYER_PIPELINE=sequential just bench-zigzag-512
 ```
 
 Keep CPU, memory, allocator, parent-buffer/advice, loader, batch and query-cache

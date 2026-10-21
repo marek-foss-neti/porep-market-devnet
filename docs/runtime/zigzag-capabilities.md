@@ -20,7 +20,11 @@ opt-in TreeR/parent-cache DONTNEED advice, affinity
 diagnostics and optional `zigzag-sha-asm`. Buffering and advice default to off.
 The revision also includes the optional [per-C2 query cache](zigzag-query-cache.md),
 corrected cgroup-v2 root-limit detection and circuit-preparation measurements.
-Query retention defaults to off.
+Query retention defaults to off in Rust, the general runner and Curio.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g`
+[comparison preset](zigzag-512-baseline.md) enables 10 GiB query cache, binary
+TreeR with stream snapshots and encode prehash. It uses automatic TreeR/setup
+workers and a 64 MiB snapshot buffer.
 The current pin also includes [automatic parameter prewarm](zigzag-auto-prewarm.md)
 and increases ZigZag TreeR/setup worker limits to 128. Auto setup selects H and
 query concurrency using CPU and memory headroom; it does not autotune encoder
@@ -45,25 +49,25 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
-| Bounded per-C2 query cache, disabled by default | `parameters/query_cache.rs`, `QueryCacheConfig` |
+| Bounded per-C2 query cache, disabled by default in the native API | `parameters/query_cache.rs`, `QueryCacheConfig` |
 | Bounded binary CPU TreeR builder and explicit reference path | `merkle_builder.rs`, `TreeRBuilder` |
 | Bounded layer overlap and streaming snapshots | `layer_pipeline.rs`, `LayerPipelineConfig` |
 | Bounded SHA prefix preparation in encode feeders | `encode_prehash.rs`, `EncodePrehash` |
 
 The pinned revision also includes the [binary TreeR builder](zigzag-merkle-builder.md),
-wired into the same PC1 path used by dedicated Curio. It remains opt-in:
-`legacy` is the default until full performance acceptance. The selector is a
+wired into the same PC1 path used by dedicated Curio. It remains opt-in in the
+general runner and Curio, where `legacy` is the default. The selector is a
 runtime comparison control, not a Cargo feature or a different adapter.
 
 The pinned revision also includes the [layer pipeline](zigzag-layer-pipeline.md).
 It offers `overlap` and `stream` through the same PC1 path, with bounded snapshot
-buffers, dirty writes and workers. The default remains `sequential` pending
-performance acceptance; no development-source override is required.
+buffers, dirty writes and workers. The general runner and native default remains
+`sequential`; no development-source override is required.
 
 The pinned revision also includes [encode prehash](zigzag-encode-prehash.md).
 Both dedicated build guards require `EncodePrehash`; no development-source
 override is required. Prefix preparation remains opt-in and disabled by default
-pending a full benchmark comparison.
+in the general runner and native API.
 
 These are unconditional parts of the dedicated adapter. There are no Cargo
 features, `FFI_USE_*` switches or Docker build arguments for disabling them.

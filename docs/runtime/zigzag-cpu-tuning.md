@@ -2,20 +2,22 @@
 
 This implements the CPU controls and optional cache experiments. It keeps one complete `just bench-zigzag-512` run,
 including a newly produced and validated C1, all C2 partitions, verify and unseal.
-No faster profile has been selected: Rust correctness tests, image builds and full
-performance comparisons still require the authorized remote machine. Encode
+Rust correctness tests, image builds and full performance comparisons require
+the authorized remote machine. Encode
 defaults remain affinity on, two producers, stride 128 and lookahead 4096.
 Record buffering and both DONTNEED options default to off in the general runner
-and Curio. `just bench-zigzag-512` applies its own
+and Curio. `just bench-zigzag-512` and `just bench-zigzag-32g` apply their shared
 [comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
-options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1 and 50 GiB RAM.
-Optional [layer overlap and streaming snapshots](zigzag-layer-pipeline.md) use
-a separate bounded TreeR pool and snapshot buffers; the baseline remains
-sequential until full performance acceptance.
+options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1, 50 GiB base RAM and
+10 GiB query cache. The preset selects binary TreeR and
+[streaming snapshots](zigzag-layer-pipeline.md), with automatic TreeR threads
+and 64 MiB snapshot buffers. The full-run container limit is 60 GiB;
+prewarm retains 50 GiB and automatic setup workers.
 
 Optional [SHA prefix preparation](zigzag-encode-prehash.md) moves complete
 SHA data blocks into the existing feeders. It is independent of the TreeR
-pipeline and remains opt-in pending full performance comparisons.
+pipeline and is enabled by the shared comparison preset. The general runner
+and Curio retain their opt-in default.
 
 ## Runtime controls
 
