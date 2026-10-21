@@ -228,7 +228,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     zigzag_malloc_arena_max="$(zigzag_cpu_setting BENCH_ZIGZAG_MALLOC_ARENA_MAX "${BENCH_ZIGZAG_MALLOC_ARENA_MAX}" 1 256)"
     docker_common_args+=(-e "MALLOC_ARENA_MAX=${zigzag_malloc_arena_max}")
   fi
-  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_setup=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
 fi
 zigzag_setup_args=()
 if [[ "${backend}" == "zigzag" ]]; then
@@ -244,11 +244,16 @@ if [[ "${backend}" == "zigzag" ]]; then
     -e "FIL_PROOFS_ZIGZAG_GROTH16_BATCH_SIZE=${zigzag_groth16_batch_size}"
   )
   setup_batch_points="${BENCH_ZIGZAG_SETUP_BATCH_POINTS:-65536}"
-  setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS:-16}"
+  setup_workers="${BENCH_ZIGZAG_SETUP_WORKERS-${FIL_PROOFS_ZIGZAG_SETUP_WORKERS-auto}}"
   setup_budget_bytes="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-42949672960}"
-  for setup_value in "${setup_batch_points}" "${setup_workers}" "${setup_budget_bytes}"; do
+  if [[ "${setup_workers}" != auto ]]; then
+    [[ "${setup_workers}" =~ ^[0-9]{1,3}$ ]] && (( 10#${setup_workers} >= 1 && 10#${setup_workers} <= 128 )) ||
+      devnet_die "BENCH_ZIGZAG_SETUP_WORKERS must be auto or between 1 and 128"
+    setup_workers="$((10#${setup_workers}))"
+  fi
+  for setup_value in "${setup_batch_points}" "${setup_budget_bytes}"; do
     [[ "${setup_value}" =~ ^[0-9]+$ ]] && (( setup_value > 0 )) ||
-      devnet_die "ZigZag setup batch, workers, and budget must be positive integers"
+      devnet_die "ZigZag setup batch and budget must be positive integers"
   done
   mkdir -p "${run_dir}/prewarm-work"
   zigzag_setup_args=(
@@ -413,8 +418,11 @@ bench_compose_report() {
   local telemetry_summary="$3"
   local prewarm_summary="$4"
   local prewarm_telemetry_summary="$5"
-  local measured_log="-"
+  local measured_log="-" prewarm_log="-"
   [[ "${measured_mode}" != "full" ]] || measured_log="${stderr_log}"
+  if [[ "${measured_mode}" == full || "${measured_mode}" == prewarm-only ]]; then
+    prewarm_log="${prewarm_stderr_log}"
+  fi
   node "${DEVNET_ROOT}/scripts/compose-proof-micro-report.mjs" \
     "${report_json}" \
     "${measured_mode}" \
@@ -423,7 +431,8 @@ bench_compose_report() {
     "${provenance_json}" \
     "${prewarm_summary}" \
     "${prewarm_telemetry_summary}" \
-    "${measured_log}"
+    "${measured_log}" \
+    "${prewarm_log}"
   jq -e '
     .schema_version == 1
     and (.telemetry.schema_version == 1)

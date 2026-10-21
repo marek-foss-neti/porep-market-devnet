@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. This revision includes
+`b1cec2213b8132adc6164ccb5a289c35e279eadf`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -21,6 +21,11 @@ diagnostics and optional `zigzag-sha-asm`. Buffering and advice default to off.
 The revision also includes the optional [per-C2 query cache](zigzag-query-cache.md),
 corrected cgroup-v2 root-limit detection and circuit-preparation measurements.
 Query retention defaults to off.
+The current pin also includes [automatic parameter prewarm](zigzag-auto-prewarm.md)
+and increases ZigZag TreeR/setup worker limits to 128. Auto setup selects H and
+query concurrency using CPU and memory headroom; it does not autotune encoder
+feeders. These additions still await remote Rust validation after the active
+benchmark finishes; a repin alone is not build or correctness acceptance.
 It retains optional TreeD/encode/TreeR operation boundaries used by the dedicated microbench to
 report per-phase CPU, sampled memory and timing in the full cycle. Ordinary
 Curio workers leave the measurement observer unset. It retains shared-L3 CPU

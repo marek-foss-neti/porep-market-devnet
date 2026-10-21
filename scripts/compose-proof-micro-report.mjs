@@ -99,6 +99,11 @@ export function parsePipelineDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_pipeline (\{.*\})\s*$/);
 }
 
+export function parseSetupWorkerPlans(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_setup_workers (\{.*\})\s*$/)
+    .map((plan) => ({ ...plan, source: "param-prewarm.stderr.log" }));
+}
+
 function parseJsonDiagnostics(raw, pattern) {
   return raw.split(/\r?\n/).flatMap((line, index) => {
     let message = line;
@@ -135,6 +140,7 @@ export function composeReport({
   prewarm,
   prewarmTelemetry,
   measuredLog = null,
+  prewarmLog = null,
 }) {
   if (benchmark.cpu_configuration) {
     benchmark = { ...benchmark, cpu_configuration: normalizeCpuConfiguration(benchmark.cpu_configuration) };
@@ -184,6 +190,7 @@ export function composeReport({
     telemetry,
     prewarm,
     prewarm_telemetry: prewarmTelemetry,
+    prewarm_worker_plans: prewarmLog === null ? [] : parseSetupWorkerPlans(prewarmLog),
     provenance,
     phases,
     pc1_suboperations: pc1Suboperations,
@@ -335,6 +342,16 @@ export function renderPhaseMarkdown(report) {
       `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
       "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
   }
+  if (report.prewarm_worker_plans?.length) {
+    lines.push("", "## Parameter prewarm workers", "",
+      "| Phase | Requested | Workers | CPU limit | Memory worker limit | Effective budget B | Reserve B | Estimated peak B | Limiting factors |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+      ...report.prewarm_worker_plans.map((plan) =>
+        `| ${plan.phase} | ${plan.requested_workers} | ${value(plan.workers)} | ${value(plan.cpu_limit)} | ${value(plan.memory_limit)} | ${value(plan.effective_budget_bytes)} | ${value(plan.reserve_bytes)} | ${value(plan.estimated_peak_bytes)} | ${(plan.limiting_factors ?? []).join(", ")} |`), "",
+      "Admission estimates are not measured peaks or a memory reservation. Auto samples CPU, host and cgroup limits at phase boundaries; manual values retain explicit scheduling. Full resource snapshots and batch sizes are in prewarm_worker_plans in report.json; source: param-prewarm.stderr.log. These records add no time to sealing totals.");
+  } else if (report.prewarm?.parameter_cache_hit === true || report.mode === "prewarm-only" && report.benchmark?.parameter_cache_hit === true) {
+    lines.push("", "Parameter cache hit: no Groth16 setup workers were needed.");
+  }
   if (report.memory_budget?.configured) {
     const budget = report.memory_budget.configured;
     lines.push("", "Configured RAM: base " + value(budget.base_memory_bytes) +
@@ -378,11 +395,11 @@ function main() {
     process.stdout.write(renderPhaseMarkdown(readJson(process.argv[3])));
     return;
   }
-  const [outputPath, mode, benchmarkPath, telemetryPath, provenancePath, prewarmPath, prewarmTelemetryPath, logPath] =
+  const [outputPath, mode, benchmarkPath, telemetryPath, provenancePath, prewarmPath, prewarmTelemetryPath, logPath, prewarmLogPath] =
     process.argv.slice(2);
-  if (!prewarmTelemetryPath || ![9, 10].includes(process.argv.length)) {
+  if (!prewarmTelemetryPath || ![9, 10, 11].includes(process.argv.length)) {
     fail(
-      "usage: compose-proof-micro-report.mjs OUTPUT MODE BENCHMARK TELEMETRY PROVENANCE PREWARM|- PREWARM_TELEMETRY|- [MEASURED_STDERR|-]",
+      "usage: compose-proof-micro-report.mjs OUTPUT MODE BENCHMARK TELEMETRY PROVENANCE PREWARM|- PREWARM_TELEMETRY|- [MEASURED_STDERR|-] [PREWARM_STDERR|-]",
     );
   }
   const report = composeReport({
@@ -393,6 +410,7 @@ function main() {
     prewarm: optionalJson(prewarmPath),
     prewarmTelemetry: optionalJson(prewarmTelemetryPath),
     measuredLog: logPath && logPath !== "-" ? readFileSync(logPath, "utf8") : null,
+    prewarmLog: prewarmLogPath && prewarmLogPath !== "-" ? readFileSync(prewarmLogPath, "utf8") : null,
   });
   const temporary = `${outputPath}.temporary-${process.pid}`;
   writeFileSync(temporary, `${JSON.stringify(report, null, 2)}\n`, {

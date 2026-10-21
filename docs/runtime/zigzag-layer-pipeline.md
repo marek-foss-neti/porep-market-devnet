@@ -9,7 +9,7 @@ Groth16 parameters are unchanged.
 | --- | --- | --- |
 | `BENCH_ZIGZAG_TREE_R_BUILDER` | `legacy` | Select `binary` for either pipeline variant. |
 | `BENCH_ZIGZAG_LAYER_PIPELINE` | `sequential` | `sequential`, `overlap`, or `stream`. |
-| `BENCH_ZIGZAG_TREE_R_THREADS` | `auto` | Tree pool threads, 1–64, clipped to the effective Rayon count minus encoder/feeder threads, with a minimum of one. |
+| `BENCH_ZIGZAG_TREE_R_THREADS` | `auto` | Tree pool threads, 1–128, clipped to the effective Rayon count minus encoder/feeder threads, with a minimum of one. |
 | `BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB` | `64` | Streaming pool capacity, 1–64 MiB; small sectors allocate only the required buffers. |
 
 For Rust and dedicated Curio, replace `BENCH_ZIGZAG_` with
@@ -78,8 +78,14 @@ see [cache policy](zigzag-cpu-tuning.md#bounded-records-and-advice).
 The tree pool is created before encoder affinity binds the calling thread.
 The requested count is clipped to leave scheduling capacity for the encoder
 and feeders. This is a thread bound, not an exclusive CPU reservation; small
-cpusets and other sectors/services can still contend. Builder vectors retain
-their previous maximum of 40 MiB, independently of the snapshot pool.
+cpusets and other sectors/services can still contend. Builder vectors use at
+most 80 MiB at 128 workers, independently of the unchanged 64 MiB snapshot pool.
+With the default two feeders and one encoder, `auto` selects
+`max(1, min(128, Rayon threads - 3))`: 29 workers on 32 available threads,
+93 on 96, 125 on 128, and 128 on 256. Explicit requests are also clipped to
+that ceiling. Small trees additionally use no more hash workers than there
+are first-level chunks. These counts are selected at startup/per call, not
+dynamically retuned according to load from other host processes.
 
 JSON/Markdown reports preserve requested configuration, effective tree threads,
 buffer counts/bytes, orientation, written chunks and capture readiness.
@@ -144,7 +150,7 @@ and its image manifests were left unchanged; builds used an isolated copy.
 
 The pipeline implementation, including background writeback and wait metrics,
 is committed and pinned in `versions.lock.yaml` at
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. Fetch the managed sources and rebuild
+`b1cec2213b8132adc6164ccb5a289c35e279eadf`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Dedicated builds require
 `LayerPipelineConfig`; no development-source override is needed for this pin.
 For further uncommitted development, use an isolated copy inside the devnet

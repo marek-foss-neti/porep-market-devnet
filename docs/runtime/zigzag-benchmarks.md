@@ -52,6 +52,14 @@ set the same overrides on both commands. The current loader permits base plus
 active query cache up to 60 GiB; see [memory policy](zigzag-query-cache.md).
 Pool sizes set to `auto` resolve against the actual container CPU availability.
 
+Groth16 parameter generation now defaults to [automatic prewarm](zigzag-auto-prewarm.md)
+for both commands, with H/query worker counts selected from CPU availability and
+memory headroom. `BENCH_ZIGZAG_SETUP_WORKERS=16` restores the explicit count;
+the generator budget stays 40 GiB and the prewarm container stays at 50 GiB.
+Unlike adding the shared command, this Rust change requires fetching the updated
+pinned source and rebuilding the image. Rust tests and
+fresh-parameter acceptance are deferred until the active remote benchmark ends.
+
 Parameter files depend on sector geometry. Prewarm validates/reuses the proper
 files or generates missing ones; the 512 MiB and 32 GiB SRS are not interchangeable.
 To reuse prepared 32 GiB caches instead of starting with the new default directory:

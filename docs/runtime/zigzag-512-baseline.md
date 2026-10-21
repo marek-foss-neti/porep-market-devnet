@@ -20,7 +20,7 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`, including CPU/cache tuning controls,
+`b1cec2213b8132adc6164ccb5a289c35e279eadf`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2
@@ -57,6 +57,7 @@ The latter uses the native 32 GiB sector configuration; see
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
+| `BENCH_ZIGZAG_SETUP_WORKERS` | `auto` (general runner default; native override supported) |
 | `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `53687091200` (50 GiB base; query cache is additional) |
 
 The earlier version of this preset used by the three successful runs on
@@ -65,6 +66,15 @@ below. Use identical settings for comparisons of subsequent optimizations.
 The wrapper passes the values explicitly to the full runner,
 which records them in provenance and reports effective configuration in JSON/MD.
 Applicable settings also reach its prewarm container.
+
+[Automatic prewarm](zigzag-auto-prewarm.md) replaces the fixed 16-worker
+default for parameter generation. Both commands use the same CPU/RAM policy,
+with separate H/query counts recorded in `report.json` and `summary.md`.
+This Rust change is included in the pin above. Fetch the managed sources and
+rebuild the dedicated images; changing a shell default alone does not add support
+to an older image. Remote Rust validation remains deferred as described in the linked document.
+The setup setting inherits `FIL_PROOFS_ZIGZAG_SETUP_WORKERS` when its `BENCH_*`
+override is absent. Existing parameter files remain reusable.
 
 With the deferred TreeR policy, `BENCH_ZIGZAG_TREE_R_DONTNEED=1` releases pages
 only at C2 entry, after all C1 work and validation. The flag and default stay

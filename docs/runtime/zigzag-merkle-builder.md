@@ -54,8 +54,12 @@ precommit workspace recovery remains responsible for abandoned generations.
 
 Each worker owns three reusable vectors: input bytes, fixed-size field pairs
 and output bytes. There are at most 4096 pairs per chunk and
-`min(Rayon threads, 64, first-level chunks)` workers. The maximum vector
-capacity is 40 MiB; with 24 workers it is 15 MiB. Buffers survive level barriers.
+`min(Rayon threads, 128, first-level chunks)` workers. The maximum vector
+capacity is 80 MiB; with 24 workers it is 15 MiB. Buffers survive level barriers.
+The limit is shared with the overlap/stream pool. Sequential binary construction
+uses the calling Rayon pool without reserving encoder threads, since encoding
+and tree construction do not overlap. `BENCH_ZIGZAG_TREE_R_THREADS` controls the
+overlap/stream pool only; use `BENCH_RAYON_NUM_THREADS` to bound sequential work.
 There is no sector-sized node vector or vector of all chunk tasks.
 
 These limits cover builder-owned buffers, not the replica, OS page cache,
@@ -105,7 +109,7 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned in `versions.lock.yaml` at
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`. Fetch the managed sources and rebuild
+`b1cec2213b8132adc6164ccb5a289c35e279eadf`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.
 The pinned [layer-pipeline integration](zigzag-layer-pipeline.md) additionally

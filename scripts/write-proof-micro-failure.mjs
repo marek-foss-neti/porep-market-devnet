@@ -2,7 +2,7 @@
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, renderPhaseMarkdown } from "./compose-proof-micro-report.mjs";
+import { composeReport, normalizeCpuConfiguration, parseParameterDiagnostics, parseSetupWorkerPlans, renderPhaseMarkdown } from "./compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "./summarize-proof-micro-telemetry.mjs";
 import { buildProvenance, readMemoryBudget } from "./write-proof-micro-provenance.mjs";
 
@@ -81,6 +81,7 @@ export function writeFailureReport(options) {
     };
   }
   const measuredLog = read(options.stderrPath) ?? "";
+  const prewarmLog = mode === "prewarm-only" ? measuredLog : read(join(runDirectory, "param-prewarm.stderr.log")) ?? "";
   if (options.backend === "zigzag" && !provenance.invocation.memory_budget) {
     try { provenance.invocation.memory_budget = readMemoryBudget(runDirectory); }
     catch (error) { errors.push(`memory budget: ${error.message}`); }
@@ -102,6 +103,7 @@ export function writeFailureReport(options) {
     mode, benchmark: { cpu_configuration: cpu }, telemetry: telemetry.summary, provenance,
     prewarm: null, prewarmTelemetry: null,
     measuredLog,
+    prewarmLog,
   }) : {
     schema_version: 1, mode, telemetry: null, provenance,
     parameter_loader: cpu?.parameter_loader ?? null,
@@ -109,6 +111,7 @@ export function writeFailureReport(options) {
     memory_budget: { configured: provenance.invocation.memory_budget ?? null, memory_limit_bytes: provenance.invocation.memory_limit_bytes, swap_limit_bytes: provenance.invocation.swap_limit_bytes, scope: "Docker final configuration; cgroup samples unavailable" },
     groth16_parameters: parseParameterDiagnostics(measuredLog),
     prewarm: null, prewarm_telemetry: null,
+    prewarm_worker_plans: parseSetupWorkerPlans(prewarmLog),
     derived: {
       outer_wall_ms: provenance.invocation.outer_wall_ms,
       cgroup_memory_peak_bytes: null, oom_delta: null, oom_kill_delta: null,

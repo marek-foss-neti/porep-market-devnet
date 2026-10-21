@@ -31,7 +31,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (50 GiB); generic Rust/Curio: 56 GiB |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
-| `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; 1–64, screen 1/2/3/4 |
+| `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; wrapper accepts 1–128, screen 1/2/3/4 |
 | `BENCH_ZIGZAG_ENCODE_STRIDE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE` | 128; 1–262144 |
 | `BENCH_ZIGZAG_ENCODE_LOOKAHEAD` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD` | 4096; 1–262144 |
 | `BENCH_ZIGZAG_USE_PARENT_CACHE` | `FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE` | 1; boolean |
@@ -41,6 +41,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_BUILDER` | `FIL_PROOFS_ZIGZAG_TREE_R_BUILDER` | `legacy`; opt-in `binary`, see [bounded TreeR builder](zigzag-merkle-builder.md) for acceptance |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | Wrapper emits `FIL_PROOFS_ZIGZAG_GROTH16_BATCH_SIZE` | 1 for 512 MiB/32 GiB; screen 1/2 |
+| `BENCH_ZIGZAG_SETUP_WORKERS` | `FIL_PROOFS_ZIGZAG_SETUP_WORKERS` | `auto`; or explicit 1–128, see [automatic prewarm](zigzag-auto-prewarm.md) |
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | Wrapper emits `MALLOC_ARENA_MAX` | Unset; explicit 1–256, diagnostic candidate 4 |
 
 The allocator override applies only to dedicated ZigZag benchmark containers
@@ -70,11 +71,52 @@ benchmark containers, not Curio or SDR, and does not reserve host RAM or replace
 the cgroup limit. Leave headroom for other services; a late user-space monitor
 cannot guarantee recovery once the host is already thrashing.
 
-`auto` resolves inside the container before static settings or pools initialize.
+For Rayon/ec-gpu, `auto` resolves inside the container before static settings or pools initialize.
 The runner uses its process's available parallelism. Rayon and ec-gpu are separate
 pools. Inspect actual cpuset, physical cores and SMT before choosing explicit
 sizes; do not assume a historical host's vCPU count. Every variant needs a fresh
 process.
+
+### Worker sizing across sealing and unsealing
+
+The 128-worker update and automatic prewarm are included in the current
+`rust-fil-proofs` pin. Fetch managed sources and rebuild the dedicated images
+before using them. Shell configuration alone cannot change an existing image's
+Rust limit. Their remote Rust validation remains deferred.
+
+| Work | Automatic sizing and limits |
+| --- | --- |
+| TreeD, parent-table generation, compact parameter decoding, parallel vanilla work | Use the available Rayon pool; no additional ZigZag 32/64-worker cap. |
+| Binary TreeR, sequential mode | Up to `min(Rayon threads, 128, first-level chunks)`. |
+| Binary TreeR, overlap/stream | Private pool up to 128, leaving room for the encoder and configured feeders. With Rayon=96 and the default two feeders, `auto` selects 93. |
+| Groth16 proving | Uses Rayon and ec-gpu CPU pools, each `auto` or explicitly 1–4096. Batch/partition size and sequential synthesis still limit usable concurrency; these are not worker caps. |
+| Unseal decode | Uses Rayon for independent output chunks. Layers remain sequential; scratch copy and output writes are not automatically parallelized across all CPUs. |
+| Groth16 parameter generation | `auto` selects H and query workers independently, up to 128, bounded by available CPUs, Rayon, work and RAM. Explicit 1–128 remains supported. Domain/FFT work uses its ec-gpu pool. |
+| Encode feeders | Explicit two-feeder default plus one sequential consumer; the wrapper accepts 1–128 feeders. Direct Rust settings do not impose this wrapper cap. |
+
+`auto` reflects CPUs available to the process/container, not necessarily all
+physical CPUs in the host and not currently idle CPUs. The benchmark resolves
+it through Rust `available_parallelism`; the Curio launcher uses `nproc` with
+the process's affinity/cpuset. Explicit Rayon/ec-gpu counts can oversubscribe
+the available CPUs. The pools are separate and their sizes must not be added
+as a count of exclusively reserved cores.
+
+Leave prewarm at `auto` when moving to a larger host. The generator checks its
+configured budget, Linux host/cgroup headroom and phase-specific allocation
+estimates before selecting H/query workers. The default benchmark budget stays
+40 GiB inside the 50 GiB prewarm container. Auto is an admission policy, not a
+memory reservation or a guarantee that 128 workers are fastest. Explicit counts
+retain the previous manual scheduling and memory-floor check.
+
+Encoder feeders remain at two; this change does not autotune them. More feeders
+multiply parent-reader buffers and do not remove the sequential encoder
+dependency. See [automatic prewarm](zigzag-auto-prewarm.md) for selection rules,
+report fields and the pending remote Rust validation.
+
+TreeR's maximum reusable vector allocation rises from 40 to 80 MiB only when
+more workers are actually selected; existing pools of at most 64 keep their
+previous allocation. The snapshot pool and dirty-write windows retain their
+64 MiB limits. Shared SDR code and pool defaults are unchanged.
 
 `summary.json` and `report.json` include `cpu_configuration`: actual Rayon pool
 size, configured ec-gpu size, allowed CPU list, effective stride/lookahead,
@@ -183,7 +225,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only in the checkout on the remote
 machine. The lock pins the published Rust revision
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`, including the cache_policy module,
+`b1cec2213b8132adc6164ccb5a289c35e279eadf`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated
@@ -235,7 +277,9 @@ An isolated development checkout on the remote machine built the dedicated
 microbench image with Rust source digest
 `702a4a79f1bd7e0fa59108cf0907c45580e4b4f0d7ee31fb504a6dfa6c322095`.
 These sources are now committed as
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073` and pinned in `versions.lock.yaml`.
+`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`, which is included in the current
+`versions.lock.yaml` pin. The results below apply to that revision, not the
+later automatic-prewarm and worker-limit changes.
 Five cache-policy tests passed, including mismatched roots/lengths, missing
 stores, symlinks/FIFOs, disabled advice and preservation of file contents.
 The integration fixture passed in five fresh processes: legacy/sequential,

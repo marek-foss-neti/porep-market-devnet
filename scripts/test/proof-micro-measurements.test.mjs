@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
-import { composeReport, parseEncodePrehashDiagnostics, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseEncodePrehashDiagnostics, parseBellpersonTimings, parseParameterDiagnostics, parseMerkleDiagnostics, parseSetupWorkerPlans, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { writeFailureReport } from "../write-proof-micro-failure.mjs";
 import { readMemoryBudget } from "../write-proof-micro-provenance.mjs";
 
@@ -35,6 +35,28 @@ function report(telemetry, phases, extra = {}) {
     provenance: { invocation: { outer_wall_ms: 1000 } }, prewarm: { wall_ms: 9999 },
     prewarmTelemetry: null, ...extra });
 }
+
+test("prewarm auto and manual worker plans survive plain/JSON logs outside sealing totals", () => {
+  const h = { phase: "h", requested_workers: "auto", workers: 96, cpu_limit: 96,
+    memory_limit: 120, effective_budget_bytes: 42949672960, reserve_bytes: 4294967296,
+    estimated_peak_bytes: 20000000000, limiting_factors: ["cpu_or_128_cap"] };
+  const queries = { ...h, phase: "queries", workers: 64, memory_limit: 64, limiting_factors: ["memory"] };
+  const raw = `INFO storage_proofs_porep::zigzag::groth16_setup_policy > zigzag_setup_workers ${JSON.stringify(h)}\n` +
+    JSON.stringify({ message: `zigzag_setup_workers ${JSON.stringify(queries)}` }) + "\nzigzag_setup_workers {broken";
+  const plans = parseSetupWorkerPlans(raw);
+  assert.equal(plans.length, 2);
+  assert.deepEqual(plans.map((p) => [p.phase, p.workers, p.source]), [["h", 96, "param-prewarm.stderr.log"], ["queries", 64, "param-prewarm.stderr.log"]]);
+  const telemetry = summarize([sample(0, 0, 0), sample(1, 10, 20)]);
+  const result = report(telemetry, [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }], { prewarmLog: raw });
+  assert.deepEqual(result.prewarm_worker_plans, plans);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  assert.match(renderPhaseMarkdown(result), /\| queries \| auto \| 64 \| 96 \| 64 \|/);
+  const manual = report(telemetry, [], { prewarmLog: 'zigzag_setup_workers {"phase":"h","requested_workers":"16","workers":16,"limiting_factors":["explicit"]}' });
+  assert.match(renderPhaseMarkdown(manual), /\| h \| 16 \| 16 \| unavailable/);
+  const cached = report(telemetry, [], { prewarm: { parameter_cache_hit: true } });
+  assert.deepEqual(cached.prewarm_worker_plans, []);
+  assert.match(renderPhaseMarkdown(cached), /cache hit: no Groth16 setup workers/);
+});
 
 test("operation boundaries assign CPU deltas, sampled RAM and layer IDs including short windows", () => {
   const telemetry = summarize([
@@ -267,6 +289,7 @@ test("interrupted full C2 records OOM, partial query metadata and missing batch 
     const entry = sample(0, 10, 110, "operation_start", { phase: "commit_phase2_groth16", operation: { ...boundary(1, "groth16_batch", null, "start"), details: { partition_start: 2, partition_count: 1 } }, active_operation_ids: [1] });
     writeFileSync(path("telemetry.ndjson"), JSON.stringify(entry) + "\n{interrupted");
     writeFileSync(path("summary.json"), "");
+    writeFileSync(path("param-prewarm.stderr.log"), 'zigzag_setup_workers {"phase":"queries","requested_workers":"auto","workers":24}\n');
     writeFileSync(path("manifest.json"), "{}"); // Exercise unavailable provenance diagnostics, too.
     const cpu = { parameter_loader: "compact", allocator_configuration: { scope: "existing allocator; no tuning applied", MALLOC_ARENA_MAX: "4" } };
     writeFileSync(path("stderr.log"), `ZigZag CPU configuration: ${JSON.stringify(cpu)}\nINFO storage_proofs_porep::zigzag::parameters > zigzag_parameters {"kind":"layout","loader":"compact","index_metadata_bytes":120}\n`);
@@ -289,6 +312,7 @@ test("interrupted full C2 records OOM, partial query metadata and missing batch 
     assert.equal(result.memory_budget.memory_limit_bytes, 85899345920);
     assert.equal(result.memory_budget.swap_limit_bytes, 0);
     assert.equal(result.groth16_parameters[0].index_metadata_bytes, 120);
+    assert.equal(result.prewarm_worker_plans[0].workers, 24);
     assert.match(result.diagnostics.errors.join("\n"), /invalid JSON/);
     assert.match(readFileSync(path("summary.md"), "utf8"), /No successful full proof\/verify\/unseal result/);
     assert.ok(readFileSync(path("telemetry-summary.json"), "utf8").includes("groth16_batch"));
@@ -464,6 +488,14 @@ test("CLI produces JSON and Markdown from the same measurements", () => {
     assert.equal(rendered.stdout, renderPhaseMarkdown(output));
     assert.match(rendered.stdout, /base 53687091200 B \+ query cache 4294967296 B = measured container 57982058496 B/);
     assert.match(rendered.stdout, /Prewarm limit: 53687091200 B/);
+    const prewarmLog = join(directory, "param-prewarm.stderr.log");
+    writeFileSync(prewarmLog, 'zigzag_setup_workers {"phase":"h","requested_workers":"auto","workers":24}\n');
+    const withPrewarm = spawnSync(process.execPath, [script.pathname, paths[0], "full", ...paths.slice(1), "-", "-", "-", prewarmLog], { encoding: "utf8" });
+    assert.equal(withPrewarm.status, 0, withPrewarm.stderr);
+    const withPlans = JSON.parse(readFileSync(paths[0], "utf8"));
+    assert.equal(withPlans.prewarm_worker_plans[0].workers, 24);
+    assert.equal(withPlans.prewarm_worker_plans[0].source, "param-prewarm.stderr.log");
+    assert.deepEqual(withPlans.derived, output.derived);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
