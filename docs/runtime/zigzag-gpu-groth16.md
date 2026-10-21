@@ -5,25 +5,30 @@ The dedicated ZigZag worker can compile native Bellperson 0.27.0 with CUDA or Op
 ## CPU updates and dependency pin
 
 The GPU working tree now includes the CPU changes from `test-zigzag` through
-`692de35`: background-writeback and pipeline-wait reporting, TreeR eviction at
-C2, the 50 GiB base budget with query cache on top, and the shared 512 MiB/32 GiB
-benchmark runner. The corresponding Rust CPU reference is
-`7a94e1cfe322a9908dd17ab5a09c9cf96029b073`.
+`e1f3f8d`: background-writeback and pipeline-wait reporting, TreeR eviction at
+C2, the 50 GiB base budget with query cache on top, the shared 512 MiB/32 GiB
+runner, automatic prewarm with worker diagnostics, worker limits up to 128,
+the updated benchmark preset and automatic Cargo/Go build parallelism.
+The corresponding Rust CPU reference is
+`74d72f778664c10d19105b5401976205864f0b9d`, including the setup build fix.
 
 `versions.lock.yaml` pins the combined CPU/GPU implementation to
-`c1b6d0d3776a8f98967653e738002e24e8d61013` on `restore-zigzag-gpu`.
+`d4c6c3e8124fe7b64730246297910adfa1606ab4` on `restore-zigzag-gpu`.
 It includes background writeback, wait metrics and the
 `zigzag_commit_phase2_with_cache` API required by the updated FFI and
 microbench, while preserving native Bellperson GPU proving and device
-admission. Publish the Rust revision before fetching managed sources on the
-remote machine, then rebuild the dedicated images. This pin needs no
-development-source override. For further uncommitted Rust changes, use an
-isolated source copy selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`.
-Keep changes unstaged for manual review.
+admission. This published revision also includes automatic prewarm, worker
+limits up to 128 and the setup build fix. Fetch the managed sources and rebuild
+the dedicated images on the remote machine before using `SETUP_WORKERS=auto`;
+this pin needs no development-source override. For further uncommitted Rust
+changes, use an isolated source copy selected through
+`DEVNET_RUST_FIL_PROOFS_SOURCE`. The repin does not replace remote Rust or GPU
+runtime validation.
+Keep changes unstaged for manual review; never stage or commit automatically.
 
 ## Build variants
 
-Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `c1b6d0d3776a8f98967653e738002e24e8d61013` on `restore-zigzag-gpu`. For further uncommitted development, an isolated source copy can be selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
+Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `d4c6c3e8124fe7b64730246297910adfa1606ab4` on `restore-zigzag-gpu`. For further uncommitted development, an isolated source copy can be selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
 
 After the reviewed pins have been fetched and the standard Curio base image exists:
 
@@ -49,7 +54,7 @@ For OpenCL, use `DEVNET_ZIGZAG_GPU_BACKEND=opencl just build-zigzag`. The device
 
 ## Three full-benchmark controls
 
-Run these only after repairing the remote machine's driver and confirming sufficient host RAM. Set the selected device UUID once; do not use `all`. The commands use the same full `bench-zigzag-512`, existing parameter cache/VK, compact loader, batch 1 and default **50 GiB base RAM plus requested query cache, with no additional swap**. Prewarm uses the base budget only. Query cache defaults to zero; 10 GiB of requested cache gives a 60 GiB measured-container limit. `just bench-zigzag-32g` uses the same preset and GPU selection for native 32 GiB sectors. Preserve the same query cache, PC1 options and CPU pool sizes for every comparison.
+Run these only after repairing the remote machine's driver and confirming sufficient host RAM. Set the selected device UUID once; do not use `all`. The commands use the same full `bench-zigzag-512`, existing parameter cache/VK, compact loader, batch 1 and default **50 GiB base RAM plus requested query cache, with no additional swap**. Prewarm uses the base budget only. The shared preset now defaults to 10 GiB query cache, giving a 60 GiB measured-container limit, encode prehash and binary TreeR with stream snapshots. `just bench-zigzag-32g` uses the same preset and GPU selection for native 32 GiB sectors. Preserve the same query cache, PC1 options and CPU pool sizes for every comparison.
 
 ```sh
 export BENCH_ZIGZAG_GPU_DEVICE="GPU-<selected-device-uuid>"

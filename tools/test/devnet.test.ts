@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "c1b6d0d3776a8f98967653e738002e24e8d61013";
+const rustFilProofsSourceCommit = "d4c6c3e8124fe7b64730246297910adfa1606ab4";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -169,6 +169,7 @@ const dockerSurfaceInputs = [
   "docker/curio/Dockerfile",
   "docker/piece-server/Dockerfile",
   "docker/indexer/Dockerfile",
+  "scripts/build-resources.sh",
 ] as const;
 const sourceOverrideInputs = [
   "source-overrides/curio/cmd/curio/tasks/tasks.go",
@@ -865,8 +866,8 @@ set -euo pipefail
 if [[ -n "\${DEVNET_TEST_EXPECTED_PARENT_DIR:-}" ]]; then
   [[ "$BENCH_ZIGZAG_PARENT_CACHE_DIR" == "$DEVNET_TEST_EXPECTED_PARENT_DIR" ]] || exit 98
 fi
-[[ "$BENCH_ZIGZAG_ENCODE_PREHASH" == "\${DEVNET_TEST_EXPECTED_ENCODE_PREHASH:-0}" ]] || exit 98
-[[ "$BENCH_ZIGZAG_LAYER_PIPELINE" == "\${DEVNET_TEST_EXPECTED_LAYER_PIPELINE:-sequential}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_ENCODE_PREHASH" == "\${DEVNET_TEST_EXPECTED_ENCODE_PREHASH:-1}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_LAYER_PIPELINE" == "\${DEVNET_TEST_EXPECTED_LAYER_PIPELINE:-stream}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_THREADS" == "auto" ]] || exit 98
 [[ "$BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB" == "64" ]] || exit 98
 [[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-53687091200}" ]] || exit 98
@@ -875,8 +876,8 @@ fi
 [[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_MALLOC_ARENA_MAX" == "\${DEVNET_TEST_EXPECTED_MALLOC_ARENA_MAX:-4}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
-[[ "$BENCH_ZIGZAG_TREE_R_BUILDER" == "\${DEVNET_TEST_EXPECTED_TREE_R_BUILDER:-legacy}" ]] || exit 98
-[[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-0}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_TREE_R_BUILDER" == "\${DEVNET_TEST_EXPECTED_TREE_R_BUILDER:-binary}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-10737418240}" ]] || exit 98
 [[ "\${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-}" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES-}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
@@ -963,7 +964,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     for (const [setting, value] of Object.entries({
       PARENT_BUFFER_NODES: "0", PARENT_CACHE_DONTNEED: "0", TREE_R_DONTNEED: "0",
       MALLOC_ARENA_MAX: "2", PARAMETER_LOADER: "mapped", GROTH16_BATCH_SIZE: "2",
-      TREE_R_BUILDER: "binary", ENCODE_PREHASH: "1", LAYER_PIPELINE: "stream",
+      TREE_R_BUILDER: "legacy", ENCODE_PREHASH: "0", LAYER_PIPELINE: "sequential", QUERY_CACHE_BYTES: "0",
     })) {
       changedSettings[`BENCH_ZIGZAG_${setting}`] = value;
       changedSettings[`DEVNET_TEST_EXPECTED_${setting}`] = value;

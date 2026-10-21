@@ -9,6 +9,7 @@ devnet_require_command npm
 devnet_require_command grep
 devnet_require_command shasum
 source "${DEVNET_ROOT}/scripts/zigzag-build-settings.sh"
+devnet_build_parallelism
 
 [[ -z "${DEVNET_ZIGZAG_RUSTUP_TOOLCHAIN:-}" ]] ||
   devnet_die "the ZigZag toolchain is selected by its pinned image, not rustup"
@@ -59,6 +60,7 @@ docker buildx build \
   --progress plain \
   --file docker/zigzag-microbench.Dockerfile \
   --target zigzag-microbench \
+  "${devnet_build_parallelism_args[@]}" \
   --build-context "curio-source=${curio_source_relative}" \
   --build-context "harness-overlay=." \
   --build-context "rust-fil-proofs=${zigzag_source_relative}" \

@@ -37,20 +37,31 @@ proof length, verification and recovered byte count.
 
 Both commands default to parent buffer 32768, parent and TreeR DONTNEED enabled,
 `MALLOC_ARENA_MAX=4`, compact loader, Groth16 batch 1, and 50 GiB base RAM.
-Query cache remains off by default; requested cache is added above the base.
-For example, these matching configurations use 54 GiB for the measured
-container and 50 GiB for prewarm:
+They enable encode prehash, the binary TreeR builder, the stream layer pipeline,
+automatic TreeR threads and 64 MiB snapshot buffers. Query cache defaults to
+10737418240 bytes (10 GiB), added above the base: the measured container gets
+60 GiB and prewarm gets 50 GiB. For example, these explicit overrides reduce
+the measured container to 54 GiB while retaining 50 GiB for prewarm:
 
 ```sh
 BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
 BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-32g
 ```
 
-The existing defaults `TREE_R_BUILDER=legacy`, `LAYER_PIPELINE=sequential` and
-`ENCODE_PREHASH=0` are preserved. An experiment with binary/stream/prehash must
-set the same overrides on both commands. The current loader permits base plus
-active query cache up to 60 GiB; see [memory policy](zigzag-query-cache.md).
+Use identical overrides on both commands for comparisons. To select the older
+CPU path, set both `BENCH_ZIGZAG_TREE_R_BUILDER=legacy` and
+`BENCH_ZIGZAG_LAYER_PIPELINE=sequential`; prehash and query cache can be disabled
+independently with their `BENCH_*` settings set to `0`. The current loader permits
+base plus active query cache up to 60 GiB; see [memory policy](zigzag-query-cache.md).
 Pool sizes set to `auto` resolve against the actual container CPU availability.
+
+Groth16 parameter generation now defaults to [automatic prewarm](zigzag-auto-prewarm.md)
+for both commands, with H/query worker counts selected from CPU availability and
+memory headroom. `BENCH_ZIGZAG_SETUP_WORKERS=16` restores the explicit count;
+the generator budget stays 40 GiB and the prewarm container stays at 50 GiB.
+Unlike adding the shared command, this Rust change requires fetching the updated
+pinned source and rebuilding the image. Rust tests and
+fresh-parameter acceptance are deferred until the active remote benchmark ends.
 
 Parameter files depend on sector geometry. Prewarm validates/reuses the proper
 files or generates missing ones; the 512 MiB and 32 GiB SRS are not interchangeable.

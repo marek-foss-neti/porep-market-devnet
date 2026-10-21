@@ -20,17 +20,15 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`c1b6d0d3776a8f98967653e738002e24e8d61013`, including CPU/cache tuning controls,
+`d4c6c3e8124fe7b64730246297910adfa1606ab4`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2
-root-limit detection and circuit-preparation measurements. Retention remains off
-in the default comparison preset.
-The pinned binary TreeR builder is available through
-`BENCH_ZIGZAG_TREE_R_BUILDER=binary`; the default remains `legacy` pending full
-performance acceptance.
+root-limit detection and circuit-preparation measurements. The comparison preset
+enables 10 GiB query retention, encode prehash and the binary TreeR builder with
+the stream layer pipeline for both sector sizes.
 The pin includes the [combined CPU/GPU implementation](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
-Fetch the selected revision into the remote machine's managed sources before building.
+Fetch that revision into the remote machine's managed sources before building.
 Then run:
 
 ```bash
@@ -49,15 +47,16 @@ The latter uses the native 32 GiB sector configuration; see
 | `BENCH_ZIGZAG_PARENT_BUFFER_NODES` | `32768` |
 | `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `1` |
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `1` |
-| `BENCH_ZIGZAG_TREE_R_BUILDER` | `legacy` |
-| `BENCH_ZIGZAG_ENCODE_PREHASH` | `0` |
-| `BENCH_ZIGZAG_LAYER_PIPELINE` | `sequential` |
+| `BENCH_ZIGZAG_TREE_R_BUILDER` | `binary` |
+| `BENCH_ZIGZAG_ENCODE_PREHASH` | `1` |
+| `BENCH_ZIGZAG_LAYER_PIPELINE` | `stream` |
 | `BENCH_ZIGZAG_TREE_R_THREADS` | `auto` |
 | `BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB` | `64` |
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | `4` |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
-| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
+| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `10737418240` (10 GiB) |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
+| `BENCH_ZIGZAG_SETUP_WORKERS` | `auto` (general runner default; native override supported) |
 | `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `53687091200` (50 GiB base; query cache is additional) |
 
 The earlier version of this preset used by the three successful runs on
@@ -67,6 +66,15 @@ The wrapper passes the values explicitly to the full runner,
 which records them in provenance and reports effective configuration in JSON/MD.
 Applicable settings also reach its prewarm container.
 
+[Automatic prewarm](zigzag-auto-prewarm.md) replaces the fixed 16-worker
+default for parameter generation. Both commands use the same CPU/RAM policy,
+with separate H/query counts recorded in `report.json` and `summary.md`.
+This Rust change is included in the pin above. Fetch the managed sources and
+rebuild the dedicated images; changing a shell default alone does not add support
+to an older image. Remote Rust validation remains deferred as described in the linked document.
+The setup setting inherits `FIL_PROOFS_ZIGZAG_SETUP_WORKERS` when its `BENCH_*`
+override is absent. Existing parameter files remain reusable.
+
 With the deferred TreeR policy, `BENCH_ZIGZAG_TREE_R_DONTNEED=1` releases pages
 only at C2 entry, after all C1 work and validation. The flag and default stay
 the same, but the eviction boundary differs from the historical runs above.
@@ -74,18 +82,18 @@ Compare full sealing time and C1 I/O, not only PC1 RAM; the OS can still reclaim
 pages under memory pressure before C1. Rebuild the images from the current pin
 to apply this implementation change.
 
-The optional [Groth16 query cache](zigzag-query-cache.md) is explicitly off in
-this preset: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`. An explicit benchmark override
-enables it and adds the requested cache budget on top of the base RAM budget.
-The runner defaults the reserve to that base (50 GiB), so requesting 4 GiB
-cache gives a 54 GiB full-run container. The wrapper does not inherit the
+The [Groth16 query cache](zigzag-query-cache.md) defaults to 10 GiB in this
+preset, giving a 60 GiB full-run container: 50 GiB base plus 10 GiB cache.
+Prewarm keeps the 50 GiB base limit. `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables
+the cache and restores a 50 GiB full-run container; a 4 GiB override gives 54 GiB.
+The runner defaults the reserve to the base. The wrapper does not inherit the
 native Curio cache-size setting from the host. Explicit reserve overrides must
 match the base when cache is enabled.
 
-The [binary TreeR builder](zigzag-merkle-builder.md) is also selected explicitly
-for its full comparison: `BENCH_ZIGZAG_TREE_R_BUILDER=binary just bench-zigzag-512`.
-The preset keeps `BENCH_ZIGZAG_TREE_R_BUILDER=legacy` until end-to-end acceptance;
-the other comparison settings above are unchanged.
+The [binary TreeR builder](zigzag-merkle-builder.md) and stream pipeline are
+selected by default. A legacy comparison must override both
+`BENCH_ZIGZAG_TREE_R_BUILDER=legacy` and
+`BENCH_ZIGZAG_LAYER_PIPELINE=sequential`, because stream requires binary.
 
 Explicit `BENCH_*` values override the preset for deliberate experiments; `0`
 disables parent buffering or either DONTNEED option. For these settings, the

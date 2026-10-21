@@ -86,6 +86,9 @@ COPY --from=blst-builder /opt/blst /opt/curio/extern/supraseal/deps/blst
 ARG CURIO_COMMIT
 ARG CURIO_FFI_COMMIT
 ARG CURIO_TAGS="cunative debug nosupraseal"
+ARG DEVNET_BUILD_JOBS=auto
+ARG DEVNET_BUILD_GO_PROCS=auto
+COPY --from=harness-overlay --chmod=755 scripts/build-resources.sh /usr/local/bin/devnet-build-exec
 
 RUN mkdir -p build \
     && touch build/.update-modules build/.blst-install \
@@ -93,15 +96,12 @@ RUN mkdir -p build \
        FFI_GIT_COMMIT="${CURIO_FFI_COMMIT}" \
        FFI_USE_OPENCL=1 \
        DISABLE_SUPRASEAL=1 \
-       CARGO_BUILD_JOBS=2 \
-       GOMAXPROCS=2 \
-       make build \
+       /usr/local/bin/devnet-build-exec 3 make build \
          CURIO_BUILD_COMMIT="${CURIO_COMMIT}" \
          CURIO_TAGS="${CURIO_TAGS}"
 
 RUN cd extern/filecoin-ffi/rust \
-    && CARGO_BUILD_JOBS=2 \
-       cargo build --release \
+    && /usr/local/bin/devnet-build-exec 3 cargo build --release \
          --bin porep-proof-microbench \
          --locked \
          --no-default-features \
@@ -151,14 +151,15 @@ RUN set -eu; \
     cp -a "${fvm_source}" extern/fvm-4.8.2-zigzag; \
     chmod -R u+w extern/fvm-4.8.2-zigzag
 COPY --from=harness-overlay source-overrides/fvm-4.8.2-zigzag/ /opt/lotus/extern/fvm-4.8.2-zigzag/
+ARG DEVNET_BUILD_JOBS=auto
+ARG DEVNET_BUILD_GO_PROCS=auto
+COPY --from=harness-overlay --chmod=755 scripts/build-resources.sh /usr/local/bin/devnet-build-exec
 
 RUN mkdir -p build \
     && touch build/.update-modules \
     && FFI_BUILD_FROM_SOURCE=1 \
        FFI_USE_OPENCL=1 \
-       CARGO_BUILD_JOBS=2 \
-       GOMAXPROCS=2 \
-       make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed
+       /usr/local/bin/devnet-build-exec 3 make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed
 
 FROM ${GO_BUILDER_IMAGE} AS service-tool-builder
 
@@ -166,19 +167,22 @@ ARG GO_CAR_COMMIT
 ARG PIECE_SERVER_COMMIT
 ARG STORETHEINDEX_COMMIT
 ARG GO_ETHEREUM_COMMIT
+ARG DEVNET_BUILD_JOBS=auto
+ARG DEVNET_BUILD_GO_PROCS=auto
+COPY --from=harness-overlay --chmod=755 scripts/build-resources.sh /usr/local/bin/devnet-build-exec
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOMAXPROCS=2 go install "github.com/ipld/go-car/cmd/car@${GO_CAR_COMMIT}"
+    /usr/local/bin/devnet-build-exec 3 go install "github.com/ipld/go-car/cmd/car@${GO_CAR_COMMIT}"
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOMAXPROCS=2 go install "github.com/LexLuthr/piece-server@${PIECE_SERVER_COMMIT}"
+    /usr/local/bin/devnet-build-exec 3 go install "github.com/LexLuthr/piece-server@${PIECE_SERVER_COMMIT}"
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOMAXPROCS=2 go install "github.com/ipni/storetheindex@${STORETHEINDEX_COMMIT}"
+    /usr/local/bin/devnet-build-exec 3 go install "github.com/ipni/storetheindex@${STORETHEINDEX_COMMIT}"
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOMAXPROCS=2 go install "github.com/ethereum/go-ethereum/cmd/geth@${GO_ETHEREUM_COMMIT}"
+    /usr/local/bin/devnet-build-exec 3 go install "github.com/ethereum/go-ethereum/cmd/geth@${GO_ETHEREUM_COMMIT}"
 
 FROM ${NODE_RUNTIME_IMAGE} AS node-runtime
 

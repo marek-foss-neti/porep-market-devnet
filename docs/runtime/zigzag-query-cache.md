@@ -93,7 +93,7 @@ native source and does not use this adapter.
 
 ## Configuration and reports
 
-| Benchmark override | Rust / dedicated Curio variable | Default |
+| Benchmark override | Rust / dedicated Curio variable | General runner / native default |
 | --- | --- | ---: |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
 | `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, normally `53687091200` (50 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
@@ -111,7 +111,10 @@ BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
 ```
 
 This requests 50 GiB base + 4 GiB cache = 54 GiB RAM, with swap disabled.
-Cache remains disabled by default; changing this runner policy needs no rebuild.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset defaults to
+10 GiB cache and a 60 GiB full-run limit; `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`
+disables it. The general runner and native defaults remain disabled. Changing
+this runner policy needs no rebuild.
 
 `groth16_parameters` in `report.json` contains `query_cache` configuration,
 selected families and reserved bytes, plus per-family `query_cache_access`
@@ -129,7 +132,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 pins the implementation, including the cgroup-root fix, at
-`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild the dedicated images. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed

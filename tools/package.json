@@ -8,6 +8,7 @@
     "test:measurements": "node --test ../scripts/test/proof-micro-measurements.test.mjs",
     "test:cpu-settings": "node --test ../scripts/test/zigzag-cpu-settings.test.mjs",
     "test:gpu-settings": "node --test ../scripts/test/zigzag-gpu-settings.test.mjs && PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test/zigzag-gpu-trace.test.py",
+    "test:build-resources": "node --test ../scripts/test/build-resources.test.mjs",
     "typecheck": "tsc --noEmit",
     "cli": "tsx src/cli.ts"
   },

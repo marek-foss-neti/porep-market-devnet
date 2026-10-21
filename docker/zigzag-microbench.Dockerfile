@@ -45,9 +45,12 @@ ARG ZIGZAG_LTO=off
 ARG ZIGZAG_SHA_ASM=0
 ARG ZIGZAG_GPU_BACKEND
 ARG ZIGZAG_CUDA_ARCH=120
+ARG DEVNET_BUILD_JOBS=auto
+ARG DEVNET_BUILD_GO_PROCS=auto
+COPY --from=harness-overlay --chmod=755 scripts/build-resources.sh /usr/local/bin/devnet-build-exec
 RUN set -eu; toolchain="$(rustup default | awk '{print $1}')"; \
     cd extern/filecoin-ffi/rust; \
-    export RUSTUP_TOOLCHAIN="${toolchain}" CARGO_BUILD_JOBS=2; \
+    export RUSTUP_TOOLCHAIN="${toolchain}"; \
     if [ "${ZIGZAG_TARGET_CPU}" = native ]; then export RUSTFLAGS='-C target-cpu=native'; fi; \
     if [ "${ZIGZAG_LTO}" != off ]; then export CARGO_PROFILE_RELEASE_LTO="${ZIGZAG_LTO}" CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1; fi; \
     features='multicore-sdr,zigzag-bench,zigzag-setup-status'; \
@@ -56,7 +59,7 @@ RUN set -eu; toolchain="$(rustup default | awk '{print $1}')"; \
     if [ "${ZIGZAG_TARGET_CPU}" = generic ]; then features="${features},blst-portable"; fi; \
     if [ "${ZIGZAG_SHA_ASM}" = 1 ]; then features="${features},zigzag-sha-asm"; fi; \
     cargo tree --locked -e features --format '{p} features=[{f}]' --no-default-features --features "${features}" > /opt/zigzag-cargo-features.txt; \
-    cargo build --release --locked \
+    /usr/local/bin/devnet-build-exec 1 cargo build --release --locked \
          --bin porep-proof-microbench \
          --no-default-features \
          --features "${features}"

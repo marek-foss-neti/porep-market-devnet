@@ -10,6 +10,7 @@ devnet_require_command grep
 devnet_require_command shasum
 export DEVNET_ZIGZAG_GPU_BACKEND="${DEVNET_ZIGZAG_GPU_BACKEND-opencl}"
 source "${DEVNET_ROOT}/scripts/zigzag-build-settings.sh"
+devnet_build_parallelism
 
 source_output="$(npm --prefix tools run cli -- sources verify)"
 curio_commit="$(awk -F '\t' '$1 == "curio" {print $3}' <<<"${source_output}")"
@@ -55,6 +56,7 @@ zigzag_prepare_cuda_tools
 docker buildx build --load --provenance=false --progress plain \
   --platform "${platform}" --file docker/zigzag-curio.Dockerfile \
   --target zigzag-curio \
+  "${devnet_build_parallelism_args[@]}" \
   --build-context "blst-source=${blst_source_relative}" \
   --build-context "curio-source=${curio_source_relative}" \
   --build-context "rust-fil-proofs=${proofs_source_relative}" \

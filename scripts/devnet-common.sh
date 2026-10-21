@@ -786,6 +786,19 @@ devnet_require_command() {
   command -v "$1" >/dev/null 2>&1 || devnet_die "required command not found: $1"
 }
 
+devnet_build_parallelism() {
+  local name value
+  devnet_build_parallelism_args=()
+  for name in DEVNET_BUILD_JOBS DEVNET_BUILD_GO_PROCS; do
+    value="${!name-auto}"
+    [[ "$value" == auto ]] || {
+      [[ "$value" =~ ^[1-9][0-9]{0,3}$ ]] && ((value <= 4096)) ||
+        devnet_die "${name} must be auto or an integer from 1 to 4096"
+    }
+    devnet_build_parallelism_args+=(--build-arg "${name}=${value}")
+  done
+}
+
 devnet_verify_deployment_code() {
   local manifest="$1"
   local curio_commit image
@@ -1073,6 +1086,7 @@ devnet_zigzag_microbench_overrides_sha256() {
     for path in scripts/zigzag-gpu-run.sh scripts/summarize-zigzag-gpu.py docker/zigzag-cuda-tools.Dockerfile; do
       shasum -a 256 "${DEVNET_ROOT}/${path}" | awk '{print $1}'
     done
+    shasum -a 256 "${DEVNET_ROOT}/scripts/build-resources.sh" | awk '{print $1}'
   } | shasum -a 256 | awk '{print $1}'
 }
 
@@ -1179,7 +1193,8 @@ devnet_docker_surface_sha256() {
       docker/lotus-miner/Dockerfile \
       docker/curio/Dockerfile \
       docker/piece-server/Dockerfile \
-      docker/indexer/Dockerfile; do
+      docker/indexer/Dockerfile \
+      scripts/build-resources.sh; do
       [[ -f "${DEVNET_ROOT}/${path}" && ! -L "${DEVNET_ROOT}/${path}" ]] ||
         devnet_die "Docker build surface input is missing or symbolic: ${path}"
       printf '%s\n' "${path}"

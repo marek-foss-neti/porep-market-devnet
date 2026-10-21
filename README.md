@@ -101,6 +101,11 @@ benchmark or generate proof parameters. Use `just build-zigzag` to rebuild only
 the dedicated ZigZag images. Capability names and upgrade notes are described in
 [ZigZag build capabilities](docs/runtime/zigzag-capabilities.md).
 
+Build parallelism is automatic: Cargo jobs and Go concurrency use the CPU and
+available RAM visible inside each Docker build container. Manual overrides and
+the resource budget are described in
+[build parallelism](docs/runtime/build-parallelism.md).
+
 ## Canonical Run
 
 ```sh
@@ -195,8 +200,10 @@ just bench-zigzag-32g
 
 Run these sequentially on the remote machine. Both commands use the same
 comparison preset and dedicated image, run one full seal/prove/verify/unseal
-cycle, and use 50 GiB base RAM plus any requested query cache. They differ in
-sector geometry and parameter-cache namespace. See
+cycle, and default to prehash, binary TreeR with stream snapshots, automatic
+TreeR/prewarm workers, a 64 MiB snapshot buffer and 10 GiB query cache. RAM is
+60 GiB for the measured run (50 GiB base plus cache) and 50 GiB for prewarm.
+They differ in sector geometry and parameter-cache namespace. See
 [the shared benchmark commands](docs/runtime/zigzag-benchmarks.md) for cache
 reuse, overrides and the limits of extrapolating from 512 MiB to 32 GiB.
 
@@ -339,7 +346,10 @@ swap. This also applies to 32 GiB sectors. The cache reserve follows the base;
 an explicit mismatched reserve is rejected. The current loader permits at most
 60 GiB base plus cache (10 GiB cache at the default base). See the
 [query-cache policy](docs/runtime/zigzag-query-cache.md). SDR and Curio service
-limits are unchanged; cache remains off unless requested.
+limits are unchanged. The shared `bench-zigzag-512` and `bench-zigzag-32g`
+preset requests 10 GiB cache by default, giving a 60 GiB full-run limit;
+`BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables it. The general runner defaults to
+cache off.
 
 Each successful run publishes:
 

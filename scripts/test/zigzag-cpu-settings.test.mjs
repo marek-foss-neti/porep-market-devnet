@@ -95,6 +95,7 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_ENCODE_PREHASH: "" }, { BENCH_ZIGZAG_ENCODE_PREHASH: "2" },
     { FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: "invalid" },
     { BENCH_ZIGZAG_ENCODE_AFFINITY: "maybe" }, { BENCH_ZIGZAG_ENCODE_PRODUCERS: "0" },
+    { BENCH_ZIGZAG_ENCODE_PRODUCERS: "129" },
     { BENCH_ZIGZAG_ENCODE_STRIDE: "-1" }, { BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "1048576" },
     { BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262145" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "64424509441" },
@@ -105,7 +106,7 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "" },
     { BENCH_ZIGZAG_LAYER_PIPELINE: "stream" },
     { BENCH_ZIGZAG_LAYER_PIPELINE: "" }, { BENCH_ZIGZAG_LAYER_PIPELINE: "unknown" },
-    { BENCH_ZIGZAG_TREE_R_THREADS: "0" }, { BENCH_ZIGZAG_TREE_R_THREADS: "65" },
+    { BENCH_ZIGZAG_TREE_R_THREADS: "0" }, { BENCH_ZIGZAG_TREE_R_THREADS: "129" },
     { BENCH_ZIGZAG_TREE_R_THREADS: "" },
     { BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB: "0" }, { BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB: "65" },
     { BENCH_ZIGZAG_PARAMETER_LOADER: "unknown" }, { FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "" },
@@ -134,6 +135,20 @@ test("layer pipeline selects independent overlap and stream variants with bounde
   assert.equal(environment({ FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", FIL_PROOFS_ZIGZAG_LAYER_PIPELINE: "stream" }).FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "stream");
 });
 
+test("96 and 128 worker settings pass through without enlarging snapshot buffers", () => {
+  for (const count of ["96", "128"]) {
+    const env = environment({
+      BENCH_RAYON_NUM_THREADS: count, BENCH_EC_GPU_NUM_THREADS: count,
+      BENCH_ZIGZAG_TREE_R_THREADS: count, BENCH_ZIGZAG_ENCODE_PRODUCERS: count,
+    });
+    assert.equal(env.RAYON_NUM_THREADS, count);
+    assert.equal(env.EC_GPU_NUM_THREADS, count);
+    assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_THREADS, count);
+    assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS, count);
+    assert.equal(env.FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB, "64");
+  }
+});
+
 test("compose applies CPU override only to ZigZag and passes settings to the Curio service", () => {
   const temporary = mkdtempSync(join(tmpdir(), "zigzag-cpu-compose-"));
   try {
@@ -151,6 +166,7 @@ test("compose applies CPU override only to ZigZag and passes settings to the Cur
     assert.match(override, /services:\n  curio:\n/);
     assert.match(override, /RAYON_NUM_THREADS: \$\{RAYON_NUM_THREADS:-auto\}/);
     assert.match(override, /EC_GPU_NUM_THREADS: \$\{EC_GPU_NUM_THREADS:-auto\}/);
+    assert.match(override, /FIL_PROOFS_ZIGZAG_SETUP_WORKERS: \$\{FIL_PROOFS_ZIGZAG_SETUP_WORKERS-auto\}/);
     assert.match(override, /FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: \$\{FIL_PROOFS_ZIGZAG_PARAMETER_LOADER:-compact\}/);
     assert.ok(!override.includes("lotus:"));
     assert.match(override, /FIL_PROOFS_ZIGZAG_ENCODE_PREHASH: \$\{FIL_PROOFS_ZIGZAG_ENCODE_PREHASH-0\}/);
@@ -175,6 +191,15 @@ test("actual Curio launcher resolves auto inside its cpuset before executing the
       const result = spawnSync(join(bin, program), ["--version"], { env: { ...cleanEnv, PATH: `${bin}:${cleanEnv.PATH}`, RAYON_NUM_THREADS: "auto", EC_GPU_NUM_THREADS: "2", FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS: "3", FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "mapped" }, encoding: "utf8" });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "3\n2\n3\nmapped\n--version\n");
+      for (const available of [96, 128]) {
+        writeFileSync(join(bin, "nproc"), `#!/usr/bin/env bash\nprintf '${available}\\n'\n`, { mode: 0o755 });
+        const large = spawnSync(join(bin, program), ["--version"], {
+          env: { ...cleanEnv, PATH: `${bin}:${cleanEnv.PATH}` }, encoding: "utf8",
+        });
+        assert.equal(large.status, 0, large.stderr);
+        assert.equal(large.stdout, `${available}\n${available}\n2\ncompact\n--version\n`);
+      }
+      writeFileSync(join(bin, "nproc"), '#!/usr/bin/env bash\nprintf "3\\n"\n', { mode: 0o755 });
       const invalid = spawnSync(join(bin, program), [], { env: { ...cleanEnv, PATH: `${bin}:${cleanEnv.PATH}`, FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES: "262145" }, encoding: "utf8" });
       assert.notEqual(invalid.status, 0);
       assert.equal(invalid.stdout, "");
@@ -207,6 +232,24 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     return args;
   }
   try {
+    for (const workers of ["auto", "16", "96", "128"]) {
+      const result = run("512mib", "prewarm-only", "zigzag", { BENCH_ZIGZAG_SETUP_WORKERS: workers });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.split("\0").includes(`FIL_PROOFS_ZIGZAG_SETUP_WORKERS=${workers}`));
+    }
+    const defaultSetup = run("512mib", "prewarm-only", "zigzag");
+    assert.equal(defaultSetup.status, 0, defaultSetup.stderr);
+    assert.ok(defaultSetup.stdout.split("\0").includes("FIL_PROOFS_ZIGZAG_SETUP_WORKERS=auto"));
+    assert.ok(defaultSetup.stdout.split("\0").some((arg) => arg.startsWith("RUST_LOG=") && arg.includes("zigzag_setup=info")));
+    const nativeSetup = run("512mib", "prewarm-only", "zigzag", { FIL_PROOFS_ZIGZAG_SETUP_WORKERS: "8" });
+    assert.equal(nativeSetup.status, 0, nativeSetup.stderr);
+    assert.ok(nativeSetup.stdout.split("\0").includes("FIL_PROOFS_ZIGZAG_SETUP_WORKERS=8"));
+    const overrideSetup = run("512mib", "prewarm-only", "zigzag", { FIL_PROOFS_ZIGZAG_SETUP_WORKERS: "8", BENCH_ZIGZAG_SETUP_WORKERS: "auto" });
+    assert.equal(overrideSetup.status, 0, overrideSetup.stderr);
+    assert.ok(overrideSetup.stdout.split("\0").includes("FIL_PROOFS_ZIGZAG_SETUP_WORKERS=auto"));
+    for (const workers of ["", "0", "129", "18446744073709551617", "AUTO", "-2"]) {
+      assert.notEqual(run("512mib", "prewarm-only", "zigzag", { BENCH_ZIGZAG_SETUP_WORKERS: workers }).status, 0);
+    }
     for (const sector of ["2kib", "8mib", "512mib", "32gib"]) {
       for (const mode of ["full", "prepare-fixture", "unseal-only", "prewarm-only"]) {
         assertLimits(run(sector, mode, "zigzag"), "53687091200");
@@ -332,10 +375,12 @@ test("microbench generic passes portable BLST to tree, build and the actual mani
     mkdirSync(bin);
     mkdirSync(join(temporary, "extern/filecoin-ffi/rust"), { recursive: true });
     writeFileSync(join(bin, "rustup"), '#!/bin/sh\nprintf "stable (default)\\n"\n', { mode: 0o755 });
+    writeFileSync(join(bin, "devnet-build-exec"), '#!/bin/sh\nshift\nexec "$@"\n', { mode: 0o755 });
     writeFileSync(join(bin, "cargo"), '#!/bin/sh\nprintf "%s\\0" "$@" > "$CPU_TEST_CAPTURE_DIR/$1.argv"\nprintf "%s\\0" "${RUSTFLAGS-}" > "$CPU_TEST_CAPTURE_DIR/$1.env"\nprintf "mock cargo feature graph\\n"\n', { mode: 0o755 });
     // Exercise the Dockerfile shell with mock tools and a temporary graph path.
     // No Docker invocation or compilation takes place.
     const command = cargoRun.replace(/^RUN /, "").replace(/\\\r?\n\s*/g, " ")
+      .replaceAll("/usr/local/bin/devnet-build-exec", "devnet-build-exec")
       .replaceAll("/opt/zigzag-cargo-features.txt", '"${CPU_TEST_FEATURE_GRAPH}"');
     for (const target of ["default", "generic", "native"]) {
       for (const shaAsm of ["0", "1"]) {

@@ -5,19 +5,22 @@ pipeline variants. Ordinary and split PC1 in the dedicated FFI/Curio adapter
 use the same code. SDR, TreeD, KDF, graph traversal, commitments, circuit and
 Groth16 parameters are unchanged.
 
-| Setting | Default | Meaning |
+| Setting | General runner / native default | Meaning |
 | --- | --- | --- |
 | `BENCH_ZIGZAG_TREE_R_BUILDER` | `legacy` | Select `binary` for either pipeline variant. |
 | `BENCH_ZIGZAG_LAYER_PIPELINE` | `sequential` | `sequential`, `overlap`, or `stream`. |
-| `BENCH_ZIGZAG_TREE_R_THREADS` | `auto` | Tree pool threads, 1–64, clipped to the effective Rayon count minus encoder/feeder threads, with a minimum of one. |
+| `BENCH_ZIGZAG_TREE_R_THREADS` | `auto` | Tree pool threads, 1–128, clipped to the effective Rayon count minus encoder/feeder threads, with a minimum of one. |
 | `BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB` | `64` | Streaming pool capacity, 1–64 MiB; small sectors allocate only the required buffers. |
 
 For Rust and dedicated Curio, replace `BENCH_ZIGZAG_` with
 `FIL_PROOFS_ZIGZAG_`. Both adapters forward the settings explicitly. Empty or
 invalid values fail. A nonsequential pipeline requires the binary builder,
 Linux and the exact binary Poseidon DiskStore shape; it does not silently fall
-back. The current default remains `legacy` + `sequential` until full comparable
-performance acceptance. Thread and buffer overrides affect the pipeline modes.
+back. The general runner and native defaults remain `legacy` + `sequential`.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset selects
+`binary` + `stream`, automatic TreeR threads and 64 MiB snapshot buffers.
+A legacy comparison must also select `sequential`. Thread and buffer overrides
+affect the pipeline modes.
 
 ## Ownership and execution
 
@@ -78,8 +81,14 @@ see [cache policy](zigzag-cpu-tuning.md#bounded-records-and-advice).
 The tree pool is created before encoder affinity binds the calling thread.
 The requested count is clipped to leave scheduling capacity for the encoder
 and feeders. This is a thread bound, not an exclusive CPU reservation; small
-cpusets and other sectors/services can still contend. Builder vectors retain
-their previous maximum of 40 MiB, independently of the snapshot pool.
+cpusets and other sectors/services can still contend. Builder vectors use at
+most 80 MiB at 128 workers, independently of the unchanged 64 MiB snapshot pool.
+With the default two feeders and one encoder, `auto` selects
+`max(1, min(128, Rayon threads - 3))`: 29 workers on 32 available threads,
+93 on 96, 125 on 128, and 128 on 256. Explicit requests are also clipped to
+that ceiling. Small trees additionally use no more hash workers than there
+are first-level chunks. These counts are selected at startup/per call, not
+dynamically retuned according to load from other host processes.
 
 JSON/Markdown reports preserve requested configuration, effective tree threads,
 buffer counts/bytes, orientation, written chunks and capture readiness.
@@ -143,7 +152,7 @@ and its image manifests were left unchanged; builds used an isolated copy.
 ## Integration and acceptance
 
 The pipeline, background writeback and wait metrics are committed and pinned at
-`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images. Dedicated builds
 require `LayerPipelineConfig`; this pin needs no development-source override.

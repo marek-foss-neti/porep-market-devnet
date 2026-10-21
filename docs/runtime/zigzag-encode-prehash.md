@@ -7,18 +7,19 @@ code, SHA feature, graph, parent order, KDF, commitment, circuit or parameter
 identity changes. This adapts SDR's division of SHA work between producers and
 consumer, using the public incremental `sha2::Sha256` API for ZigZag's message.
 
-| Setting | Default | Meaning |
+| Setting | General runner / native default | Meaning |
 | --- | --- | --- |
 | `BENCH_ZIGZAG_ENCODE_PREHASH` | `0` | Prepare stable SHA prefixes in encode feeders. |
 | `FIL_PROOFS_ZIGZAG_ENCODE_PREHASH` | `0` | Equivalent Rust and dedicated Curio control. |
 
 The general runner accepts the native variable; a `BENCH_` override wins.
-`just bench-zigzag-512` explicitly sets its comparison preset, so use `BENCH_`
-with that command. Empty and invalid values fail. Multicore encoding must be
+`just bench-zigzag-512` and `just bench-zigzag-32g` explicitly enable prehash
+in their shared comparison preset; use `BENCH_ZIGZAG_ENCODE_PREHASH=0` to disable
+it for a comparison. Empty and invalid values fail. Multicore encoding must be
 enabled for prehashing to do work. It works with legacy/binary TreeR and
 sequential/overlap/stream layer pipelines; it does not require another
-experimental option. The default remains off until comparable full runs
-establish an encode/PC1 benefit. Producer count remains two.
+experimental option. The general runner and native defaults remain off.
+Producer count remains two.
 
 ## Message and ownership
 
@@ -80,7 +81,7 @@ setting, stride and lookahead only after comparing the complete PC1 workload.
 ## Integration and acceptance
 
 The prehash implementation and encoder wait metrics are committed and pinned at
-`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images on the remote
 machine. Both build guards require `EncodePrehash`; this pin needs no
@@ -98,7 +99,7 @@ BENCH_ZIGZAG_ENCODE_PREHASH=1 just bench-zigzag-512
 ```
 
 These are explicit comparison runs, not an automatic benchmark matrix. Keep
-the current 50 GiB base preset (plus any explicitly requested query cache) and no extra container swap; start only when the shared host
+the current 50 GiB base preset plus query cache (10 GiB by default) and no extra container swap; start only when the shared host
 has enough headroom for its other services. Compare encode, full PC1 and total
 sealing. A histogram with many prepared blocks alone does not establish a
 benefit: feeders and the consumer still contend for CPU/cache bandwidth.

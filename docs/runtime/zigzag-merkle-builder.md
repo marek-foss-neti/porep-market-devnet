@@ -54,8 +54,12 @@ precommit workspace recovery remains responsible for abandoned generations.
 
 Each worker owns three reusable vectors: input bytes, fixed-size field pairs
 and output bytes. There are at most 4096 pairs per chunk and
-`min(Rayon threads, 64, first-level chunks)` workers. The maximum vector
-capacity is 40 MiB; with 24 workers it is 15 MiB. Buffers survive level barriers.
+`min(Rayon threads, 128, first-level chunks)` workers. The maximum vector
+capacity is 80 MiB; with 24 workers it is 15 MiB. Buffers survive level barriers.
+The limit is shared with the overlap/stream pool. Sequential binary construction
+uses the calling Rayon pool without reserving encoder threads, since encoding
+and tree construction do not overlap. `BENCH_ZIGZAG_TREE_R_THREADS` controls the
+overlap/stream pool only; use `BENCH_RAYON_NUM_THREADS` to bound sequential work.
 There is no sector-sized node vector or vector of all chunk tasks.
 
 These limits cover builder-owned buffers, not the replica, OS page cache,
@@ -85,18 +89,19 @@ and do not claim to instrument every allocation inside dependency libraries.
 `BENCH_ZIGZAG_TREE_R_BUILDER` selects `binary` or `legacy` in the full benchmark.
 The native variable for Rust and dedicated Curio is
 `FIL_PROOFS_ZIGZAG_TREE_R_BUILDER`. Empty and unknown values fail validation.
-The default is **`legacy`** in Rust, the general runner, the bench-512 preset
-and dedicated Curio. The implementation is integrated but remains opt-in until
-a full comparable bench-512 confirms the performance result, including C1.
-The single-tree timing below is insufficient to change that default.
+The default is **`legacy`** in Rust, the general runner and dedicated Curio.
+The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset selects
+**`binary`** with the **`stream`** layer pipeline. Full comparable runs,
+including C1, remain necessary to assess performance; the single-tree timing
+below does not establish a full-sealing speedup.
 The runner forwards the selection to Docker and records it in provenance and
 `cpu_configuration`; per-layer records identify the path actually used.
 
 For a controlled comparison on the remote machine, use fresh full runs:
 
 ```sh
-BENCH_ZIGZAG_TREE_R_BUILDER=legacy just bench-zigzag-512
-BENCH_ZIGZAG_TREE_R_BUILDER=binary just bench-zigzag-512
+BENCH_ZIGZAG_TREE_R_BUILDER=legacy BENCH_ZIGZAG_LAYER_PIPELINE=sequential just bench-zigzag-512
+BENCH_ZIGZAG_TREE_R_BUILDER=binary BENCH_ZIGZAG_LAYER_PIPELINE=sequential just bench-zigzag-512
 ```
 
 Keep CPU, memory, allocator, parent-buffer/advice, loader, batch and query-cache
@@ -105,7 +110,7 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned at
-`c1b6d0d3776a8f98967653e738002e24e8d61013`, the
+`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.

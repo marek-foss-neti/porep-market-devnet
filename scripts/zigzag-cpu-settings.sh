@@ -53,7 +53,7 @@ zigzag_bench_cpu_environment() {
   case "${pipeline}" in sequential|overlap|stream) ;; *) devnet_die "ZigZag layer pipeline must be sequential, overlap or stream" ;; esac
   [[ "${pipeline}" == sequential || "${tree_builder}" == binary ]] || devnet_die "ZigZag layer pipeline requires the binary TreeR builder"
   printf 'FIL_PROOFS_ZIGZAG_LAYER_PIPELINE=%s\n' "${pipeline}"
-  zigzag_emit_integer FIL_PROOFS_ZIGZAG_TREE_R_THREADS "${BENCH_ZIGZAG_TREE_R_THREADS-${FIL_PROOFS_ZIGZAG_TREE_R_THREADS-auto}}" auto 64 || return
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_TREE_R_THREADS "${BENCH_ZIGZAG_TREE_R_THREADS-${FIL_PROOFS_ZIGZAG_TREE_R_THREADS-auto}}" auto 128 || return
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB "${BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB-${FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB-64}}" 1 64 || return
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0 || return
   zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-60129542144}}" 1 || return
@@ -70,7 +70,7 @@ zigzag_bench_cpu_environment() {
     value="$(zigzag_cpu_bool "${name}" "${value}")" || return
     printf 'FIL_PROOFS_%s=%s\n' "${name}" "${value}"
   done
-  zigzag_emit_integer FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS "${BENCH_ZIGZAG_ENCODE_PRODUCERS:-${FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS:-2}}" 1 64 || return
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS "${BENCH_ZIGZAG_ENCODE_PRODUCERS:-${FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS:-2}}" 1 128 || return
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE "${BENCH_ZIGZAG_ENCODE_STRIDE:-${FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE:-128}}" 1 262144 || return
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD "${BENCH_ZIGZAG_ENCODE_LOOKAHEAD:-${FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD:-4096}}" 1 262144 || return
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES "${BENCH_ZIGZAG_PARENT_BUFFER_NODES:-${FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES:-0}}" 0 262144 || return

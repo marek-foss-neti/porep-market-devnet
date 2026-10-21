@@ -48,6 +48,7 @@ tooling-env deployment='active':
 
 test-unit:
     @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- npm --prefix tools run typecheck
+    @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- npm --prefix tools run test:build-resources
     @node scripts/run-with-timeout.mjs --timeout-ms 600000 -- npm --prefix tools test
     @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- npm --prefix e2e run typecheck
     @node scripts/run-with-timeout.mjs --timeout-ms 600000 -- npm --prefix e2e run test:unit
