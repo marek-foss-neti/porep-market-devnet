@@ -20,7 +20,7 @@ for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
 `44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
 `versions.lock.yaml` pins its successor
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, including CPU/cache tuning controls,
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2

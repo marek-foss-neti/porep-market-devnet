@@ -179,7 +179,7 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, including direct query decoding
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
 consistent Groth16 circuit/batch boundaries in both API paths. It also includes
 the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and

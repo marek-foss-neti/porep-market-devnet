@@ -46,6 +46,18 @@ class TraceTests(unittest.TestCase):
         with patch.dict(os.environ, {"FIL_PROOFS_ZIGZAG_GPU_BACKEND": backend, "ZIGZAG_REQUIRE_GPU": "1" if backend == "cuda" else "0"}):
             return module.summarize(self.root, statuses.get("profiler", 0), statuses.get("export", 0), statuses.get("child", 0))
 
+    def tree_fixture(self):
+        (self.root / "summary.json").write_text(json.dumps({"verify_seal": True, "raw_unseal_bytes_match": True,
+                                                         "porep_layers": 2, "sector_size_bytes": 512}))
+        records = [{"builder": "binary", "layer": layer, "leaves": 16,
+                    "stats": {"gpu": {"gpu_hashes": 12, "cpu_hashes": 3, "batches": 3}}} for layer in range(2)]
+        # Exercise both plain Rust and structured log formats.
+        (self.root / "stderr.log").write_text("zigzag_merkle " + json.dumps(records[0]) + "\n" +
+            json.dumps({"message": "zigzag_merkle " + json.dumps(records[1])}) + "\n")
+        with sqlite3.connect(self.root / "cuda-trace.sqlite") as db:
+            db.execute("INSERT INTO StringIds VALUES (4, 'hash_preimages_blstrs__scalar__Scalar_2_standard')")
+            db.executemany("INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, 4)", [(100 + i * 10, 105 + i * 10) for i in range(6)])
+
     def test_completed_fft_msm_and_cpu_verification(self):
         result = self.summary()
         self.assertTrue(result["gpu_execution_confirmed"])
@@ -103,6 +115,43 @@ class TraceTests(unittest.TestCase):
         self.assertTrue(self.summary("cpu")["errors"])
         (self.root / "cuda-trace.sqlite").unlink()
         self.assertFalse(self.summary("cpu")["trace_complete"])
+
+    def test_tree_acceptance_requires_all_layers_and_correctness(self):
+        self.tree_fixture()
+        result = self.summary()
+        self.assertTrue(result["gpu_execution_confirmed"])
+        self.assertTrue(result["tree_r_gpu_execution_confirmed"])
+        self.assertEqual(result["poseidon_u2_kernel_count"], 6)
+        self.assertEqual(result["tree_r_evidence"]["logged_gpu_hashes"], 24)
+        original = (self.root / "stderr.log").read_text()
+        for broken in [original.splitlines()[0], original + original,
+                       original.replace('"gpu_hashes": 12', '"gpu_hashes": 11')]:
+            (self.root / "stderr.log").write_text(broken)
+            self.assertFalse(self.summary()["tree_r_gpu_execution_confirmed"])
+        (self.root / "stderr.log").write_text(original)
+        (self.root / "summary.json").write_text('{"verify_seal": false}')
+        self.assertFalse(self.summary()["tree_r_gpu_execution_confirmed"])
+
+    def test_other_poseidon_arity_or_incomplete_trace_does_not_pass(self):
+        self.tree_fixture()
+        for name in ["hash_preimages_blstrs__scalar__Scalar_8_standard", "hash_preimages_blstrs__scalar__Scalar_2_strengthened"]:
+            with sqlite3.connect(self.root / "cuda-trace.sqlite") as db:
+                db.execute("UPDATE StringIds SET value=? WHERE id=4", (name,))
+            result = self.summary()
+            self.assertTrue(result["gpu_execution_confirmed"])
+            self.assertFalse(result["tree_r_gpu_execution_confirmed"])
+        self.assertFalse(self.summary(child=137)["tree_r_gpu_execution_confirmed"])
+
+    def test_required_tree_cli_rejects_c2_only_and_corrupt_trace(self):
+        env = {**os.environ, "FIL_PROOFS_ZIGZAG_GPU_BACKEND": "cuda", "ZIGZAG_REQUIRE_GPU": "0",
+               "ZIGZAG_REQUIRE_TREE_R_GPU": "1"}
+        for corrupt in [False, True]:
+            if corrupt:
+                (self.root / "cuda-trace.sqlite").write_text("broken")
+            process = subprocess.run([sys.executable, str(SCRIPT), str(self.root), "0", "0", "0"], env=env, capture_output=True)
+            self.assertNotEqual(process.returncode, 0)
+            result = json.loads((self.root / "gpu-summary.json").read_text())
+            self.assertFalse(result["tree_r_gpu_execution_confirmed"])
 
 
 if __name__ == "__main__":

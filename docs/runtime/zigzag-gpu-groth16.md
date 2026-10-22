@@ -13,12 +13,14 @@ The corresponding Rust CPU reference is
 `74d72f778664c10d19105b5401976205864f0b9d`, including the setup build fix.
 
 `versions.lock.yaml` pins the combined CPU/GPU implementation to
-`d4c6c3e8124fe7b64730246297910adfa1606ab4` on `restore-zigzag-gpu`.
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440` on `restore-zigzag-gpu`.
 It includes background writeback, wait metrics and the
 `zigzag_commit_phase2_with_cache` API required by the updated FFI and
 microbench, while preserving native Bellperson GPU proving and device
 admission. This published revision also includes automatic prewarm, worker
-limits up to 128 and the setup build fix. Fetch the managed sources and rebuild
+limits up to 128, the setup build fix and optional bounded
+[GPU TreeR hashing](zigzag-gpu-treer.md), disabled by default and sharing device
+admission with C2. Fetch the managed sources and rebuild
 the dedicated images on the remote machine before using `SETUP_WORKERS=auto`;
 this pin needs no development-source override. For further uncommitted Rust
 changes, use an isolated source copy selected through
@@ -28,7 +30,7 @@ Keep changes unstaged for manual review; never stage or commit automatically.
 
 ## Build variants
 
-Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `d4c6c3e8124fe7b64730246297910adfa1606ab4` on `restore-zigzag-gpu`. For further uncommitted development, an isolated source copy can be selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
+Only build on the remote machine. The `test-zigzag-gpu` devnet branch pins `rust-fil-proofs` to commit `43d6961ad1e993d629e62c2de00cb9f78a2a8440` on `restore-zigzag-gpu`. For further uncommitted development, an isolated source copy can be selected through `DEVNET_RUST_FIL_PROOFS_SOURCE`; its base commit and complete source hash are recorded in the image manifest. Never stage or commit files automatically.
 
 After the reviewed pins have been fetched and the standard Curio base image exists:
 
@@ -108,7 +110,7 @@ The launcher checks that exactly one device is visible and registers one GPU wit
 
 `DEVNET_GPU_LOCK_DIR` defaults to the project's `.runtime/gpu-locks` and is mounted at `/var/tmp/filecoin-gpu-locks`. The host prepares it with group inheritance (`2770`); GPU launchers use umask `0002`, so the root Curio container and host-user benchmark can reopen the same lock files. Rust holds a device-specific ZigZag admission lock across all C2 batches. Bellperson retains its existing **blocking global lock and PoSt priority protocol** in the shared `TMPDIR`; the per-device try-lock mode is intentionally rejected. Other participating Bellperson workers must use the same shared directory, compatible ownership/group and global-lock mode to coordinate across containers. The C2 admission lock does not block the priority lock or change the priority passed to Bellperson.
 
-Harmony accounts for this worker's tasks; it cannot reserve VRAM against unrelated host applications. The initial deployment therefore permits one heavy user of the device. GPU TreeR is still absent, so no Neptune GPU work is introduced here. Bellperson's ec-gpu-gen 0.7.1 and Neptune's 0.6.0 must not be assumed to share locking; the next GPU TreeR implementation must join the explicit device admission protocol.
+Harmony accounts for this worker's tasks; it cannot reserve VRAM against unrelated host applications. The initial deployment therefore permits one heavy user of the device. The optional [GPU TreeR adapter](zigzag-gpu-treer.md) now joins the same device admission and Bellperson priority protocol; it remains disabled pending runtime validation. Bellperson's ec-gpu-gen 0.7.1 and Neptune's 0.6.0 do not provide shared locking automatically.
 
 The dedicated Curio `ffiselect` override preserves the shared `TMPDIR` when starting GPU FFI subprocesses. Upstream otherwise creates a separate temporary directory for every call, which would split Bellperson's GPU and priority locks. Private-directory cleanup is retained, and CPU/SDR calls retain the upstream temporary-directory behavior. The OpenCL build also preserves Curio's `build.IsOpencl` metadata so its child process receives the correct device-ordinal variable.
 

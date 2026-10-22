@@ -12,7 +12,7 @@ The GPU branch also provides explicit [native Bellperson GPU Groth16](zigzag-gpu
 builds through `just build-zigzag-gpu`; GPU runtime acceptance remains pending.
 
 The lock pins `rust-fil-proofs` to
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources before rebuilding these updated adapters. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct

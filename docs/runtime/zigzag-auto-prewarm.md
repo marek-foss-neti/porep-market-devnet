@@ -132,7 +132,7 @@ The CPU implementation was committed at
 `b1cec2213b8132adc6164ccb5a289c35e279eadf`, with the build fix at
 `74d72f778664c10d19105b5401976205864f0b9d`. Both changes are included in the
 published `restore-zigzag-gpu` commit
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, now pinned in `versions.lock.yaml`.
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, now pinned in `versions.lock.yaml`.
 Fetch managed sources and rebuild before using this default; old binaries do
 not understand `SETUP_WORKERS=auto`. No development-source override is needed
 for this pin. A repin does not complete the deferred Rust validation above.

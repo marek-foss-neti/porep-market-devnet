@@ -43,6 +43,8 @@ if [[ -f versions.lock.yaml ]]; then
     source-overrides/curio/market/mk20/ddo_v1.go
     source-overrides/curio/tasks/piece/task_park_piece.go
     source-overrides/zigzag/curio/tasks/seal/task_porep.go
+    source-overrides/zigzag/curio/tasks/seal/task_treerc.go
+    source-overrides/zigzag/curio/tasks/seal/zigzag_tree_resources_test.go
     source-overrides/curio/tasks/unseal/task_unseal_decode.go
     source-overrides/curio/tasks/unseal/task_unseal_sdr.go
     source-overrides/filecoin-ffi/rust/Cargo.lock

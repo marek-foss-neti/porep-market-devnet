@@ -3,6 +3,9 @@ services:
   curio:
     environment:
       FIL_PROOFS_ZIGZAG_GPU_BACKEND: ${DEVNET_CURIO_GPU_BACKEND}
+      FIL_PROOFS_ZIGZAG_TREE_R_GPU: ${DEVNET_ZIGZAG_TREE_R_GPU:-0}
+      FIL_PROOFS_ZIGZAG_TREE_R_GPU_BATCH_SIZE: ${DEVNET_ZIGZAG_TREE_R_GPU_BATCH_SIZE:-262144}
+      FIL_PROOFS_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD: ${DEVNET_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD:-4096}
       BELLMAN_CPU_UTILIZATION: ${BELLMAN_CPU_UTILIZATION:-0}
       RUST_LOG: ${RUST_LOG:-zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_gpu=info,bellperson=info,ec_gpu_gen=info,rust_gpu_tools=info}
       TMPDIR: /var/tmp/filecoin-gpu-locks

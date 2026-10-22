@@ -1,0 +1,232 @@
+package seal
+
+import (
+	"context"
+	"os"
+
+	"github.com/ipfs/go-cid"
+	"go.opencensus.io/stats"
+	"go.opencensus.io/tag"
+	"golang.org/x/xerrors"
+
+	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/abi"
+
+	"github.com/filecoin-project/curio/harmony/harmonydb"
+	"github.com/filecoin-project/curio/harmony/harmonytask"
+	"github.com/filecoin-project/curio/harmony/resources"
+	"github.com/filecoin-project/curio/harmony/taskhelp"
+	"github.com/filecoin-project/curio/lib/dealdata"
+	ffi2 "github.com/filecoin-project/curio/lib/ffi"
+	"github.com/filecoin-project/curio/lib/paths"
+	"github.com/filecoin-project/curio/lib/storiface"
+	"github.com/filecoin-project/curio/tasks/tasknames"
+)
+
+type TreeRCTask struct {
+	sp *SealPoller
+	db *harmonydb.DB
+	sc *ffi2.SealCalls
+
+	max int
+}
+
+func NewTreeRCTask(sp *SealPoller, db *harmonydb.DB, sc *ffi2.SealCalls, maxTrees int) *TreeRCTask {
+	return &TreeRCTask{
+		sp: sp,
+		db: db,
+		sc: sc,
+
+		max: maxTrees,
+	}
+}
+
+func (t *TreeRCTask) Do(taskID harmonytask.TaskID, stillOwned func() bool) (done bool, err error) {
+	ctx := context.Background()
+
+	var sectorParamsArr []struct {
+		SpID         int64                   `db:"sp_id"`
+		SectorNumber int64                   `db:"sector_number"`
+		RegSealProof abi.RegisteredSealProof `db:"reg_seal_proof"`
+		CommD        string                  `db:"tree_d_cid"`
+		TicketValue  []byte                  `db:"ticket_value"`
+	}
+
+	err = t.db.Select(ctx, &sectorParamsArr, `
+		SELECT sp_id, sector_number, reg_seal_proof, tree_d_cid, ticket_value
+		FROM sectors_sdr_pipeline
+		WHERE task_id_tree_c = $1 AND task_id_tree_r = $1`, taskID)
+	if err != nil {
+		return false, xerrors.Errorf("getting sector params: %w", err)
+	}
+
+	if len(sectorParamsArr) != 1 {
+		return false, xerrors.Errorf("expected 1 sector params, got %d", len(sectorParamsArr))
+	}
+	sectorParams := sectorParamsArr[0]
+
+	commd, err := cid.Parse(sectorParams.CommD)
+	if err != nil {
+		return false, xerrors.Errorf("parsing unsealed CID: %w", err)
+	}
+
+	sref := storiface.SectorRef{
+		ID: abi.SectorID{
+			Miner:  abi.ActorID(sectorParams.SpID),
+			Number: abi.SectorNumber(sectorParams.SectorNumber),
+		},
+		ProofType: sectorParams.RegSealProof,
+	}
+
+	dd, err := dealdata.DealDataSDRPoRep(ctx, t.db, t.sc, sectorParams.SpID, sectorParams.SectorNumber, sectorParams.RegSealProof, true)
+	if err != nil {
+		return false, xerrors.Errorf("getting deal data: %w", err)
+	}
+
+	// R / C
+	sealed, unsealed, err := t.sc.TreeRC(ctx, &taskID, sref, commd, sectorParams.TicketValue, dd.PieceInfos)
+	if err != nil {
+		serr := resetSectorSealingState(ctx, sectorParams.SpID, sectorParams.SectorNumber, err, t.db, t.TypeDetails().Name)
+		if serr != nil {
+			return false, xerrors.Errorf("computing tree r and c: %w", err)
+		}
+	}
+
+	if unsealed != commd {
+		return false, xerrors.Errorf("commd %s does match unsealed %s", commd.String(), unsealed.String())
+	}
+
+	n, err := t.db.Exec(ctx, `UPDATE sectors_sdr_pipeline
+		SET after_tree_r = true, after_tree_c = true, tree_r_cid = $3, task_id_tree_r = NULL, task_id_tree_c = NULL 
+		WHERE sp_id = $1 AND sector_number = $2`,
+		sectorParams.SpID, sectorParams.SectorNumber, sealed)
+	if err != nil {
+		return false, xerrors.Errorf("store sdr-trees success: updating pipeline: %w", err)
+	}
+	if n != 1 {
+		return false, xerrors.Errorf("store sdr-trees success: updated %d rows", n)
+	}
+
+	// Record metric
+	if maddr, err := address.NewIDAddress(uint64(sectorParams.SpID)); err == nil {
+		if err := stats.RecordWithTags(ctx, []tag.Mutator{
+			tag.Upsert(MinerTag, maddr.String()),
+		}, SealMeasures.TreeRCCompleted.M(1)); err != nil {
+			log.Errorf("recording metric: %s", err)
+		}
+	}
+
+	return true, nil
+}
+
+func (t *TreeRCTask) CanAccept(ids []harmonytask.TaskID, engine *harmonytask.TaskEngine) ([]harmonytask.TaskID, error) {
+	if storiface.FTCache != 4 {
+		panic("storiface.FTCache != 4")
+	}
+
+	ctx := context.Background()
+
+	indIDs := make([]int64, len(ids))
+	for i, id := range ids {
+		indIDs[i] = int64(id)
+	}
+
+	var acceptedIDs []harmonytask.TaskID
+	err := t.db.QueryRow(ctx, `SELECT COALESCE(array_agg(task_id_tree_c), '{}')::bigint[] AS task_ids_tree_c FROM 
+										(
+										    SELECT p.task_id_tree_c FROM sectors_sdr_pipeline p
+											INNER JOIN sector_location l ON p.sp_id = l.miner_id AND p.sector_number = l.sector_num AND l.sector_filetype = 4
+											INNER JOIN storage_path sp ON sp.storage_id = l.storage_id
+											WHERE task_id_tree_c = ANY ($1) 
+											  AND sp.urls IS NOT NULL 
+											  AND sp.urls LIKE '%' || $2 || '%' 
+											  LIMIT 100
+										) s`, indIDs, engine.Host()).Scan(&acceptedIDs)
+	if err != nil {
+		return nil, xerrors.Errorf("getting tasks from DB: %w", err)
+	}
+
+	return acceptedIDs, nil
+}
+
+func (t *TreeRCTask) TypeDetails() harmonytask.TaskTypeDetails {
+	ssize := abi.SectorSize(32 << 30) // todo task details needs taskID to get correct sector size
+	if IsDevnet {
+		ssize = abi.SectorSize(2 << 20)
+	}
+	gpu := 1.0
+	ram := uint64(8 << 30)
+	if IsDevnet {
+		gpu = 0
+		ram = 512 << 20
+	}
+
+	cpu, gpu, ram, max := zigzagTreeRCResources(1, gpu, ram, t.max)
+
+	return harmonytask.TaskTypeDetails{
+		Max:  taskhelp.Max(max),
+		Name: tasknames.TreeRC,
+		Cost: resources.Resources{
+			Cpu:     cpu,
+			Gpu:     gpu,
+			Ram:     ram,
+			Storage: t.sc.Storage(t.taskToSector, storiface.FTSealed, storiface.FTCache, ssize, storiface.PathSealing, paths.MinFreeStoragePercentage),
+		},
+		MaxFailures: 3,
+		Follows:     nil,
+	}
+}
+
+// ZigZag's split PC1 (encoding and all TreeR layers) runs in this task.
+// Reserve the same whole GPU as C2/PoSt, even on a devnet. The Rust
+// worker also shares cross-process device and priority locks.
+func zigzagTreeRCResources(cpu int, gpu float64, ram uint64, max int) (int, float64, uint64, int) {
+	if zigzagPoRepEnabled() && zigzagPoRepGPU() && os.Getenv("FIL_PROOFS_ZIGZAG_TREE_R_GPU") == "1" {
+		return zigzagPoRepCpu(), 1, min(zigzagPoRepRam(), uint64(60<<30)), 1
+	}
+	return cpu, gpu, ram, max
+}
+
+func (t *TreeRCTask) GetSpid(db *harmonydb.DB, taskID int64) string {
+	sid, err := t.GetSectorID(db, taskID)
+	if err != nil {
+		log.Errorf("getting sector id: %s", err)
+		return ""
+	}
+	return sid.Miner.String()
+}
+
+func (t *TreeRCTask) GetSectorID(db *harmonydb.DB, taskID int64) (*abi.SectorID, error) {
+	var spId, sectorNumber uint64
+	err := db.QueryRow(context.Background(), `SELECT sp_id,sector_number FROM sectors_sdr_pipeline WHERE task_id_tree_r = $1`, taskID).Scan(&spId, &sectorNumber)
+	if err != nil {
+		return nil, err
+	}
+	return &abi.SectorID{
+		Miner:  abi.ActorID(spId),
+		Number: abi.SectorNumber(sectorNumber),
+	}, nil
+}
+
+var _ = harmonytask.Reg(&TreeRCTask{})
+
+func (t *TreeRCTask) Adder(taskFunc harmonytask.AddTaskFunc) {
+	t.sp.pollers[pollerTreeRC].Set(taskFunc)
+}
+
+func (t *TreeRCTask) taskToSector(id harmonytask.TaskID) (ffi2.SectorRef, error) {
+	var refs []ffi2.SectorRef
+
+	err := t.db.Select(context.Background(), &refs, `SELECT sp_id, sector_number, reg_seal_proof FROM sectors_sdr_pipeline WHERE task_id_tree_r = $1`, id)
+	if err != nil {
+		return ffi2.SectorRef{}, xerrors.Errorf("getting sector ref: %w", err)
+	}
+
+	if len(refs) != 1 {
+		return ffi2.SectorRef{}, xerrors.Errorf("expected 1 sector ref, got %d", len(refs))
+	}
+
+	return refs[0], nil
+}
+
+var _ harmonytask.TaskInterface = &TreeRCTask{}

@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "d4c6c3e8124fe7b64730246297910adfa1606ab4";
+const rustFilProofsSourceCommit = "43d6961ad1e993d629e62c2de00cb9f78a2a8440";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -1011,6 +1011,9 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     await writeFile(queryCachePath, "pub struct QueryCacheConfig;\n");
     const merkleBuilderPath = join(source, "storage-proofs-porep/src/zigzag/merkle_builder.rs");
     await writeFile(merkleBuilderPath, "pub enum TreeRBuilder {}\n");
+    const treeGpuPath = join(source, "storage-proofs-porep/src/zigzag/merkle_builder/gpu.rs");
+    await mkdir(dirname(treeGpuPath), { recursive: true });
+    await writeFile(treeGpuPath, "pub struct TreeRGpuConfig;\n");
     const encodePrehashPath = join(source, "storage-proofs-porep/src/zigzag/encode_prehash.rs");
     await writeFile(encodePrehashPath, "pub struct EncodePrehash;\n");
     const layerPipelinePath = join(source, "storage-proofs-porep/src/zigzag/layer_pipeline.rs");
@@ -1058,6 +1061,11 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const missingPrehash = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
     assert.notEqual(missingPrehash.status, 0);
     assert.match(missingPrehash.stderr, /lacks the ZigZag encode prehash API/);
+    await writeFile(encodePrehashPath, "pub struct EncodePrehash;\n");
+    await rm(treeGpuPath);
+    const missingGpu = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+    assert.notEqual(missingGpu.status, 0);
+    assert.match(missingGpu.stderr, /lacks the bounded GPU TreeR API/);
   } finally {
     await rm(source, { recursive: true, force: true });
   }

@@ -110,7 +110,7 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned at
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.

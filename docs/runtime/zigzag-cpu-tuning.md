@@ -227,7 +227,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only in the checkout on the remote
 machine. The lock pins Rust revision
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, including the cache_policy module,
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default.

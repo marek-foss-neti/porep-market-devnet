@@ -272,6 +272,7 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "encode_prehash": storage_proofs_porep_zigzag::zigzag::encode_prehash::EncodePrehash::from_env()?,
         "layer_pipeline": storage_proofs_porep_zigzag::zigzag::layer_pipeline::LayerPipelineConfig::from_env()?,
         "tree_r_builder": storage_proofs_porep_zigzag::zigzag::merkle_builder::TreeRBuilder::from_env()?,
+        "tree_r_gpu": storage_proofs_porep_zigzag::zigzag::merkle_builder::gpu::TreeRGpuConfig::from_env()?,
         "pool_scope": "Rayon and ec-gpu are independent process pools; encode affinity is temporary",
         "parameter_loader": storage_proofs_porep_zigzag::zigzag::parameters::ParameterLoader::from_env()?,
         "query_cache_requested_bytes": std::env::var("FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES").ok(),

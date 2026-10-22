@@ -11,6 +11,16 @@ zigzag_gpu_environment() {
   utilization="${BENCH_ZIGZAG_GPU_CPU_UTILIZATION-${BELLMAN_CPU_UTILIZATION-0}}"
   [[ "${utilization}" =~ ^(0([.][0-9]+)?|1([.]0+)?)$ ]] || devnet_die "GPU CPU utilization must be a finite fraction between 0 and 1"
   [[ "${required}" == 0 || ! "${utilization}" =~ ^1([.]0+)?$ ]] || devnet_die "required GPU MSM conflicts with 100% CPU utilization"
+  local tree_gpu tree_batch tree_threshold
+  tree_gpu="${BENCH_ZIGZAG_TREE_R_GPU-${FIL_PROOFS_ZIGZAG_TREE_R_GPU-0}}"
+  tree_batch="${BENCH_ZIGZAG_TREE_R_GPU_BATCH_SIZE-${FIL_PROOFS_ZIGZAG_TREE_R_GPU_BATCH_SIZE-262144}}"
+  tree_threshold="${BENCH_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD-${FIL_PROOFS_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD-4096}}"
+  [[ "${tree_gpu}" == 0 || "${tree_gpu}" == 1 ]] || devnet_die "ZigZag TreeR GPU must be 0 or 1"
+  [[ "${tree_gpu}" == 0 || "${backend}" != cpu ]] || devnet_die "GPU TreeR requires an explicit CUDA/OpenCL worker"
+  [[ "${tree_batch}" =~ ^[0-9]{1,7}$ ]] && ((10#${tree_batch} >= 1 && 10#${tree_batch} <= 1048576)) || devnet_die "TreeR GPU batch size must be 1..1048576"
+  [[ "${tree_threshold}" =~ ^[0-9]{1,7}$ ]] && ((10#${tree_threshold} <= 1048576)) || devnet_die "TreeR GPU CPU threshold must be 0..1048576"
+  [[ "${tree_gpu}" == 0 || "${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-binary}}" == binary ]] || devnet_die "GPU TreeR requires the binary builder"
+  printf 'FIL_PROOFS_ZIGZAG_TREE_R_GPU=%s\nFIL_PROOFS_ZIGZAG_TREE_R_GPU_BATCH_SIZE=%s\nFIL_PROOFS_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD=%s\n' "${tree_gpu}" "$((10#${tree_batch}))" "$((10#${tree_threshold}))"
   printf 'FIL_PROOFS_ZIGZAG_GPU_BACKEND=%s\n' "${backend}"
   printf 'BELLMAN_CPU_UTILIZATION=%s\n' "${utilization}"
   # Keep Bellperson's blocking global lock and its PoSt priority protocol.

@@ -152,7 +152,7 @@ and its image manifests were left unchanged; builds used an isolated copy.
 ## Integration and acceptance
 
 The pipeline, background writeback and wait metrics are committed and pinned at
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images. Dedicated builds
 require `LayerPipelineConfig`; this pin needs no development-source override.

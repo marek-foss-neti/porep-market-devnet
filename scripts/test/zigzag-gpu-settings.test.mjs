@@ -8,7 +8,7 @@ import test from "node:test";
 import { readGpuSummary } from "../compose-proof-micro-report.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BENCH_|BELLMAN_|BELLPERSON_|EC_GPU_|DEVNET_)/.test(key)));
+const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(BENCH_|BELLMAN_|BELLPERSON_|EC_GPU_|DEVNET_|FIL_PROOFS_)/.test(key)));
 function settings(build, backend, required, extra = {}) {
   return spawnSync("bash", ["-c", 'set -euo pipefail; devnet_die() { echo "$*" >&2; exit 1; }; source "$1/scripts/zigzag-gpu-settings.sh"; zigzag_gpu_environment "$2" "$3" "$4"', "test", root, build, backend, required], { encoding: "utf8", env: { ...clean, ...extra } });
 }
@@ -60,4 +60,32 @@ test("report keeps effective request and never treats configuration as execution
     assert.equal(readGpuSummary(directory).fft_kernel_count, 2);
     assert.deepEqual(readGpuSummary(directory).request, request);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("TreeR GPU stays off with GPU C2 unless explicitly selected", () => {
+  const control = settings("cuda", "cuda", "1");
+  assert.equal(control.status, 0, control.stderr);
+  assert.match(control.stdout, /FIL_PROOFS_ZIGZAG_TREE_R_GPU=0\n/);
+  const enabled = settings("cuda", "cuda", "1", { BENCH_ZIGZAG_TREE_R_GPU: "1" });
+  assert.equal(enabled.status, 0, enabled.stderr);
+  assert.match(enabled.stdout, /FIL_PROOFS_ZIGZAG_TREE_R_GPU=1\n/);
+  assert.match(enabled.stdout, /GPU_BATCH_SIZE=262144\n/);
+  assert.match(enabled.stdout, /GPU_CPU_THRESHOLD=4096\n/);
+  const curio = settings("opencl", "opencl", "0", {
+    FIL_PROOFS_ZIGZAG_TREE_R_GPU: "1", FIL_PROOFS_ZIGZAG_TREE_R_GPU_BATCH_SIZE: "0003",
+    FIL_PROOFS_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD: "0",
+  });
+  assert.equal(curio.status, 0, curio.stderr);
+  assert.match(curio.stdout, /GPU_BATCH_SIZE=3\n/);
+  assert.match(curio.stdout, /GPU_CPU_THRESHOLD=0\n/);
+});
+
+test("TreeR GPU rejects unsupported builder, CPU worker and unbounded or empty settings", () => {
+  assert.notEqual(settings("cuda", "cpu", "0", { BENCH_ZIGZAG_TREE_R_GPU: "1" }).status, 0);
+  for (const extra of [
+    { BENCH_ZIGZAG_TREE_R_GPU: "" }, { BENCH_ZIGZAG_TREE_R_GPU: "auto" },
+    { BENCH_ZIGZAG_TREE_R_GPU: "1", BENCH_ZIGZAG_TREE_R_BUILDER: "legacy" },
+    ...["0", "", "-1", "1048577", "9999999999999999"].map((value) => ({ BENCH_ZIGZAG_TREE_R_GPU_BATCH_SIZE: value })),
+    ...["", "-1", "1048577"].map((value) => ({ BENCH_ZIGZAG_TREE_R_GPU_CPU_THRESHOLD: value })),
+  ]) assert.notEqual(settings("cuda", "cuda", "1", extra).status, 0, JSON.stringify(extra));
 });

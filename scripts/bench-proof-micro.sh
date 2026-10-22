@@ -89,10 +89,18 @@ if [[ "${backend}" == zigzag ]]; then
   [[ "${gpu_backend}" != cuda || "${mode}" != full ]] || gpu_required_default=1
   gpu_required="${BENCH_ZIGZAG_REQUIRE_GPU-${gpu_required_default}}"
   gpu_environment="$(zigzag_gpu_environment "${gpu_build}" "${gpu_backend}" "${gpu_required}")"
-  prewarm_gpu_args=(-e BELLMAN_NO_GPU=1 -e FIL_PROOFS_ZIGZAG_GPU_BACKEND=cpu)
+  prewarm_gpu_args=(-e BELLMAN_NO_GPU=1 -e FIL_PROOFS_ZIGZAG_GPU_BACKEND=cpu -e FIL_PROOFS_ZIGZAG_TREE_R_GPU=0)
+  tree_gpu="$(printf '%s\n' "${gpu_environment}" | sed -n 's/^FIL_PROOFS_ZIGZAG_TREE_R_GPU=//p')"
+  tree_gpu_required_default=0
+  [[ "${tree_gpu}" != 1 || "${gpu_backend}" != cuda || "${mode}" != full ]] || tree_gpu_required_default=1
+  tree_gpu_required="${BENCH_ZIGZAG_REQUIRE_TREE_R_GPU-${tree_gpu_required_default}}"
+  [[ "${tree_gpu_required}" == 0 || "${tree_gpu_required}" == 1 ]] || devnet_die "BENCH_ZIGZAG_REQUIRE_TREE_R_GPU must be 0 or 1"
+  [[ "${tree_gpu_required}" == 0 || ( "${tree_gpu}" == 1 && "${gpu_backend}" == cuda && "${mode}" == full ) ]] || devnet_die "required GPU TreeR execution needs CUDA TreeR and a full benchmark"
   gpu_trace="${BENCH_ZIGZAG_GPU_TRACE-${gpu_required}}"
+  if [[ -z "${BENCH_ZIGZAG_GPU_TRACE+x}" && "${tree_gpu_required}" == 1 ]]; then gpu_trace=1; fi
   [[ "${gpu_trace}" == 0 || "${gpu_trace}" == 1 ]] || devnet_die "BENCH_ZIGZAG_GPU_TRACE must be 0 or 1"
   [[ "${gpu_required}" == 0 || "${gpu_trace}" == 1 ]] || devnet_die "required GPU execution needs a CUDA trace"
+  [[ "${tree_gpu_required}" == 0 || "${gpu_trace}" == 1 ]] || devnet_die "required GPU TreeR execution needs a CUDA trace"
   [[ "${gpu_trace}" == 0 || "${gpu_build}" == cuda ]] || devnet_die "Nsight trace requires the CUDA image"
   [[ "${gpu_trace}" == 0 || "${mode}" == full ]] || devnet_die "CUDA execution acceptance requires a full benchmark"
   while IFS= read -r setting; do gpu_docker_args+=(-e "${setting}"); done <<<"${gpu_environment}"
@@ -125,9 +133,10 @@ mkdir -p "${run_dir}"
 if [[ "${backend}" == zigzag ]]; then
   jq -n --arg build "${gpu_build}" --arg backend "${gpu_backend}" \
     --arg device "${gpu_device:-}" --arg required "${gpu_required}" --arg trace "${gpu_trace}" \
-    --arg environment "${gpu_environment}" \
+    --arg environment "${gpu_environment}" --arg treeGpu "${tree_gpu}" --arg treeRequired "${tree_gpu_required}" \
     '{schema_version:1,build_backend:$build,backend:$backend,device_uuid:$device,
       required:($required == "1"),trace_requested:($trace == "1"),
+      tree_r_gpu_requested:($treeGpu == "1"),tree_r_gpu_required:($treeRequired == "1"),
       effective_environment:($environment | split("\n") | map(select(length > 0) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)}' \
     > "${run_dir}/gpu-request.json"
 fi
@@ -1122,6 +1131,7 @@ if docker run ${measured_remove_args[@]+"${measured_remove_args[@]}"} \
   ${benchmark_limit_args[@]+"${benchmark_limit_args[@]}"} \
   -e "POREP_PROOF_MICROBENCH_TELEMETRY_PATH=/bench-run/telemetry.ndjson" \
   -e "ZIGZAG_GPU_TRACE=${gpu_trace:-0}" -e "ZIGZAG_REQUIRE_GPU=${gpu_required:-0}" \
+  -e "ZIGZAG_REQUIRE_TREE_R_GPU=${tree_gpu_required:-0}" \
   "${image}" \
   "${measured_command[@]}" \
     --backend "${backend}" \

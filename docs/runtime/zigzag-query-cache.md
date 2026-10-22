@@ -132,7 +132,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 pins the implementation, including the cgroup-root fix, at
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild the dedicated images. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed

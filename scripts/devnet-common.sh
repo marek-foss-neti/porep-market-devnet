@@ -1006,6 +1006,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${layer_pipeline}" && ! -L "${layer_pipeline}" ]] &&
     grep -Eq '^pub struct LayerPipelineConfig' "${layer_pipeline}" ||
     devnet_die "ZigZag source lacks the bounded layer pipeline; select the implementation source until its commit is pinned"
+  local tree_gpu="${source}/storage-proofs-porep/src/zigzag/merkle_builder/gpu.rs"
+  [[ -f "${tree_gpu}" && ! -L "${tree_gpu}" ]] &&
+    grep -Eq '^pub struct TreeRGpuConfig' "${tree_gpu}" ||
+    devnet_die "ZigZag source lacks the bounded GPU TreeR API; use DEVNET_RUST_FIL_PROOFS_SOURCE until the reviewed Rust commit is pinned"
 }
 
 devnet_rust_fil_proofs_content_sha256() {
@@ -1123,6 +1127,11 @@ devnet_zigzag_curio_overrides_sha256() {
   {
     devnet_zigzag_microbench_overrides_sha256
     shasum -a 256 "${task}" | awk '{print $1}'
+    for path in task_treerc.go zigzag_tree_resources_test.go; do
+      [[ -f "${DEVNET_ROOT}/source-overrides/zigzag/curio/tasks/seal/${path}" && ! -L "${DEVNET_ROOT}/source-overrides/zigzag/curio/tasks/seal/${path}" ]] ||
+        devnet_die "dedicated ZigZag Curio TreeR override is missing or symbolic: ${path}"
+      shasum -a 256 "${DEVNET_ROOT}/source-overrides/zigzag/curio/tasks/seal/${path}" | awk '{print $1}'
+    done
     shasum -a 256 "${DEVNET_ROOT}/source-overrides/zigzag/curio/curio-cpu-launcher.sh" | awk '{print $1}'
     shasum -a 256 "${DEVNET_ROOT}/scripts/zigzag-cpu-settings.sh" | awk '{print $1}'
     shasum -a 256 "${DEVNET_ROOT}/scripts/zigzag-gpu-settings.sh" | awk '{print $1}'

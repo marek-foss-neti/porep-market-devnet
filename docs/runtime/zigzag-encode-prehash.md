@@ -81,7 +81,7 @@ setting, stride and lookahead only after comparing the complete PC1 workload.
 ## Integration and acceptance
 
 The prehash implementation and encoder wait metrics are committed and pinned at
-`d4c6c3e8124fe7b64730246297910adfa1606ab4`, the
+`43d6961ad1e993d629e62c2de00cb9f78a2a8440`, the
 [combined CPU/GPU revision](zigzag-gpu-groth16.md#cpu-updates-and-dependency-pin).
 Fetch the managed sources and rebuild both dedicated images on the remote
 machine. Both build guards require `EncodePrehash`; this pin needs no

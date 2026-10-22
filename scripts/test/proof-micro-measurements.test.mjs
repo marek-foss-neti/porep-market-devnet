@@ -559,6 +559,22 @@ test("TreeR worker metrics survive plain and JSON logs without changing sealing 
   assert.match(markdown, /worker intervals overlap; do not add/);
 });
 
+test("TreeR GPU metrics distinguish API calls from kernels and host from device buffers", () => {
+  const entry = { builder: "binary", layer: 0, stats: { workers: 1, gpu: {
+    gpu_hashes: 12, cpu_hashes: 3, batches: 3, admission_ns: 1e6, initialization_ns: 2e6,
+    batch_call_ns: 3e6, serialize_ns: 4e6, host_buffer_peak_bound_bytes: 1024,
+    device_buffer_estimate_bytes: 512, h2d_payload_bytes: 768, d2h_payload_bytes: 384,
+  } } };
+  const result = report(summarize([sample(0, 0, 100, "phase_start"), sample(1, 10, 120, "phase_end")]),
+    [{ name: "pre_commit_phase1", wall_ms: 10, cpu_ms: 20 }], { measuredLog: `zigzag_merkle ${JSON.stringify(entry)}` });
+  assert.deepEqual(result.tree_r_builds[0].stats.gpu, entry.stats.gpu);
+  assert.equal(result.derived.sealing_wall_ms, 10);
+  const markdown = renderPhaseMarkdown(result);
+  assert.match(markdown, /\| 0 \| 12 \| 3 \| 3 \| 1 \| 2 \| 3 \| 4 \| 1024 \| 512 \| 768 \| 384 \|/);
+  assert.match(markdown, /not kernel-only time/);
+  assert.match(markdown, /driver context\/module overhead/);
+});
+
 test("layer pipeline records keep effective bounds and capture timing separate from sealing totals", () => {
   const config = { mode: "stream", tree_threads: 5, snapshot_buffer_bytes: 1048576, dirty_bytes_per_store: 67108864 };
   const capture = { layer: 1, written_bytes: 4096, chunks: 2, pool_bytes: 1048576, forward: false, state: "written" };

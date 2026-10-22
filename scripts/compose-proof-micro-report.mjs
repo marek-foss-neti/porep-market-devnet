@@ -11,6 +11,7 @@ export function readGpuSummary(runDirectory) {
     return request === null ? null : {
       request, backend: request.backend, cpu_control: request.backend === "cpu",
       required: request.required, gpu_execution_confirmed: false, trace_complete: false,
+      tree_r_gpu_required: request.tree_r_gpu_required === true, tree_r_gpu_execution_confirmed: false,
       errors: request.trace_requested ? ["CUDA execution summary unavailable"] : [],
       evidence_scope: "No kernel trace; configuration alone is not evidence of GPU execution",
     };
@@ -300,6 +301,18 @@ export function renderPhaseMarkdown(report) {
       lines.push(`| ${build.layer} | ${build.builder} | ${stats.workers ?? "unavailable"} | ${stats.buffer_bytes ?? "unavailable"} | ${stats.buffer_allocations ?? "unavailable"} | ${milliseconds("read_ns")} | ${milliseconds("conversion_ns")} | ${milliseconds("hash_serialize_ns")} | ${milliseconds("write_ns")} | ${milliseconds("writeback_submit_ns")} |`);
     }
     lines.push("", "Read/convert/hash/write are summed hash-worker intervals; writeback submit measures one I/O thread and overlaps hashing. Buffer counts cover builder-owned vectors only, excluding shared Poseidon constants, Rayon and file pages. Snapshot/preallocation, internal-node construction and final sync/reopen have separate operation boundaries above; their nested intervals are not additive to total TreeR. Byte counts and fallback reasons are preserved in tree_r_builds in report.json.");
+    const gpuTrees = report.tree_r_builds.filter((build) => build.stats?.gpu);
+    if (gpuTrees.length) {
+      lines.push("", "GPU TreeR batches (same binary store; upper levels may use CPU):", "",
+        "| Layer | GPU hashes | CPU hashes | Batches | Admission ms | Initialization ms | Neptune call ms | Serialize ms | Host buffer bound B | Device buffer estimate B | H2D payload B | D2H payload B |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+      for (const build of gpuTrees) {
+        const g = build.stats.gpu;
+        const ms = (key) => typeof g[key] === "number" ? g[key] / 1e6 : "unavailable";
+        lines.push(`| ${build.layer} | ${g.gpu_hashes} | ${g.cpu_hashes} | ${g.batches} | ${ms("admission_ns")} | ${ms("initialization_ns")} | ${ms("batch_call_ns")} | ${ms("serialize_ns")} | ${g.host_buffer_peak_bound_bytes} | ${g.device_buffer_estimate_bytes} | ${g.h2d_payload_bytes} | ${g.d2h_payload_bytes} |`);
+      }
+      lines.push("", "Neptune call includes temporary allocation, H2D, kernel and D2H; it is not kernel-only time. Hash/serialize above also includes admission and initialization. Host bounds include temporary Neptune result copies and a constants allowance; device estimates exclude driver context/module overhead. Buffer accounting excludes allocator overhead and file pages. Payload counts exclude initialization transfers. CUDA trace provides separate kernel/transfer/API totals for TreeR and C2 together; these intervals are not additive to sealing.");
+    }
   }
   const waits = [];
   const dirtyWindows = [];
@@ -411,6 +424,7 @@ export function renderPhaseMarkdown(report) {
       `Effective request: ${JSON.stringify(gpu.request ?? null)}.`, "",
       `GPU FFT/MSM confirmed: **${gpu.gpu_execution_confirmed === true}**; CPU control: **${gpu.cpu_control === true}**; trace complete: **${gpu.trace_complete === true}**.`, "",
       `Completed FFT kernels: ${value(gpu.fft_kernel_count)}; MSM kernels: ${value(gpu.msm_kernel_count)}.`, "",
+      `GPU TreeR confirmed: **${gpu.tree_r_gpu_execution_confirmed === true}**; completed U2 Poseidon kernels: ${value(gpu.poseidon_u2_kernel_count)}; layer evidence: ${JSON.stringify(gpu.tree_r_evidence ?? null)}.`, "",
       `Sampled whole-device VRAM peak: ${value(gpu.sampled_device_vram_peak_bytes)} B. This includes other processes and is separate from host RAM.`, "",
       `Errors/fallbacks: ${JSON.stringify(gpu.errors ?? [])}; ${JSON.stringify(gpu.known_fallbacks ?? [])}.`, "",
       gpu.request?.trace_requested === false ? "No CUDA trace requested; configuration alone is not GPU execution evidence." : "Kernel, transfer and initialization API timings, when available, are in gpu-summary.json; intervals may overlap and profiling overhead is included. Device discovery alone is not GPU execution. The trace confirms both kernel families, not exclusive GPU execution of every operation.");
