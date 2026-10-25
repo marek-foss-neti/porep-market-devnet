@@ -172,6 +172,10 @@ const dockerSurfaceInputs = [
   "scripts/build-resources.sh",
 ] as const;
 const sourceOverrideInputs = [
+  "source-overrides/curio-bench/cmd/curio/test-offline-bench.go",
+  "source-overrides/curio-bench/lib/offlinebench/bench.go",
+  "source-overrides/curio-bench/lib/offlinebench/index.go",
+  "source-overrides/curio-bench/lib/offlinebench/telemetry.go",
   "source-overrides/curio/cmd/curio/tasks/tasks.go",
   "source-overrides/curio/cmd/sptool/toolbox_deal_client.go",
   "source-overrides/curio/lib/ffi/unseal_funcs.go",

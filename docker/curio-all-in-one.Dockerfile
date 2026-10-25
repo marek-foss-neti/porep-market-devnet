@@ -107,6 +107,15 @@ RUN cd extern/filecoin-ffi/rust \
          --no-default-features \
          --features multicore-sdr,zigzag-bench
 
+FROM curio-builder AS curio-bench-builder
+
+# A separate Curio executable adds the offline command without changing the
+# service binary or rebuilding its FFI. ffiselect children re-exec this binary.
+COPY --from=harness-overlay source-overrides/curio-bench/ /opt/curio/
+RUN GOAMD64=v3 CGO_LDFLAGS_ALLOW='.*' /usr/local/bin/devnet-build-exec 3 \
+    go build -tags="${CURIO_TAGS}" -o /opt/curio/curio-bench \
+      -ldflags "-s -w -X github.com/filecoin-project/curio/build.IsOpencl=1 -X github.com/filecoin-project/curio/build.CurrentCommit=+git_${CURIO_COMMIT}" ./cmd/curio
+
 FROM ${GO_BUILDER_IMAGE} AS lotus-builder
 
 RUN apt-get update \
@@ -223,6 +232,7 @@ COPY --from=lotus-builder /opt/lotus/lotus-seed /usr/local/bin/lotus-seed
 COPY --from=lotus-builder /opt/lotus/lotus-shed /usr/local/bin/lotus-shed
 COPY --from=lotus-builder /opt/lotus/lotus-miner /usr/local/bin/lotus-miner
 COPY --from=curio-builder /opt/curio/curio /usr/local/bin/curio
+COPY --from=curio-bench-builder /opt/curio/curio-bench /usr/local/bin/curio-bench
 COPY --from=curio-builder /opt/curio/sptool /usr/local/bin/sptool
 COPY --from=curio-builder /opt/curio/extern/filecoin-ffi/rust/target/release/porep-proof-microbench /usr/local/bin/porep-proof-microbench
 COPY --from=service-tool-builder /go/bin/car /usr/local/bin/car

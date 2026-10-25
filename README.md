@@ -207,6 +207,19 @@ They differ in sector geometry and parameter-cache namespace. See
 [the shared benchmark commands](docs/runtime/zigzag-benchmarks.md) for cache
 reuse, overrides and the limits of extrapolating from 512 MiB to 32 GiB.
 
+For a CPU-only 32 GiB SDR seal–unseal benchmark through Curio's storage,
+TreeD builder, FFI subprocesses and native decoder, without a running devnet
+or deployed contracts:
+
+```sh
+just bench-curio-32g
+```
+
+Build the updated images with `just build` first. This command requires at
+least 704 GiB free scratch space and does not inherit ZigZag's RAM limit.
+See [the offline Curio benchmark](docs/runtime/curio-offline-bench.md) for
+resource controls, phase definitions and JSON/Markdown reports.
+
 ### ZigZag 512 MiB parameter setup
 
 Build the dedicated ZigZag microbench image with the reviewed source, then generate the exact 512 MiB,

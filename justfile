@@ -43,6 +43,7 @@ tooling-env deployment='active':
     @bash scripts/devnet-addresses.sh '{{deployment}}' tooling-env
 
 test-unit:
+    @node --test scripts/test/curio-bench.test.mjs
     @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- npm --prefix tools run typecheck
     @node scripts/run-with-timeout.mjs --timeout-ms 60000 -- npm --prefix tools run test:build-resources
     @node scripts/run-with-timeout.mjs --timeout-ms 600000 -- npm --prefix tools test
@@ -61,6 +62,9 @@ bench-deliver-seal-unseal-retrieval deployment='active':
 
 bench-seal-unseal deployment='active':
     @just test-scenario bench-seal-unseal '{{deployment}}' 14400000
+
+bench-curio-32g:
+    @bash scripts/bench-curio.sh 32gib
 
 bench-retrieval mode='both' deployment='active':
     @RETRIEVAL_BENCH_MODE='{{mode}}' just test-scenario bench-retrieval '{{deployment}}' 14400000

@@ -1037,6 +1037,7 @@ devnet_zigzag_source_overrides_sha256() {
     cd "${DEVNET_ROOT}"
     find \
       source-overrides/curio \
+      source-overrides/curio-bench \
       source-overrides/filecoin-ffi \
       source-overrides/fvm-4.8.2-zigzag \
       source-overrides/lotus \
