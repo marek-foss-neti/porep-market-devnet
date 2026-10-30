@@ -37,8 +37,8 @@ if [[ -n "${bench_profile}" && -n "${microbench_layers}" ]]; then
   devnet_die "zigzag-512 has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
 fi
 case "${microbench_layers}" in
-  ""|2|11|15|19|22|25) ;;
-  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 15, 19, 22, 25" ;;
+  ""|2|11|15|17|19|22|25) ;;
+  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 15, 17, 19, 22, 25" ;;
 esac
 
 telemetry_interval_ms="${BENCH_TELEMETRY_INTERVAL_MS:-500}"

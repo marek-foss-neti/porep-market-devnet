@@ -310,7 +310,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiMicrobenchOverride, /seal_pre_commit_phase1/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_LAYERS/);
-  assert.match(filecoinFfiMicrobenchOverride, /matches!\(layers, 2 \| 11 \| 15 \| 19 \| 22 \| 25\)/);
+  assert.match(filecoinFfiMicrobenchOverride, /matches!\(layers, 2 \| 11 \| 15 \| 17 \| 19 \| 22 \| 25\)/);
   assert.match(filecoinFfiMicrobenchOverride, /current_porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /parameter_cache_identifier/);
@@ -759,7 +759,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(microScript, /BENCH_STACKED_PARENT_CACHE_DIR/);
   assert.match(microScript, /BENCH_UNSEAL_RANGE_SIZE/);
   assert.match(microScript, /BENCH_PROOF_MICRO_LAYERS/);
-  assert.match(microScript, /""\|2\|11\|15\|19\|22\|25/);
+  assert.match(microScript, /""\|2\|11\|15\|17\|19\|22\|25/);
   assert.match(microScript, /mode\}" == "full" && "\$\{sector_size\}" == "512mib"/);
   assert.match(microScript, /POREP_PROOF_MICROBENCH_LAYERS=\$\{microbench_layers\}/);
   assert.match(microScript, /PoRep layers override=\$\{microbench_layers\}/);
@@ -891,10 +891,11 @@ jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_di
   --arg manifest "$manifest" --arg manifestSha "$(shasum -a 256 "$manifest" | awk '{print $1}')" \\
   --arg sourceSha "\${DEVNET_TEST_REPORT_SOURCE_SHA:-$(jq -r .rustFilProofsSourceSha256 "$manifest")}" \\
   --argjson sectorBytes "\${DEVNET_TEST_REPORTED_SECTOR_BYTES:-${preset.bytes}}" \\
+  --argjson layers "\${DEVNET_TEST_REPORTED_LAYERS:-\${BENCH_PROOF_MICRO_LAYERS:-\${POREP_PROOF_MICROBENCH_LAYERS:-11}}}" \\
   --arg backend "\${DEVNET_TEST_REPORTED_BACKEND:-zig-zag}" \\
   --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
   {backend: $backend, sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
-   porep_layers: 11, porep_partitions: 10, minimum_total_challenges: 176,
+   porep_layers: $layers, porep_partitions: 10, minimum_total_challenges: 176,
    challenges_per_layer_per_partition: 18, registered_seal_proof_id: 8,
    profile: ${preset.nativeProfile ? '{total_challenge_instances: 1980}' : 'null'}} as $geometry |
   {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit, rust_fil_proofs_source_sha256: $sourceSha},
@@ -945,9 +946,30 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     });
     assert.equal(reuse.status, 0, reuse.stderr);
     for (const name of ["BENCH_PROOF_MICRO_LAYERS", "POREP_PROOF_MICROBENCH_LAYERS"]) {
-      const invalid = run(commit, { [name]: "2" });
+      const invalid = run(commit, { [name]: "0" });
       assert.notEqual(invalid.status, 0);
-      assert.match(invalid.stderr, /has fixed layers/);
+      assert.match(invalid.stderr, /has fixed layers|invalid zigzag-32g layers/);
+      const extended = run(commit, { [name]: "17" });
+      if (preset.sector === "32gib") {
+        assert.equal(extended.status, 0, extended.stderr);
+        const path = extended.stdout.match(/^zigzag-32g baseline: (.+)$/m)?.[1];
+        assert.ok(path);
+        const report = JSON.parse(await readFile(path, "utf8"));
+        assert.equal(report.runs[0].porep_layers, 17);
+        assert.equal(report.runs[0].total_challenge_instances, 3060);
+        const stale = run(commit, { [name]: "17", DEVNET_TEST_REPORTED_LAYERS: "11" });
+        assert.notEqual(stale.status, 0);
+        assert.match(stale.stderr, /proof geometry or correctness validation failed/);
+      } else {
+        assert.notEqual(extended.status, 0);
+        assert.match(extended.stderr, /has fixed layers/);
+      }
+    }
+    if (preset.sector === "32gib") {
+      for (const layers of ["2", "11", "15", "19", "22", "25"]) {
+        const selected = run(commit, { BENCH_PROOF_MICRO_LAYERS: layers });
+        assert.equal(selected.status, 0, selected.stderr);
+      }
     }
     const wrongGeometry = run(commit, { DEVNET_TEST_REPORTED_SECTOR_BYTES: "2048" });
     assert.notEqual(wrongGeometry.status, 0);

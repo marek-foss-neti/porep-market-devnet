@@ -32,8 +32,11 @@ command uses the existing native 32 GiB configuration, which already has this
 proof budget. It does not pass an invented `--profile` to the binary. Its native
 `benchmark.profile` remains null; sector and proof-budget fields remain explicit
 in `report.json`, and the wrapper aggregate is named `zigzag-32g`. Both wrappers
-reject layer overrides and validate the reported geometry, prewarm agreement,
+validate the reported geometry, prewarm agreement,
 proof length, verification and recovered byte count.
+
+The 32 GiB command accepts `2`, `11`, `15`, `17`, `19`, `22`, or `25` layers
+(default: `11`), e.g. `BENCH_PROOF_MICRO_LAYERS=17 just bench-zigzag-32g`.
 
 Both commands default to parent buffer 32768, parent and TreeR DONTNEED enabled,
 `MALLOC_ARENA_MAX=4`, compact loader, Groth16 batch 1, and 50 GiB base RAM.

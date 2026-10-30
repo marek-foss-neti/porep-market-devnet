@@ -23,8 +23,17 @@ case "${sector_size}" in
     ;;
   *) devnet_die "unsupported ZigZag comparison sector: ${sector_size}; expected 512mib or 32gib" ;;
 esac
-[[ -z "${BENCH_PROOF_MICRO_LAYERS:-}" && -z "${POREP_PROOF_MICROBENCH_LAYERS:-}" ]] ||
-  devnet_die "${baseline_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
+layers=11
+if [[ "${sector_size}" == 32gib ]]; then
+  layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-11}}"
+  case "${layers}" in
+    2|11|15|17|19|22|25) ;;
+    *) devnet_die "invalid zigzag-32g layers: ${layers}; expected one of: 2, 11, 15, 17, 19, 22, 25" ;;
+  esac
+else
+  [[ -z "${BENCH_PROOF_MICRO_LAYERS:-}" && -z "${POREP_PROOF_MICROBENCH_LAYERS:-}" ]] ||
+    devnet_die "${baseline_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
+fi
 unsealed_bytes=$((sector_bytes / 128 * 127))
 
 devnet_require_command jq
@@ -123,10 +132,10 @@ for repetition in 1; do
   # Rust serializes Backend::ZigZag with serde kebab-case as "zig-zag";
   # the CLI selector is "zigzag", but that is not the report's backend value.
   jq -e --arg sector "${sector_size}" --argjson bytes "${sector_bytes}" \
-    --argjson unsealed "${unsealed_bytes}" '
+    --argjson unsealed "${unsealed_bytes}" --argjson layers "${layers}" '
     def geometry:
       .backend == "zig-zag" and .sector_size_label == $sector and .sector_size_bytes == $bytes
-      and .porep_layers == 11 and .porep_partitions == 10
+      and .porep_layers == $layers and .porep_partitions == 10
       and .minimum_total_challenges == 176 and .challenges_per_layer_per_partition == 18;
     (.benchmark | geometry) and (.prewarm | geometry)
     and .benchmark.profile == .prewarm.profile
@@ -175,7 +184,7 @@ jq -s \
     }]
   }
 ' "${reports[@]}" > "${baseline_dir}/baseline.json"
-jq -e '.completed_runs == 1 and all(.runs[]; .verified and .byte_match and .proof_bytes == 1920 and .total_challenge_instances == 1980)' \
+jq -e --argjson layers "${layers}" '.completed_runs == 1 and all(.runs[]; .verified and .byte_match and .proof_bytes == 1920 and .total_challenge_instances == ($layers * 180))' \
   "${baseline_dir}/baseline.json" >/dev/null || devnet_die "${baseline_profile} baseline validation failed"
 df -Pk "${DEVNET_ROOT}" "${parameter_dir}" "${parent_dir}" > "${baseline_dir}/filesystems-after.txt"
 printf '%s baseline: %s\n' "${baseline_profile}" "${baseline_dir}/baseline.json"

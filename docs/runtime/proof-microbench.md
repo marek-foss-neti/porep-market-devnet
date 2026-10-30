@@ -111,7 +111,7 @@ The wrapper sets `POREP_PROOF_MICROBENCH_LAYERS=11` for `full` `512mib` runs
 only, including both the prewarm container and the measured container. This does
 not affect devnet sealing or existing `unseal-only` fixtures. Set
 `BENCH_PROOF_MICRO_LAYERS=2` to run the old 512MiB control case. Layer override
-experiments are limited to `2`, `11`, `15`, `19`, `22`, and `25`.
+experiments are limited to `2`, `11`, `15`, `17`, `19`, `22`, and `25`.
 
 ```bash
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 BENCH_PROOF_MICRO_LAYERS=15 just bench-proof-micro zigzag 32gib
