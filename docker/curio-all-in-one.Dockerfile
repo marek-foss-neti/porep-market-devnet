@@ -39,6 +39,9 @@ COPY --from=rust-fil-proofs /storage-proofs-update /storage-proofs-update
 
 FROM ${GO_BUILDER_IMAGE} AS curio-builder
 
+# Avoid HTTP/2 stream resets during Go module downloads; build stages only.
+ENV GODEBUG=http2client=0
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
@@ -118,6 +121,9 @@ RUN GOAMD64=v3 CGO_LDFLAGS_ALLOW='.*' /usr/local/bin/devnet-build-exec 3 \
 
 FROM ${GO_BUILDER_IMAGE} AS lotus-builder
 
+# Avoid HTTP/2 stream resets during Go module downloads; build stages only.
+ENV GODEBUG=http2client=0
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential \
@@ -171,6 +177,9 @@ RUN mkdir -p build \
        /usr/local/bin/devnet-build-exec 3 make debug-lotus debug-lotus-miner debug-lotus-seed debug-lotus-shed
 
 FROM ${GO_BUILDER_IMAGE} AS service-tool-builder
+
+# Avoid HTTP/2 stream resets during Go module downloads; build stages only.
+ENV GODEBUG=http2client=0
 
 ARG GO_CAR_COMMIT
 ARG PIECE_SERVER_COMMIT

@@ -14,6 +14,9 @@ COPY --from=blst-source /LICENSE ./LICENSE
 RUN ./build.sh && test -s libblst.a
 
 FROM ${GO_BUILDER_IMAGE} AS curio-builder
+# Avoid HTTP/2 stream resets during Go module downloads; build stages only.
+ENV GODEBUG=http2client=0
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       build-essential ca-certificates clang git jq libhwloc-dev make \
