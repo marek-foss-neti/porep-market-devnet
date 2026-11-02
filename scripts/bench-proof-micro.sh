@@ -184,25 +184,25 @@ if [[ "${backend}" == "zigzag" ]]; then
     memory_variable=BENCH_ZIGZAG_SETUP_MEMORY_BYTES
     base_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-53687091200}"
   fi
-  [[ "${base_memory_bytes}" =~ ^[0-9]{1,11}$ ]] ||
-    devnet_die "${memory_variable} must be positive and at most 80 GiB"
+  [[ "${base_memory_bytes}" =~ ^[0-9]{1,12}$ ]] ||
+    devnet_die "${memory_variable} must be positive and at most 100 GiB"
   base_memory_bytes=$((10#${base_memory_bytes}))
-  ((base_memory_bytes > 0 && base_memory_bytes <= 85899345920)) ||
-    devnet_die "${memory_variable} must be positive and at most 80 GiB"
+  ((base_memory_bytes > 0 && base_memory_bytes <= 107374182400)) ||
+    devnet_die "${memory_variable} must be positive and at most 100 GiB"
   cache_setting="$(zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES-0}}" 0)"
   query_cache_bytes="${cache_setting#*=}"
   # Keep the generic helper/Curio defaults unchanged. The benchmark reserve
-  # follows its base budget (bounded by the loader's accepted integer range).
-  default_reserve_bytes=$((base_memory_bytes < 64424509440 ? base_memory_bytes : 64424509440))
+  # follows its base budget, within the loader's 100 GiB ceiling.
+  default_reserve_bytes="${base_memory_bytes}"
   BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-${default_reserve_bytes}}}"
   reserve_setting="$(zigzag_cache_bytes FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES "${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES}" 1)"
   query_cache_extra_bytes=0
   if [[ "${mode}" == "full" ]] && ((query_cache_bytes > 0)); then
     query_cache_extra_bytes="${query_cache_bytes}"
-    # The pinned Rust loader clamps its budget calculation to 60 GiB.
+    # The Rust loader permits 100 GiB base plus the preset's 20 GiB cache.
     # Reject an incompatible request rather than silently shrinking the cache.
-    ((base_memory_bytes + query_cache_extra_bytes <= 64424509440)) ||
-      devnet_die "base RAM plus query cache must not exceed the current loader's 60 GiB ceiling"
+    ((base_memory_bytes + query_cache_extra_bytes <= 128849018880)) ||
+      devnet_die "base RAM plus query cache must not exceed the loader's 120 GiB ceiling"
     (( ${reserve_setting#*=} == base_memory_bytes )) ||
       devnet_die "query cache reserve must equal the base RAM budget; unset BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES / FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES or set it to ${base_memory_bytes}"
   fi
@@ -1018,11 +1018,11 @@ if [[ "${bench_profile}" == "zigzag-512" ]]; then
     and .profile.padded_sector_bytes == 536870912
     and .profile.nodes == 16777216
     and .profile.binary_tree_depth == 24
-    and .profile.layers == 11
+    and .profile.layers == 17
     and .profile.partitions == 10
     and .profile.minimum_challenges == 176
     and .profile.challenges_per_layer_per_partition == 18
-    and .profile.total_challenge_instances == 1980
+    and .profile.total_challenge_instances == 3060
     and .verifying_key_matches_params == true
   ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-512 prewarm used wrong parameters"
 fi
@@ -1112,7 +1112,7 @@ jq -e '.verify_seal == true and .raw_unseal_bytes_match == true' "${summary_json
 if [[ "${bench_profile}" == "zigzag-512" ]]; then
   jq -e --slurpfile prewarm "${prewarm_summary_json}" '
     .profile == $prewarm[0].profile
-    and .porep_layers == 11
+    and .porep_layers == 17
     and .porep_partitions == 10
     and .minimum_total_challenges == 176
     and .challenges_per_layer_per_partition == 18

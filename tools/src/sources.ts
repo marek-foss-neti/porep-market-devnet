@@ -466,7 +466,9 @@ async function checkDirectory(context: SourceContext, path: string, label: strin
 
 async function git(context: SourceContext, cwd: string, args: string[]): Promise<void> {
   await assertSafeBeforeGit(context, cwd);
-  await run("git", args, {
+  // Avoid spurious GitHub HTTP/2 401s during recursive submodule clones.
+  // Pass this explicitly because managed sources ignore global Git config.
+  await run("git", ["-c", "http.version=HTTP/1.1", ...args], {
     cwd,
     env: sanitizedGitEnvironment(),
     timeoutMs: SOURCE_FETCH_GIT_TIMEOUT_MS,

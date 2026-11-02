@@ -60,13 +60,15 @@ Files must remain immutable while mapped, as required by the existing loader.
 The effective point-storage budget is:
 
 ```text
-min(requested_cache, max(0, min(detected_cgroup_limit, 60 GiB) - reserve))
+min(requested_cache, max(0, min(detected_cgroup_limit, 120 GiB) - reserve))
 ```
 
 The generic Rust/Curio reserve remains **56 GiB**. The benchmark runner instead
-sets it to the base budget, **50 GiB** by default, for witness, FFT/MSM, other
+sets it to the base budget: **100 GiB** in the two dedicated presets,
+**50 GiB** in the general runner, for witness, FFT/MSM, other
 query families, transient decoding, mmap/file residency and allocator overhead.
-For full runs, requested cache is added **on top**: a 4 GiB request gives a
+For full runs, requested cache is added **on top**: with the general runner's
+50 GiB base, a 4 GiB request gives a
 54 GiB measured container and a 50 GiB reserve, so the cache can retain up to
 4 GiB. Full-run prewarm, fixture preparation and standalone unseal receive only
 the base budget; standalone prewarm retains its separate 50 GiB default.
@@ -74,12 +76,11 @@ This applies to all ZigZag sector sizes, including 512 MiB and 32 GiB.
 
 The reserve is a planning allowance, not a separate kernel-enforced partition
 or live-RSS measurement. Docker enforces the sum for the whole container.
-The current Rust adapter still clamps its calculation at 60 GiB: the runner
-rejects active-cache configurations whose base plus cache exceeds 60 GiB
-(default base therefore permits at most 10 GiB of cache). An explicit reserve
-must equal the base; unset old 56 GiB reserve overrides when using the 50 GiB
-base. This avoids silently reducing the requested cache. The 80 GiB global
-container ceiling remains available for runs without active cache. Retaining
+The Rust adapter clamps the total budget at 120 GiB: the runner rejects
+active-cache configurations whose base plus cache exceeds 120 GiB. The dedicated
+presets use 100 GiB base plus 20 GiB cache. An explicit reserve must equal the
+base; unset old reserve overrides when changing the base. Base-only limits and
+individual cache/reserve settings are capped at 100 GiB. Retaining
 points can increase reclaim even when anonymous RSS fits, so acceptance must
 check full C2 time, faults, I/O, PSI and OOM as well as peak RAM.
 
@@ -96,9 +97,9 @@ native source and does not use this adapter.
 | Benchmark override | Rust / dedicated Curio variable | General runner / native default |
 | --- | --- | ---: |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, normally `53687091200` (50 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, presets `107374182400` (100 GiB), general runner `53687091200` (50 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
 
-Values are integer bytes, capped at 60 GiB; the reserve must be positive. The
+Values are integer bytes, capped at 100 GiB; the reserve must be positive. The
 benchmark explicitly forwards both variables into its ZigZag containers and
 records the effective configuration in `memory-budget.json`, provenance,
 `report.json` and `summary.md`. Configured cache allowance and actual retained
@@ -110,11 +111,11 @@ does not run C2 and does not populate this cache.
 BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
 ```
 
-This requests 50 GiB base + 4 GiB cache = 54 GiB RAM, with swap disabled.
+This requests 100 GiB base + 4 GiB cache = 104 GiB RAM, with swap disabled.
 The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset defaults to
-10 GiB cache and a 60 GiB full-run limit; `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`
+20 GiB cache and a 120 GiB full-run limit; `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`
 disables it. The general runner and native defaults remain disabled. Changing
-this runner policy needs no rebuild.
+the Rust ceiling requires a dependency repin and image rebuild.
 
 `groth16_parameters` in `report.json` contains `query_cache` configuration,
 selected families and reserved bytes, plus per-family `query_cache_access`
@@ -132,7 +133,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 now pins the committed implementation, including the cgroup-root fix, at
-`74d72f778664c10d19105b5401976205864f0b9d`. Fetch the managed sources and rebuild
+`f625c0984ba020a4a3b50de5770fee4f2d98bf12`. Fetch the managed sources and rebuild
 the dedicated images to use this revision. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed
 checkout. The build guard requires the adapter API. Keep all development changes
@@ -150,13 +151,14 @@ JSON/Markdown records.
 
 The historical candidate used `BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296`
 and a 60 GiB container, with the reference using `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`.
-With the current 50 GiB base, cache off uses a 50 GiB container and a 4 GiB
-cache request uses 54 GiB. This compares base-plus-cache configurations, not
-cache alone at a fixed total RAM limit. For a fixed-total comparison, use a
-54 GiB base with cache off versus a 50 GiB base plus 4 GiB cache; record the
-different base budgets. Neither configuration has been validated by the
-historical 60 GiB run. Keep batch 1 and the other settings identical. Check one B-G1
-decode followed by nine hits, all ten proofs, verification and unseal. Compare
+The current presets use 100 GiB with cache off and 120 GiB with the default
+20 GiB cache. This compares base-plus-cache configurations, not cache alone at
+a fixed total RAM limit. For a fixed-total 100 GiB comparison, use a 100 GiB
+base with cache off versus an 80 GiB base plus 20 GiB cache; record the different
+base budgets. The historical 60 GiB, 11-layer run does not validate either
+17-layer configuration. Keep batch 1 and other settings identical. Check the
+reported family selection, one decode per retained family followed by hits,
+all ten proofs, verification and unseal. Compare
 C2 and the full sealing path with comparable host load/cache state. Batch 2
 requires its own on/off comparison and memory check; do not add its expected
 benefit to that of retention. A weak or negative result leaves retention off.

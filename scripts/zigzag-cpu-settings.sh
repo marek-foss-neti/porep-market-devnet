@@ -32,9 +32,9 @@ zigzag_emit_integer() {
 
 zigzag_cache_bytes() {
   local name="$1" value="$2" minimum="$3"
-  [[ "${value}" =~ ^[0-9]{1,11}$ ]] || devnet_die "${name} must be an unsigned byte count"
+  [[ "${value}" =~ ^[0-9]{1,12}$ ]] || devnet_die "${name} must be an unsigned byte count"
   value=$((10#${value}))
-  ((value >= minimum && value <= 64424509440)) || devnet_die "${name} must be between ${minimum} and 60 GiB"
+  ((value >= minimum && value <= 107374182400)) || devnet_die "${name} must be between ${minimum} and 100 GiB"
   printf '%s=%s\n' "${name}" "${value}"
 }
 

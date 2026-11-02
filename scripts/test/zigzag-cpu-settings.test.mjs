@@ -98,7 +98,7 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_ENCODE_PRODUCERS: "129" },
     { BENCH_ZIGZAG_ENCODE_STRIDE: "-1" }, { BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "1048576" },
     { BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262145" },
-    { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "64424509441" },
+    { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "107374182401" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "-1" },
     { BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "0" },
@@ -270,10 +270,10 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     for (const mode of ["full", "prewarm-only"]) {
       const selected = mode === "full" ? "BENCH_ZIGZAG_FULL_MEMORY_BYTES" : "BENCH_ZIGZAG_SETUP_MEMORY_BYTES";
       const other = mode === "full" ? "BENCH_ZIGZAG_SETUP_MEMORY_BYTES" : "BENCH_ZIGZAG_FULL_MEMORY_BYTES";
-      for (const bytes of ["85899345920", "64424509440", "53687091200", "42949672960"]) {
+      for (const bytes of ["107374182400", "85899345920", "64424509440", "53687091200", "42949672960"]) {
         assertLimits(run("32gib", mode, "zigzag", { [selected]: bytes, [other]: "invalid" }), bytes);
       }
-      for (const bytes of ["110000000000", "85899345921", "0", "invalid", "18446744073709551617"]) {
+      for (const bytes of ["110000000000", "107374182401", "0", "invalid", "18446744073709551617"]) {
         assert.notEqual(run("32gib", mode, "zigzag", { [selected]: bytes }).status, 0);
       }
     }
@@ -283,7 +283,7 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "9663676416" }), "63350767616", "53687091200", "9663676416");
     assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418240" }), "64424509440", "53687091200", "10737418240");
     for (const env of [
-      { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418241" },
+      { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "75161927681" },
       { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
       { ...native, BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "60129542144" },
       { ...native, FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "42949672960" },
@@ -291,6 +291,13 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     assertLimits(run("512mib", "full", "zigzag", {
       ...native, BENCH_ZIGZAG_FULL_MEMORY_BYTES: "60129542144", BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES: "60129542144",
     }), "64424509440", "60129542144", "4294967296");
+    for (const sector of ["512mib", "32gib"]) {
+      const preset = { BENCH_ZIGZAG_FULL_MEMORY_BYTES: "107374182400", BENCH_ZIGZAG_QUERY_CACHE_BYTES: "21474836480" };
+      const args = assertLimits(run(sector, "full", "zigzag", preset), "128849018880", "107374182400", "21474836480");
+      assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=107374182400"));
+      assertLimits(run(sector, "full", "zigzag", { ...preset, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "0" }), "107374182400");
+      assert.notEqual(run(sector, "full", "zigzag", { ...preset, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "21474836481" }).status, 0);
+    }
     // The real launch sites must use the same arrays exercised above.
     const launches = source.match(/(?:if )?docker run [\s\S]*?porep-proof-microbench/g) ?? [];
     assert.ok(launches.some((launch) => launch.includes('${benchmark_limit_args[@]+')));

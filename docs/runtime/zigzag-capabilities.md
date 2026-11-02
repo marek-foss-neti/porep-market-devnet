@@ -22,7 +22,7 @@ The revision also includes the optional [per-C2 query cache](zigzag-query-cache.
 corrected cgroup-v2 root-limit detection and circuit-preparation measurements.
 Query retention defaults to off in Rust, the general runner and Curio.
 The shared `just bench-zigzag-512` / `just bench-zigzag-32g`
-[comparison preset](zigzag-512-baseline.md) enables 10 GiB query cache, binary
+[comparison preset](zigzag-512-baseline.md) enables 20 GiB query cache, binary
 TreeR with stream snapshots and encode prehash. It uses automatic TreeR/setup
 workers and a 64 MiB snapshot buffer.
 The current pin also includes [automatic parameter prewarm](zigzag-auto-prewarm.md)

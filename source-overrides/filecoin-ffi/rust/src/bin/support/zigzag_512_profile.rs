@@ -68,7 +68,7 @@ pub fn effective(
         "wrong graph geometry"
     );
     ensure!(
-        layers == 11 && partitions == 10 && config.minimum_challenges() == 176,
+        layers == 17 && partitions == 10 && config.minimum_challenges() == 176,
         "wrong ZigZag proof budget"
     );
     ensure!(
@@ -76,7 +76,7 @@ pub fn effective(
         "wrong challenges in ZigZag layer"
     );
     ensure!(
-        challenges == 18 && layers * partitions * challenges == 1980,
+        challenges == 18 && layers * partitions * challenges == 3060,
         "wrong total challenge instances"
     );
     ensure!(setup.porep_id == config.porep_id, "wrong PoRep identifier");
@@ -85,10 +85,10 @@ pub fn effective(
             && setup.expansion_degree == reference_setup.expansion_degree
             && setup.porep_id == reference_setup.porep_id
             && setup.api_version == reference_setup.api_version
-            && setup.layer_challenges == reference_setup.layer_challenges
+            && challenges == reference_setup.layer_challenges.challenges_for_layer(0)
             && config.partitions.0 == reference.partitions.0
             && config.minimum_challenges() == reference.minimum_challenges(),
-        "zigzag-512 differs from the 32 GiB reference beyond sector geometry"
+        "zigzag-512 differs from the 32 GiB reference beyond sector geometry and benchmark layers"
     );
     let cache_identifier = <ZigZagCompound<
         zigzag::constants::ZigZagTree,

@@ -5,29 +5,31 @@ explicit pool, feeder, cache and build options for conscious A/B comparisons;
 reports record the selected and effective settings without adding phase-only modes.
 
 This is one additional baseline benchmark profile. It runs ZigZag only,
-using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag configuration: 11 layers, 10 partitions, minimum 176 challenges, and 18
-challenges per layer in each partition (1,980 instances). The graph has
+using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag benchmark configuration: 17 layers, 10 partitions, minimum 176 challenges, and 18
+challenges per layer in each partition (3,060 instances). The graph has
 16,777,216 nodes and binary tree paths of depth 24. The graph degrees, hashers,
 KDF, API version, PoRep variant, and `porep_id` follow the 32 GiB reference.
 
 The profile is compiled only with the `filecoin-proofs/zigzag-bench` feature.
 The normal 512 MiB PoRep configuration and registered sector rules remain as
 they were. Its parameter cache identifier is derived from the effective 512 MiB
-graph and 11-by-18 circuit. The 32 GiB SRS must not be substituted.
+graph and 17-by-18 circuit. The 32 GiB SRS must not be substituted.
 
 The reference commits before the adapter are `a169e1a00075287e3fd5645a565ea14c19b5dced`
 for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
 devnet. The benchmark adapter is committed as
-`44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The current
-`versions.lock.yaml` pins its successor
+`44276f7e52292719e1bbfc90b1a68a39dda9e6f2` in `rust-fil-proofs`. The accepted
+11-layer CPU baseline used its successor
 `74d72f778664c10d19105b5401976205864f0b9d`, including CPU/cache tuning controls,
 compact Groth16 parameter indices, direct query decoding into one destination
 vector, cache recovery after panics and corrected Groth16 operation boundaries.
 It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. The comparison preset
-enables 10 GiB query retention, encode prehash and the binary TreeR builder with
+enables 20 GiB query retention, encode prehash and the binary TreeR builder with
 the stream layer pipeline for both sector sizes.
-Fetch that revision into the remote machine's managed sources before building.
+The current Rust pin is `f625c0984ba020a4a3b50de5770fee4f2d98bf12`, including the
+17-layer profile and larger query-cache budget. Fetch the managed sources
+and rebuild the images before running the new preset.
 Then run:
 
 ```bash
@@ -53,10 +55,10 @@ The latter uses the native 32 GiB sector configuration; see
 | `BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB` | `64` |
 | `BENCH_ZIGZAG_MALLOC_ARENA_MAX` | `4` |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `compact` |
-| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `10737418240` (10 GiB) |
+| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `21474836480` (20 GiB) |
 | `BENCH_ZIGZAG_GROTH16_BATCH_SIZE` | `1` |
 | `BENCH_ZIGZAG_SETUP_WORKERS` | `auto` (general runner default; native override supported) |
-| `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `53687091200` (50 GiB base; query cache is additional) |
+| `BENCH_ZIGZAG_FULL_MEMORY_BYTES` | `107374182400` (100 GiB base; query cache is additional) |
 
 The earlier version of this preset used by the three successful runs on
 12 October 2026 had a 60 GiB RAM limit; the current memory policy is described
@@ -81,10 +83,10 @@ Compare full sealing time and C1 I/O, not only PC1 RAM; the OS can still reclaim
 pages under memory pressure before C1. Rebuild the images from the current pin
 to apply this implementation change.
 
-The [Groth16 query cache](zigzag-query-cache.md) defaults to 10 GiB in this
-preset, giving a 60 GiB full-run container: 50 GiB base plus 10 GiB cache.
-Prewarm keeps the 50 GiB base limit. `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables
-the cache and restores a 50 GiB full-run container; a 4 GiB override gives 54 GiB.
+The [Groth16 query cache](zigzag-query-cache.md) defaults to 20 GiB in this
+preset, giving a 120 GiB full-run container: 100 GiB base plus 20 GiB cache.
+Prewarm keeps the 100 GiB base limit. `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables
+the cache and gives a 100 GiB full-run container; a 4 GiB override gives 104 GiB.
 The runner defaults the reserve to the base. The wrapper does not inherit the
 native Curio cache-size setting from the host. Explicit reserve overrides must
 match the base when cache is enabled.
@@ -104,7 +106,10 @@ override, use the general runner with `BENCH_PROOF_MICRO_PROFILE=zigzag-512` and
 
 Keep CPU pool settings, host load and parameter-cache state comparable as well;
 the preset does not fix the machine's hardware or available CPU count.
-Changing these script defaults requires no image rebuild.
+The 17-layer profile and increased Rust cache ceiling require a Rust dependency
+repin and rebuilt images. Existing 11-layer parameters cannot be reused for
+17 layers; parent tables remain reusable. Historical 11-layer timings are not
+direct performance baselines for this preset.
 
 No sibling `../rust-fil-proofs` checkout is required. The baseline records the
 Rust commit from `.runtime/devnet/build/images.json`, identifying the code in the
@@ -123,19 +128,20 @@ in the reports describe the parameter directory, not a guaranteed cold RAM
 cache. Parameter preparation and loading are recorded separately from the
 measured cycle and remain visible in each report.
 
-The base RAM budget is 50 GiB (53,687,091,200 bytes), with no additional swap.
+The preset base RAM budget is 100 GiB (107,374,182,400 bytes), with no additional swap.
 The wrapper forwards `BENCH_ZIGZAG_FULL_MEMORY_BYTES` as the base for both
 prewarm and the measured cycle. Only the full measured container adds the
-requested query cache: 4 GiB cache means a 54 GiB limit. The same policy applies
-to 32 GiB and other ZigZag sectors. Fixture preparation and standalone unseal
+requested query cache: 20 GiB cache means a 120 GiB limit. The same preset applies
+to the dedicated 32 GiB command; the general runner retains its 50 GiB base
+default. Fixture preparation and standalone unseal
 use only the base. Standalone prewarm uses `BENCH_ZIGZAG_SETUP_MEMORY_BYTES`,
 also defaulting to 50 GiB. Its 40 GiB setup allocation check is a lower-bound
 estimate, not a guarantee of headroom. SDR and Curio service limits are separate.
-Active-cache runs require base plus cache <= 60 GiB under the pinned loader's
-policy; other container-limit overrides remain capped at 80 GiB. Docker enforces
+Active-cache runs require base plus cache <= 120 GiB under the updated loader
+policy; base-only limits and individual cache/reserve settings are capped at 100 GiB. Docker enforces
 the total, not a hard partition between base work and cache. The new policy
 requires remote acceptance; historical 60 GiB runs are not direct performance
-baselines for 50 GiB base plus cache. Reports record both the base and total.
+baselines for 100 GiB base plus cache. Reports record both the base and total.
 
 Each run checks the effective setup before parameter generation, then verifies
 that the full run used the same cache identifier and profile. It requires a

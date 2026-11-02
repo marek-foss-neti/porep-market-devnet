@@ -1899,7 +1899,7 @@ fn unseal_reference_comparison() -> Result<()> {
     fs::write(
         work.join("unseal-comparison.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "mode": mode, "profile": "zigzag-512", "layers": 11,
+            "mode": mode, "profile": "zigzag-512", "layers": zigzag::zigzag_bench::LAYERS,
             "reference_work": reference, "range_offset": offset, "range_size": count,
             "raw_unseal_bytes_match": true, "phases": phases,
         }))?,

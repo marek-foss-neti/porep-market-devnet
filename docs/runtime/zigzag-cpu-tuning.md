@@ -8,11 +8,11 @@ defaults remain affinity on, two producers, stride 128 and lookahead 4096.
 Record buffering and both DONTNEED options default to off in the general runner
 and Curio. `just bench-zigzag-512` and `just bench-zigzag-32g` apply their shared
 [comparison preset](zigzag-512-baseline.md): parent buffer 32768, both DONTNEED
-options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1, 50 GiB base RAM and
-10 GiB query cache. The preset selects binary TreeR and
+options on, `MALLOC_ARENA_MAX=4`, compact loader, batch 1, 100 GiB base RAM and
+20 GiB query cache. The preset selects binary TreeR and
 [streaming snapshots](zigzag-layer-pipeline.md), with automatic TreeR threads
-and 64 MiB snapshot buffers. The full-run container limit is 60 GiB;
-prewarm retains 50 GiB and automatic setup workers.
+and 64 MiB snapshot buffers. The full-run container limit is 120 GiB;
+prewarm receives 100 GiB and automatic setup workers.
 
 Optional [SHA prefix preparation](zigzag-encode-prehash.md) moves complete
 SHA data blocks into the existing feeders. It is independent of the TreeR
@@ -29,8 +29,8 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_RAYON_NUM_THREADS` | `RAYON_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
-| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 60 GiB |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (50 GiB); generic Rust/Curio: 56 GiB |
+| `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 100 GiB |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (presets 100 GiB, general runner 50 GiB); generic Rust/Curio: 56 GiB |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; wrapper accepts 1–128, screen 1/2/3/4 |
@@ -106,7 +106,8 @@ as a count of exclusively reserved cores.
 Leave prewarm at `auto` when moving to a larger host. The generator checks its
 configured budget, Linux host/cgroup headroom and phase-specific allocation
 estimates before selecting H/query workers. The default benchmark budget stays
-40 GiB inside the 50 GiB prewarm container. Auto is an admission policy, not a
+40 GiB; dedicated presets allow a 100 GiB prewarm container, while the general
+runner defaults to 50 GiB. Auto is an admission policy, not a
 memory reservation or a guarantee that 128 workers are fastest. Explicit counts
 retain the previous manual scheduling and memory-floor check.
 
@@ -169,14 +170,15 @@ binary builder durability, preallocation and ENOSPC handling remain unchanged.
 No TreeD, replica, parent-cache or parameter file is advised by this operation.
 
 DONTNEED is advisory, not a RAM cap. Include C1 rereads and total sealing when
-deciding whether it helps. All ZigZag benchmark modes default to a 50 GiB
-(53687091200-byte) base budget. Full runs add requested query cache on top,
+deciding whether it helps. The dedicated 512 MiB and 32 GiB presets use a
+100 GiB base plus 20 GiB query cache (120 GiB total). The general runner
+retains its 50 GiB (53687091200-byte) base budget. Full runs add requested query cache on top,
 including 32 GiB sectors: 4 GiB cache gives a 54 GiB limit. The cache reserve
 defaults to the base; explicit mismatches are rejected. Prewarm, fixture
 preparation and standalone unseal use only the base. Standalone prewarm retains
 its separate override. Docker memory-swap equals memory, disabling extra swap.
-Active-cache totals must fit the loader's 60 GiB ceiling; other overrides are
-capped at 80 GiB. SDR and Curio services do not inherit these limits. Docker
+Active-cache totals must fit the loader's 120 GiB ceiling; base-only overrides
+and individual cache/reserve settings are capped at 100 GiB. SDR and Curio services do not inherit these limits. Docker
 enforces the total, not separate base/cache partitions. The new memory policy
 requires full-run acceptance on the remote machine.
 
@@ -227,7 +229,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only in the checkout on the remote
 machine. The lock pins the published Rust revision
-`74d72f778664c10d19105b5401976205864f0b9d`, including the cache_policy module,
+`f625c0984ba020a4a3b50de5770fee4f2d98bf12`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated

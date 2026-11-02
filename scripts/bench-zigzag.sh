@@ -23,13 +23,14 @@ case "${sector_size}" in
     ;;
   *) devnet_die "unsupported ZigZag comparison sector: ${sector_size}; expected 512mib or 32gib" ;;
 esac
-layers=11
+layers=17
 if [[ "${sector_size}" == 32gib ]]; then
-  layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-11}}"
+  layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-17}}"
   case "${layers}" in
     2|11|15|17|19|22|25) ;;
     *) devnet_die "invalid zigzag-32g layers: ${layers}; expected one of: 2, 11, 15, 17, 19, 22, 25" ;;
   esac
+  export BENCH_PROOF_MICRO_LAYERS="${layers}"
 else
   [[ -z "${BENCH_PROOF_MICRO_LAYERS:-}" && -z "${POREP_PROOF_MICROBENCH_LAYERS:-}" ]] ||
     devnet_die "${baseline_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
@@ -100,9 +101,9 @@ for repetition in 1; do
     BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB="${BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB-64}" \
     BENCH_ZIGZAG_MALLOC_ARENA_MAX="${BENCH_ZIGZAG_MALLOC_ARENA_MAX-4}" \
     BENCH_ZIGZAG_PARAMETER_LOADER="${BENCH_ZIGZAG_PARAMETER_LOADER-compact}" \
-    BENCH_ZIGZAG_QUERY_CACHE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_BYTES-10737418240}" \
+    BENCH_ZIGZAG_QUERY_CACHE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_BYTES-21474836480}" \
     BENCH_ZIGZAG_GROTH16_BATCH_SIZE="${BENCH_ZIGZAG_GROTH16_BATCH_SIZE:-1}" \
-    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-53687091200}" \
+    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-107374182400}" \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \
     BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1 \

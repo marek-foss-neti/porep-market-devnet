@@ -153,7 +153,7 @@ and its image manifests were left unchanged; builds used an isolated copy.
 
 The pipeline implementation, including background writeback and wait metrics,
 is committed and pinned in `versions.lock.yaml` at
-`74d72f778664c10d19105b5401976205864f0b9d`. Fetch the managed sources and rebuild
+`f625c0984ba020a4a3b50de5770fee4f2d98bf12`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Dedicated builds require
 `LayerPipelineConfig`; no development-source override is needed for this pin.
 For further uncommitted development, use an isolated copy inside the devnet
