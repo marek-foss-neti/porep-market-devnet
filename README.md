@@ -37,6 +37,16 @@ The optional `BOOTSTRAP_REQUIRE_32GIB_MICROBENCH=1` gate is for a full 32 GiB
 microbenchmark host; do not enable it for the 512 MiB `zigzag-512` baseline VPS.
 Without that gate, resource warnings against the 32 GiB floor are informational.
 
+The final bootstrap step runs Geekbench **6.7.1 CPU** directly on the host and
+prints its public result link. The pinned download is checksum-verified and
+cached under `.cache/geekbench/`; the run log and a `.url` file are saved under
+`.runtime/devnet/logs/`. Results are uploaded to Geekbench Browser. Automatic
+installation supports Linux x86_64 and macOS (Intel and Apple Silicon); other
+platforms print a skip warning. For a repeat bootstrap without another CPU
+measurement, use `BOOTSTRAP_GEEKBENCH=0 just bootstrap`. A benchmark or upload
+failure stops bootstrap with a diagnostic. Existing workloads are left running;
+run bootstrap on an otherwise idle host for comparable scores.
+
 Long bootstrap steps print a heartbeat every 15 seconds and write command logs
 under `.runtime/devnet/logs/`. To make the terminal chattier while provisioning
 a paid VPS, lower the interval, for example:

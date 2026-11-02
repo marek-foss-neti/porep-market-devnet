@@ -687,6 +687,76 @@ report_host_preflight() {
   check_resource_floor "Docker root filesystem free space" "${docker_root_free}" "${bootstrap_microbench32_min_docker_free_bytes}"
 }
 
+run_bootstrap_geekbench() {
+  if ! bool_is_enabled "${BOOTSTRAP_GEEKBENCH:-1}"; then
+    progress "Geekbench 6 skipped (BOOTSTRAP_GEEKBENCH=0)"
+    return 0
+  fi
+
+  # Pin the same version on every host so the CPU scores remain comparable.
+  local version=6.7.1 platform checksum binary cache_dir archive log_path result_url
+  local progress_pid="" status=0
+  case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64)
+      platform=Linux
+      archive="Geekbench-${version}-Linux.tar.gz"
+      checksum=0ddca977deb6d9db4bd866485f9408e72e2869d0dea0737b18d4bfe472858ace
+      binary="Geekbench-${version}-Linux/geekbench6"
+      ;;
+    Darwin/arm64|Darwin/x86_64)
+      platform=Mac
+      archive="Geekbench-${version}-Mac.zip"
+      checksum=0cceb31fce4f40af265292c3ffe050ceb509aeabe647240dde73842e62401008
+      binary="Geekbench 6.app/Contents/Resources/geekbench6"
+      ;;
+    *)
+      warn "Geekbench ${version} automatic installation supports Linux x86_64 and macOS only; CPU benchmark skipped"
+      return 0
+      ;;
+  esac
+
+  cache_dir="${repository_root}/.cache/geekbench/${version}-${platform}"
+  binary="${cache_dir}/${binary}"
+  if [[ ! -f "${cache_dir}/.ready" || ! -x "${binary}" ]]; then
+    require_command curl
+    require_command shasum
+    progress "downloading Geekbench ${version} (${platform})"
+    (
+      local tmp
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "${tmp}"' EXIT
+      curl --http1.1 --fail --location --retry 2 --connect-timeout 15 --max-time 600 \
+        --silent --show-error "https://geekbench-cdn.b-cdn.net/${archive}" -o "${tmp}/${archive}"
+      (cd "${tmp}" && printf '%s  %s\n' "${checksum}" "${archive}" | shasum -a 256 -c -)
+      mkdir -p "${cache_dir}"
+      rm -f "${cache_dir}/.ready"
+      if [[ "${platform}" == Linux ]]; then
+        tar -xzf "${tmp}/${archive}" -C "${cache_dir}"
+      else
+        unzip -qo "${tmp}/${archive}" -d "${cache_dir}"
+      fi
+      [[ -x "${binary}" ]] || die "Geekbench executable missing after extraction: ${binary}"
+      touch "${cache_dir}/.ready"
+    )
+  fi
+
+  log_path="$(bootstrap_log_path "geekbench6-cpu")"
+  progress "Geekbench ${version} CPU: starting on the host; results will upload to Geekbench Browser; log=$(relative_to_repository "${log_path}")"
+  start_command_progress progress_pid "Geekbench 6 CPU" "${log_path}"
+  (cd "${binary%/*}" && run_with_timeout 3600000 "${binary}" --cpu) >"${log_path}" 2>&1 || status=$?
+  stop_command_progress "${progress_pid}"
+  if ((status != 0)); then
+    print_command_failure_tail "${log_path}"
+    die "Geekbench 6 failed with exit code ${status}; see $(relative_to_repository "${log_path}"); use BOOTSTRAP_GEEKBENCH=0 to skip it"
+  fi
+
+  # Match the public result only, never the account-claim URL with its key.
+  result_url="$(awk '/^[[:space:]]*https:\/\/browser\.geekbench\.com\/v6\/cpu\/[0-9]+[[:space:]]*$/ { print $1; exit }' "${log_path}")"
+  [[ -n "${result_url}" ]] || die "Geekbench 6 finished without a public result link; check upload status in $(relative_to_repository "${log_path}")"
+  printf '%s\n' "${result_url}" > "${log_path%.log}.url"
+  printf '\nGeekbench 6 CPU result: %s\n\n' "${result_url}"
+}
+
 main() {
   local verified_sources
   progress "starting bootstrap in ${repository_root}"
@@ -727,7 +797,10 @@ main() {
     fi
   done <<< "$verified_sources"
 
+  run_bootstrap_geekbench
   progress "bootstrap complete"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
