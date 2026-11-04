@@ -836,6 +836,7 @@ devnet_sanitize_build_log() {
   local line
   local root_prefix="${DEVNET_ROOT%/}/"
   local home_prefix=""
+  local home_redaction='[home]/'
   if [[ -n "${HOME:-}" ]]; then
     home_prefix="${HOME%/}/"
   fi
@@ -848,7 +849,8 @@ devnet_sanitize_build_log() {
     esac
     line="${line//"${root_prefix}"/}"
     if [[ -n "${home_prefix}" ]]; then
-      line="${line//"${home_prefix}"/"[home]/"}"
+      # Bash 3.2 on macOS preserves literal quotes in a quoted replacement.
+      line="${line//"${home_prefix}"/${home_redaction}}"
     fi
     printf '%s\n' "${line}"
   done

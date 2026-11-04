@@ -99,6 +99,10 @@ export function parsePipelineDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_pipeline (\{.*\})\s*$/);
 }
 
+export function parseDecodeParentDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_decode_parents (\{.*\})\s*$/);
+}
+
 export function parseSetupWorkerPlans(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_setup_workers (\{.*\})\s*$/)
     .map((plan) => ({ ...plan, source: "param-prewarm.stderr.log" }));
@@ -186,6 +190,7 @@ export function composeReport({
     groth16_parameters: measuredLog === null ? [] : parseParameterDiagnostics(measuredLog),
     encode_prehash: measuredLog === null ? [] : parseEncodePrehashDiagnostics(measuredLog),
     layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
+    decode_parent_reads: measuredLog === null ? [] : parseDecodeParentDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
@@ -341,6 +346,15 @@ export function renderPhaseMarkdown(report) {
       `Encode: affinity=${cpu.encode_affinity}, producers=${value(cpu.encode_producers)}, stride=${value(cpu.encode_stride)}, lookahead=${value(cpu.encode_lookahead)}. Parent cache=${cpu.parent_cache}, requested mmap window=${value(cpu.parent_cache_window_nodes)} nodes.`, "",
       `Cache policy: \`${JSON.stringify(cpu.cache_policy)}\`. DONTNEED is advisory; historical trees are retained and C1 rereads remain measured.`, "",
       "Actual binding/restoration and fallback diagnostics are in `cpu_diagnostics` in [`report.json`](./report.json) and [`stderr.log`](./stderr.log). Build features: [`cargo-features.txt`](./cargo-features.txt); SHA-NI eligibility alone does not establish the active backend.");
+  }
+  if (report.cpu_configuration?.decode || report.decode_parent_reads?.length) {
+    lines.push("", "## Raw unseal parent reader", "",
+      `Requested configuration: \`${JSON.stringify(report.cpu_configuration?.decode ?? null)}\`.`, "",
+      "| Event | Actual reader | Reversed | Readers | Owned buffers B | Positional read calls | Positional read B | New mappings | Remaps | Elapsed ms |",
+      "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+      ...(report.decode_parent_reads ?? []).map((entry) =>
+        `| ${entry.event} | ${entry.reader} | ${entry.reversed} | ${value(entry.layout?.readers)} | ${value(entry.layout?.buffer_bytes)} | ${value(entry.io?.read_calls)} | ${value(entry.io?.read_bytes)} | ${value(entry.mappings)} | ${value(entry.remaps)} | ${value(entry.elapsed_ns == null ? null : entry.elapsed_ns / 1e6)} |`), "",
+      "Open/validation time is nested in the first layer using that orientation; do not add these timers to raw_unseal. Positional read counters are logical bytes/syscalls, not physical disk traffic; mmap reads use page faults instead. File-backed page cache is additional to the bounded owned buffers. Source-open lock waits are in decode_parent_reads in report.json; CPU system time, faults and pressure remain in the enclosing phase telemetry. Legacy counters are unavailable, not zero. Encoder parent-buffer and DONTNEED settings do not configure this reader.");
   }
   if (report.prewarm_worker_plans?.length) {
     lines.push("", "## Parameter prewarm workers", "",

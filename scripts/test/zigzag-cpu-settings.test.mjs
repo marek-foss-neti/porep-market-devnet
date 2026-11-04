@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { composeReport, parseCpuDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -27,6 +27,8 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.RAYON_NUM_THREADS, "auto");
   assert.equal(env.EC_GPU_NUM_THREADS, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_PARAMETER_LOADER, "compact");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER, "legacy");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB, "64");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "legacy");
   assert.equal(env.FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "sequential");
   assert.equal(env.FIL_PROOFS_ZIGZAG_ENCODE_PREHASH, "0");
@@ -54,6 +56,8 @@ test("native variables and benchmark overrides reach explicit docker -e argument
     BENCH_ZIGZAG_ENCODE_STRIDE: "17", BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "2048",
     BENCH_ZIGZAG_USE_PARENT_CACHE: "0", BENCH_ZIGZAG_PARENT_BUFFER_NODES: "32768",
     BENCH_ZIGZAG_TREE_R_DONTNEED: "true",
+    FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER: "mmap", BENCH_ZIGZAG_DECODE_PARENT_READER: "buffered",
+    BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "8",
     FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "compact", BENCH_ZIGZAG_PARAMETER_LOADER: "mapped",
     BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4",
     FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", BENCH_ZIGZAG_TREE_R_BUILDER: "legacy",
@@ -71,6 +75,10 @@ test("native variables and benchmark overrides reach explicit docker -e argument
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144"));
   assert.equal(args[args.indexOf("MALLOC_ARENA_MAX=4") - 1], "-e");
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped"));
+  for (const setting of ["FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=buffered", "FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB=8"]) {
+    assert.ok(args.includes(setting));
+    assert.equal(args[args.indexOf(setting) - 1], "-e");
+  }
   assert.equal(args[args.indexOf("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped") - 1], "-e");
   for (const setting of ["RAYON_NUM_THREADS=6", "EC_GPU_NUM_THREADS=8", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY=0", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS=3", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE=17", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD=2048", "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0", "FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES=32768", "FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED=1"]) {
     assert.ok(args.includes(setting), setting);
@@ -98,6 +106,10 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_ENCODE_PRODUCERS: "129" },
     { BENCH_ZIGZAG_ENCODE_STRIDE: "-1" }, { BENCH_ZIGZAG_ENCODE_LOOKAHEAD: "1048576" },
     { BENCH_ZIGZAG_PARENT_BUFFER_NODES: "262145" },
+    { BENCH_ZIGZAG_DECODE_PARENT_READER: "" }, { BENCH_ZIGZAG_DECODE_PARENT_READER: "auto" },
+    { FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER: "invalid" },
+    { BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "" }, { BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "0" },
+    { BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "257" }, { BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "-1" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "107374182401" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "-1" },
@@ -133,6 +145,48 @@ test("layer pipeline selects independent overlap and stream variants with bounde
     assert.equal(env.FIL_PROOFS_ZIGZAG_SNAPSHOT_BUFFER_MIB, "1");
   }
   assert.equal(environment({ FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", FIL_PROOFS_ZIGZAG_LAYER_PIPELINE: "stream" }).FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "stream");
+});
+
+test("decode readers are independent from encoder cache settings", () => {
+  for (const reader of ["legacy", "buffered", "mmap"]) {
+    const env = environment({
+      FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER: reader,
+      FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "256",
+      BENCH_ZIGZAG_PARENT_BUFFER_NODES: "0",
+      BENCH_ZIGZAG_PARENT_CACHE_DONTNEED: "1",
+    });
+    assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER, reader);
+    assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB, "256");
+    assert.equal(env.FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES, "0");
+  }
+});
+
+test("raw unseal reports retain actual reader, bounded memory and nested open counters", () => {
+  const open = { event: "open", reader: "buffered", reversed: true, source_opens: 1, mappings: 0, remaps: 0, elapsed_ns: 1000000, locks: { process_lock_wait_ns: 50, file_lock_wait_ns: 70 } };
+  const layer = { event: "layer", reader: "buffered", reversed: true, elapsed_ns: 9000000, remaps: 0, layout: { readers: 96, buffer_bytes: 67108800 }, io: { read_calls: 800, read_bytes: 57344 } };
+  const graph = { event: "layer_start", reader: "graph", requested_reader: "mmap", reversed: false };
+  const log = [
+    `INFO storage_proofs_porep::zigzag::vanilla::decode_parents > zigzag_decode_parents ${JSON.stringify(open)}`,
+    JSON.stringify({ message: `zigzag_decode_parents ${JSON.stringify(layer)}` }),
+    `INFO zigzag_unseal zigzag_decode_parents ${JSON.stringify(graph)}`,
+    "INFO zigzag_decode_parents {invalid}",
+  ].join("\n");
+  const entries = parseDecodeParentDiagnostics(log);
+  assert.deepEqual(entries.map(({ source, line_number, ...entry }) => entry), [open, layer, graph]);
+  assert.deepEqual(entries.map((entry) => entry.line_number), [1, 2, 3]);
+  const telemetry = summarizeTelemetry(JSON.stringify({ schema_version: 1, sequence: 0, pid: 1, elapsed_ms: 0, timestamp_unix_ms: 1, sampling_interval_ms: 100, trigger: "session_start", phase: "startup", process: {}, cgroup: {}, disk: { paths: [] }, warnings: [] }));
+  const report = composeReport({ mode: "unseal-only", benchmark: {
+    cpu_configuration: { decode: { parent_reader: "buffered", parent_buffer_mib: 64 } },
+    phases: [{ name: "raw_unseal_retrieval", wall_ms: 10, cpu_ms: 30 }],
+  }, telemetry, provenance: { invocation: { outer_wall_ms: 10 } }, prewarm: null, prewarmTelemetry: null, measuredLog: log });
+  assert.deepEqual(report.decode_parent_reads, entries);
+  assert.equal(report.derived.sealing_wall_ms, null);
+  assert.equal(report.phases[0].wall_ms, 10);
+  const markdown = renderPhaseMarkdown(report);
+  assert.match(markdown, /## Raw unseal parent reader/);
+  assert.match(markdown, /67108800/);
+  assert.match(markdown, /Legacy counters are unavailable, not zero/);
+  assert.match(markdown, /do not add these timers to raw_unseal/);
 });
 
 test("96 and 128 worker settings pass through without enlarging snapshot buffers", () => {

@@ -39,6 +39,8 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_USE_PARENT_CACHE` | `FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE` | 1; boolean |
 | `BENCH_PARENT_CACHE_WINDOW_NODES` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE` | Existing mmap window; screen 2048/32768/262144 |
 | `BENCH_ZIGZAG_PARENT_BUFFER_NODES` | `FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES` | 0; 0–262144 per encode reader |
+| `BENCH_ZIGZAG_DECODE_PARENT_READER` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER` | `legacy`; `legacy`, `buffered`, `mmap`; [raw unseal readers](zigzag-decode-parents.md) |
+| `BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | 64; 1–256 MiB total owned parent buffers per decode, independent of encoder settings |
 | `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_BUILDER` | `FIL_PROOFS_ZIGZAG_TREE_R_BUILDER` | `legacy`; opt-in `binary`, see [bounded TreeR builder](zigzag-merkle-builder.md) for acceptance |

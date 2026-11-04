@@ -2969,6 +2969,7 @@ test("devnet build diagnostics redact absolute paths and omit container inventor
     `build start=test log=${repositoryRoot}/.runtime/devnet/logs/build-test.log`,
     `building image from verified context ${repositoryRoot}/.cache/sources/curio/commit`,
     `tool detail ${userHome}/outside-repository/private`,
+    `failed to connect to the docker API at unix://${userHome}/.docker/run/docker.sock`,
     "active containers before build:",
     "name=unrelated-service project=other status=Up image=private/image",
     "",
@@ -2992,6 +2993,8 @@ test("devnet build diagnostics redact absolute paths and omit container inventor
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /log=\.runtime\/devnet\/logs\/build-test\.log/);
   assert.match(result.stdout, /\.cache\/sources\/curio\/commit/);
+  assert.ok(result.stdout.includes("tool detail [home]/outside-repository/private\n"));
+  assert.ok(result.stdout.includes("failed to connect to the docker API at unix://[home]/.docker/run/docker.sock\n"));
   assert.doesNotMatch(result.stdout, new RegExp(repositoryRoot.replaceAll(".", "\\.")));
   assert.doesNotMatch(result.stdout, new RegExp(userHome.replaceAll(".", "\\.")));
   assert.doesNotMatch(result.stdout, /unrelated-service|private\/image|active containers/);

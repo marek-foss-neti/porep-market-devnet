@@ -146,6 +146,7 @@ struct FixtureSummary {
 #[derive(Debug, Serialize)]
 struct UnsealOnlySummary {
     schema_version: u8,
+    cpu_configuration: Option<serde_json::Value>,
     mode: &'static str,
     fixture_kind: String,
     backend: Backend,
@@ -269,6 +270,7 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "parent_cache": SETTINGS.use_zigzag_parent_cache,
         "parent_cache_window_nodes": SETTINGS.zigzag_parent_cache_size,
         "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
+        "decode": storage_proofs_porep_zigzag::zigzag::DecodeConfig::from_env()?,
         "encode_prehash": storage_proofs_porep_zigzag::zigzag::encode_prehash::EncodePrehash::from_env()?,
         "layer_pipeline": storage_proofs_porep_zigzag::zigzag::layer_pipeline::LayerPipelineConfig::from_env()?,
         "tree_r_builder": storage_proofs_porep_zigzag::zigzag::merkle_builder::TreeRBuilder::from_env()?,
@@ -1157,6 +1159,11 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
 
     Ok(UnsealOnlySummary {
         schema_version: 1,
+        cpu_configuration: if matches!(backend, Backend::ZigZag) {
+            Some(cpu_configuration(manifest.sector_size_bytes)?)
+        } else {
+            None
+        },
         mode: "unseal-only",
         fixture_kind: manifest.fixture_kind,
         backend,

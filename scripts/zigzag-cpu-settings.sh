@@ -45,6 +45,10 @@ zigzag_bench_cpu_environment() {
   value="${BENCH_ZIGZAG_PARAMETER_LOADER-${FIL_PROOFS_ZIGZAG_PARAMETER_LOADER-compact}}"
   case "${value}" in compact|mapped) ;; *) devnet_die "ZigZag parameter loader must be compact or mapped" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=%s\n' "${value}"
+  value="${BENCH_ZIGZAG_DECODE_PARENT_READER-${FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER-legacy}}"
+  case "${value}" in legacy|buffered|mmap) ;; *) devnet_die "ZigZag decode parent reader must be legacy, buffered or mmap" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=%s\n' "${value}"
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB "${BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB-${FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB-64}}" 1 256 || return
   value="${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy}}"
   case "${value}" in binary|legacy) ;; *) devnet_die "ZigZag TreeR builder must be binary or legacy" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=%s\n' "${value}"
