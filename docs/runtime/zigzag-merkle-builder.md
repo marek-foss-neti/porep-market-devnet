@@ -110,7 +110,7 @@ and total sealing. Do not infer a full-sealing speedup from fewer allocations
 or one hash loop. No phase-only benchmark command is introduced.
 
 The Rust implementation is committed and pinned in `versions.lock.yaml` at
-`f625c0984ba020a4a3b50de5770fee4f2d98bf12`. Fetch the managed sources and rebuild
+`755bfa589c63a5b867aa357595222a717322afd0`. Fetch the managed sources and rebuild
 both dedicated images to use this revision. Both build guards require the
 `TreeRBuilder` API; source/overlay digests identify the exact code used.
 The pinned [layer-pipeline integration](zigzag-layer-pipeline.md) additionally

@@ -229,7 +229,7 @@ On a CUDA-enabled machine, check the Rust/API configuration with
 before claiming a validated native build.
 
 Devnet pins the committed implementation at
-`f625c0984ba020a4a3b50de5770fee4f2d98bf12`, including direct query decoding
+`755bfa589c63a5b867aa357595222a717322afd0`, including direct query decoding
 into one initialized vector, cache recovery after panics and consistent Groth16
 circuit/batch boundaries. It also includes the optional per-C2 query adapter
 with corrected cgroup-v2 root-limit detection and circuit-preparation measurements;

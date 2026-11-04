@@ -57,9 +57,10 @@ I/O, not physical storage traffic; mmap traffic appears through faults/page cach
 Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
-After the manual Rust commit, repin devnet and rebuild its ZigZag image: the FFI
-overlay now uses the new Rust `DecodeConfig` API. An old image cannot exercise
-the new reader just by receiving its environment variables.
+Devnet pins the committed implementation at Rust revision
+`755bfa589c63a5b867aa357595222a717322afd0`. Fetch the managed sources and rebuild
+the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
+image cannot exercise the new reader just by receiving its environment variables.
 
 For a full 512 MiB comparison on a free remote machine:
 
