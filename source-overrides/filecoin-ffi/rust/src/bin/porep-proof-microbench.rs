@@ -295,7 +295,7 @@ impl Args {
                     )?);
                 }
                 "--help" | "-h" => {
-                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
+                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-8|zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
                     std::process::exit(0);
                 }
                 _ => bail!("unknown argument: {arg}"),
@@ -321,16 +321,25 @@ impl Args {
         let work_dir = work_dir.unwrap_or_else(default_work_dir);
         if let Some(ref name) = profile {
             ensure!(
-                name == zigzag_512_profile::NAME,
+                matches!(
+                    name.as_str(),
+                    zigzag_512_profile::NAME | zigzag_512_profile::DEV_NAME
+                ),
                 "unknown benchmark profile: {name}"
             );
             ensure!(
-                backend == Backend::ZigZag && sector_size_bytes == SECTOR_SIZE_512_MIB,
-                "zigzag-512 requires the ZigZag backend and 512mib sector size"
+                backend == Backend::ZigZag
+                    && sector_size_bytes
+                        == if name == zigzag_512_profile::DEV_NAME {
+                            SECTOR_SIZE_8_MIB
+                        } else {
+                            SECTOR_SIZE_512_MIB
+                        },
+                "{name} requires the ZigZag backend and matching sector size"
             );
             ensure!(
                 matches!(mode, Mode::Full | Mode::PrewarmOnly),
-                "zigzag-512 supports only full and prewarm-only modes"
+                "{name} supports only full and prewarm-only modes"
             );
         }
         Ok(Self {
@@ -363,7 +372,7 @@ fn configure_microbench_layers(args: &Args) -> Result<()> {
     if args.profile.is_some() {
         ensure!(
             raw_layers.is_empty(),
-            "zigzag-512 has fixed layers; remove {MICROBENCH_LAYERS_ENV}"
+            "ZigZag benchmark profiles have fixed layers; remove {MICROBENCH_LAYERS_ENV}"
         );
         return Ok(());
     }
@@ -487,7 +496,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
     if let Some(ref profile) = profile {
         ensure!(
             profile.parameter_cache_identifier == prewarm.cache_identifier,
-            "zigzag-512 prewarm cache identifier differs from effective setup"
+            "ZigZag profile prewarm cache identifier differs from effective setup"
         );
     }
     let summary = ParamPrewarmSummary {
@@ -1244,8 +1253,8 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
     })?;
     if profile.is_some() {
         ensure!(
-            commit.proof.len() == 10 * 192,
-            "zigzag-512 must prove all ten partitions"
+            commit.proof.len() == porep_partitions * 192,
+            "ZigZag profile must prove all configured partitions"
         );
     }
 
@@ -1304,8 +1313,12 @@ fn run_zigzag(args: &Args) -> Result<BenchmarkSummary> {
 }
 
 fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zigzag::PoRepConfig {
-    if args.profile.is_some() {
-        return zigzag_512_profile::config();
+    if let Some(name) = args.profile.as_deref() {
+        return if name == zigzag_512_profile::DEV_NAME {
+            zigzag_512_profile::config_8mib()
+        } else {
+            zigzag_512_profile::config()
+        };
     }
     zigzag::PoRepConfig::new_groth16(
         args.sector_size_bytes,

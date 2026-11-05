@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`b1cec2213b8132adc6164ccb5a289c35e279eadf`. This revision includes
+`fc8ae8fb1f7314da9baaf148ce0b31aef203fc70`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -24,7 +24,9 @@ Query retention defaults to off in Rust, the general runner and Curio.
 The shared `just bench-zigzag-512` / `just bench-zigzag-32g`
 [comparison preset](zigzag-512-baseline.md) enables 20 GiB query cache, binary
 TreeR with stream snapshots and encode prehash. It uses automatic TreeR/setup
-workers and a 64 MiB snapshot buffer.
+workers and a 64 MiB snapshot buffer. The pin also provides the benchmark-only
+[8 MiB development profile](zigzag-benchmarks.md#8-mib-development-profile),
+with 17 layers, 2 partitions and 2 challenges per layer per partition.
 The current pin also includes [automatic parameter prewarm](zigzag-auto-prewarm.md)
 and increases ZigZag TreeR/setup worker limits to 128. Auto setup selects H and
 query concurrency using CPU and memory headroom; it does not autotune encoder

@@ -75,6 +75,9 @@ bench-proof-micro backend='stacked' sector_size='8mib':
 bench-zigzag-512:
     @bash scripts/bench-zigzag-512.sh
 
+bench-zigzag-8:
+    @bash scripts/bench-zigzag.sh 8mib
+
 bench-zigzag-32g:
     @bash scripts/bench-zigzag.sh 32gib
 

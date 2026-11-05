@@ -1,4 +1,4 @@
-//! Exact, benchmark-only 512 MiB geometry with the 32 GiB ZigZag proof budget.
+//! Fixed benchmark profiles: 512 MiB comparison and 8 MiB development.
 
 use anyhow::{ensure, Result};
 use filecoin_proofs_api::RegisteredSealProof;
@@ -8,6 +8,7 @@ use storage_proofs_core_zigzag::{api_version::ApiVersion, parameter_cache::Cache
 use storage_proofs_porep_zigzag::zigzag::circuit::{ZigZagCircuit, ZigZagCompound};
 
 pub const NAME: &str = zigzag::zigzag_bench::NAME;
+pub const DEV_NAME: &str = zigzag::zigzag_bench::DEV_NAME;
 
 #[derive(Debug, Serialize)]
 pub struct EffectiveProfile {
@@ -38,6 +39,10 @@ pub fn config() -> zigzag::PoRepConfig {
     zigzag::zigzag_bench::config(porep_id, ApiVersion::V1_2_0)
 }
 
+pub fn config_8mib() -> zigzag::PoRepConfig {
+    zigzag::zigzag_bench::config_8mib(config().porep_id, ApiVersion::V1_2_0)
+}
+
 pub fn effective(
     name: Option<&str>,
     registered_proof: RegisteredSealProof,
@@ -45,12 +50,39 @@ pub fn effective(
     if name.is_none() {
         return Ok(None);
     }
-    ensure!(name == Some(NAME), "unexpected ZigZag profile");
+    let (
+        name,
+        config,
+        expected_proof,
+        sector_bytes,
+        expected_partitions,
+        minimum,
+        expected_challenges,
+    ) = match name {
+        Some(NAME) => (
+            NAME,
+            config(),
+            RegisteredSealProof::StackedDrg512MiBV1_1,
+            1u64 << 29,
+            10,
+            176,
+            18,
+        ),
+        Some(DEV_NAME) => (
+            DEV_NAME,
+            config_8mib(),
+            RegisteredSealProof::StackedDrg8MiBV1_1,
+            1u64 << 23,
+            2,
+            4,
+            2,
+        ),
+        _ => anyhow::bail!("unexpected ZigZag profile"),
+    };
     ensure!(
-        registered_proof == RegisteredSealProof::StackedDrg512MiBV1_1,
-        "zigzag-512 requires the 512 MiB registered sector geometry"
+        registered_proof == expected_proof,
+        "{name} has the wrong registered sector geometry"
     );
-    let config = config();
     let setup = zigzag::parameters::zigzag_setup_params(&config)?;
     let reference = zigzag::PoRepConfig::new_groth16(1 << 35, config.porep_id, config.api_version);
     let reference_setup = zigzag::parameters::zigzag_setup_params(&reference)?;
@@ -60,24 +92,21 @@ pub fn effective(
     let layers = setup.layer_challenges.layers();
     let challenges = setup.layer_challenges.challenges_for_layer(0);
     ensure!(
-        u64::from(config.sector_size) == 1 << 29,
+        u64::from(config.sector_size) == sector_bytes,
         "wrong sector geometry"
     );
     ensure!(
-        setup.nodes == 1 << 24 && setup.nodes.is_power_of_two(),
+        setup.nodes == (sector_bytes / 32) as usize && setup.nodes.is_power_of_two(),
         "wrong graph geometry"
     );
     ensure!(
-        layers == 17 && partitions == 10 && config.minimum_challenges() == 176,
+        layers == 17 && partitions == expected_partitions && config.minimum_challenges() == minimum,
         "wrong ZigZag proof budget"
     );
     ensure!(
-        (0..layers).all(|layer| setup.layer_challenges.challenges_for_layer(layer) == 18),
+        (0..layers)
+            .all(|layer| setup.layer_challenges.challenges_for_layer(layer) == expected_challenges),
         "wrong challenges in ZigZag layer"
-    );
-    ensure!(
-        challenges == 18 && layers * partitions * challenges == 3060,
-        "wrong total challenge instances"
     );
     ensure!(setup.porep_id == config.porep_id, "wrong PoRep identifier");
     ensure!(
@@ -85,10 +114,11 @@ pub fn effective(
             && setup.expansion_degree == reference_setup.expansion_degree
             && setup.porep_id == reference_setup.porep_id
             && setup.api_version == reference_setup.api_version
-            && challenges == reference_setup.layer_challenges.challenges_for_layer(0)
-            && config.partitions.0 == reference.partitions.0
-            && config.minimum_challenges() == reference.minimum_challenges(),
-        "zigzag-512 differs from the 32 GiB reference beyond sector geometry and benchmark layers"
+            && (name == DEV_NAME
+                || (challenges == reference_setup.layer_challenges.challenges_for_layer(0)
+                    && config.partitions.0 == reference.partitions.0
+                    && config.minimum_challenges() == reference.minimum_challenges())),
+        "ZigZag profile differs from its reference setup"
     );
     let cache_identifier = <ZigZagCompound<
         zigzag::constants::ZigZagTree,
@@ -98,7 +128,7 @@ pub fn effective(
         _,
     >>::cache_identifier(&public);
     Ok(Some(EffectiveProfile {
-        name: NAME,
+        name,
         padded_sector_bytes: u64::from(config.sector_size),
         nodes: setup.nodes,
         binary_tree_depth: setup.nodes.trailing_zeros(),
@@ -121,4 +151,28 @@ pub fn effective(
         ticket_hex: "07".repeat(32),
         seed_hex: "ff".repeat(32),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_profile_uses_distinct_parameters_and_rejects_wrong_geometry() {
+        let dev = effective(Some(DEV_NAME), RegisteredSealProof::StackedDrg8MiBV1_1)
+            .unwrap()
+            .unwrap();
+        let comparison = effective(Some(NAME), RegisteredSealProof::StackedDrg512MiBV1_1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(dev.total_challenge_instances, 68);
+        assert_eq!(dev.layers, comparison.layers);
+        assert_eq!(dev.partitions, 2);
+        assert_ne!(
+            dev.parameter_cache_identifier,
+            comparison.parameter_cache_identifier
+        );
+        assert!(effective(Some(DEV_NAME), RegisteredSealProof::StackedDrg512MiBV1_1).is_err());
+        assert!(effective(Some(NAME), RegisteredSealProof::StackedDrg8MiBV1_1).is_err());
+    }
 }

@@ -1,7 +1,8 @@
 # Shared ZigZag benchmark commands
 
-Use the small sector for development iterations and the larger sector to check
-behavior at production size. Run benchmarks only on the remote machine.
+Use 512 MiB for comparative development measurements and 32 GiB to check
+behavior at production size. Run these benchmarks only on the remote machine.
+For lightweight local development, use the separate 8 MiB profile below.
 
 ```sh
 just bench-zigzag-512
@@ -95,3 +96,48 @@ more useful, but a 512 MiB speedup does not predict the same speedup at 32 GiB.
 The larger run is needed to assess page-cache pressure, random reads, disk
 writeback and the memory limit. This command is still a standalone benchmark;
 it does not validate Curio scheduling or concurrent production workloads.
+
+## 8 MiB development profile
+
+```sh
+just bench-zigzag-8
+```
+
+This runs the same full prewarm / PC1 / PC2 / vanilla C1 / Groth16 C2 / verify /
+raw unseal workflow in the dedicated ZigZag image. It keeps 17 layers and the
+optimization settings of the larger commands, including prehash, binary TreeR,
+stream snapshots, automatic TreeR/prewarm workers, compact parameters and
+Groth16 batch size 1. Two partitions exercise multiple C2 batches.
+
+| Property | Development value |
+| --- | --- |
+| Padded sector / nodes / binary Merkle depth | 8 MiB / 2^18 / 18 |
+| Layers / partitions | 17 / 2 |
+| Minimum challenges / challenges per layer per partition | 4 / 2 |
+| Total challenge instances / proof bytes | 68 / 384 |
+| Prewarm RAM limit / setup allocation budget | 12 GiB / 10 GiB |
+| Full-run RAM limit | 13 GiB: 12 GiB base + 1 GiB query cache |
+| Parameter directory | `.cache/zigzag-8-parameters` |
+| Parameter-directory override | `BENCH_ZIGZAG_8_PARAMETER_DIR` |
+
+The profile is fixed and benchmark-only (`zigzag-bench` feature). Registered
+proof configurations, SDR, and the 512 MiB / 32 GiB presets are unchanged.
+This small challenge budget tests correctness and development changes; it is
+not a production security configuration or a reliable predictor of 32 GiB speed.
+Full proofs must verify, and the entire unsealed payload must match the input.
+The runner rejects reports with a different proof budget or geometry.
+
+The devnet lock pins the Rust revision that provides `zigzag_bench::config_8mib`.
+Rebuild with `just build`, which fetches the pinned sources first. An old image
+does not support `--profile zigzag-8`. On an ARM Mac,
+use the native Linux ARM64 image. Give Docker's VM headroom above the 13 GiB
+container limit (for example 16 GiB); actual peak RAM and runtime still need
+measurement. These limits are initial budgets, not measured requirements.
+
+Parameters are reused automatically on subsequent runs. Parent tables may be
+reused via `BENCH_ZIGZAG_PARENT_CACHE_DIR` from a previous matching 8 MiB run;
+32 GiB / 512 MiB tables and Groth16 parameters are not interchangeable with this
+profile. Reports remain JSON and Markdown under `.runtime/runs/`, with aggregate
+directories ending in `zigzag-8-baseline`. The standard `BENCH_*` optimization
+overrides still apply. Raw unseal retains the current default parent reader;
+select `BENCH_ZIGZAG_DECODE_PARENT_READER=buffered` explicitly to test the new reader.

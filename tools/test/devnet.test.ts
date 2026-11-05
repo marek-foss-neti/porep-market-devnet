@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "755bfa589c63a5b867aa357595222a717322afd0";
+const rustFilProofsSourceCommit = "fc8ae8fb1f7314da9baaf148ce0b31aef203fc70";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -844,8 +844,9 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
 });
 
 for (const preset of [
-  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [] },
-  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"] },
+  { name: "zigzag-8", sector: "8mib", bytes: 8388608, nativeProfile: "zigzag-8", script: "bench-zigzag.sh", args: ["8mib"], partitions: 2, minimum: 4, challenges: 2, memory: 12884901888, cache: 1073741824, setup: 10737418240, parameterEnv: "BENCH_ZIGZAG_8_PARAMETER_DIR" },
+  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [], partitions: 10, minimum: 176, challenges: 18, memory: 107374182400, cache: 21474836480, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_512_PARAMETER_DIR" },
+  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"], partitions: 10, minimum: 176, challenges: 18, memory: 107374182400, cache: 21474836480, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_32G_PARAMETER_DIR" },
 ]) test(`${preset.name} baseline passes the shared preset and overrides and validates geometry and image revision`, async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
@@ -875,14 +876,15 @@ fi
 [[ "$BENCH_ZIGZAG_LAYER_PIPELINE" == "\${DEVNET_TEST_EXPECTED_LAYER_PIPELINE:-stream}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_THREADS" == "auto" ]] || exit 98
 [[ "$BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB" == "64" ]] || exit 98
-[[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-107374182400}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_FULL_MEMORY_BYTES" == "\${DEVNET_TEST_EXPECTED_MEMORY_BYTES:-${preset.memory}}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_SETUP_BUDGET_BYTES" == "${preset.setup}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARENT_BUFFER_NODES" == "\${DEVNET_TEST_EXPECTED_PARENT_BUFFER_NODES:-32768}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARENT_CACHE_DONTNEED" == "\${DEVNET_TEST_EXPECTED_PARENT_CACHE_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_DONTNEED" == "\${DEVNET_TEST_EXPECTED_TREE_R_DONTNEED:-1}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_MALLOC_ARENA_MAX" == "\${DEVNET_TEST_EXPECTED_MALLOC_ARENA_MAX:-4}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_PARAMETER_LOADER" == "\${DEVNET_TEST_EXPECTED_PARAMETER_LOADER:-compact}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_TREE_R_BUILDER" == "\${DEVNET_TEST_EXPECTED_TREE_R_BUILDER:-binary}" ]] || exit 98
-[[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-21474836480}" ]] || exit 98
+[[ "$BENCH_ZIGZAG_QUERY_CACHE_BYTES" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_BYTES:-${preset.cache}}" ]] || exit 98
 [[ "\${BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES-}" == "\${DEVNET_TEST_EXPECTED_QUERY_CACHE_RESERVE_BYTES-}" ]] || exit 98
 [[ "$BENCH_ZIGZAG_GROTH16_BATCH_SIZE" == "\${DEVNET_TEST_EXPECTED_GROTH16_BATCH_SIZE:-1}" ]] || exit 98
 run_dir="$(mktemp -d "$DEVNET_TEST_ROOT/.runtime/runs/mock-XXXXXX")"
@@ -896,13 +898,13 @@ jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_di
   --arg backend "\${DEVNET_TEST_REPORTED_BACKEND:-zig-zag}" \\
   --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
   {backend: $backend, sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
-   porep_layers: $layers, porep_partitions: 10, minimum_total_challenges: 176,
-   challenges_per_layer_per_partition: 18, registered_seal_proof_id: 8,
-   profile: ${preset.nativeProfile ? '{total_challenge_instances: 3060}' : 'null'}} as $geometry |
+   porep_layers: $layers, porep_partitions: ${preset.partitions}, minimum_total_challenges: ${preset.minimum},
+   challenges_per_layer_per_partition: ${preset.challenges}, registered_seal_proof_id: 8,
+   profile: ${preset.nativeProfile ? `{total_challenge_instances: ${17 * preset.partitions * preset.challenges}}` : 'null'}} as $geometry |
   {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit, rust_fil_proofs_source_sha256: $sourceSha},
      image_manifest_path: $manifest, image_manifest_sha256: $manifestSha, image: {reference: $image, id: $imageId}}},
    prewarm: ($geometry + {verifying_key_matches_params: true}),
-   benchmark: ($geometry + {verify_seal: true, raw_unseal_bytes_match: true, proof_len: 1920,
+   benchmark: ($geometry + {verify_seal: true, raw_unseal_bytes_match: true, proof_len: ${preset.partitions * 192},
      unsealed_bytes: ${preset.bytes / 128 * 127}})}
 ' > "$run_dir/report.json"
 printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
@@ -938,13 +940,14 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     assert.equal(baseline.completed_runs, 1);
     assert.equal(baseline.command, `just bench-${preset.name}`);
     assert.equal(baseline.runs[0].sector_size_bytes, preset.bytes);
-    assert.equal(baseline.runs[0].total_challenge_instances, 3060);
+    assert.equal(baseline.runs[0].total_challenge_instances, 17 * preset.partitions * preset.challenges);
+    assert.equal(baseline.runs[0].proof_bytes, preset.partitions * 192);
     assert.equal(baseline.runs[0].porep_layers, 17);
     const staleDefault = run(commit, { DEVNET_TEST_REPORTED_LAYERS: "11" });
     assert.notEqual(staleDefault.status, 0);
     assert.match(staleDefault.stderr, /proof geometry or correctness validation failed/);
     const reuse = run(commit, {
-      [preset.sector === "512mib" ? "BENCH_ZIGZAG_512_PARAMETER_DIR" : "BENCH_ZIGZAG_32G_PARAMETER_DIR"]: join(fixture.root, "prepared-parameters"),
+      [preset.parameterEnv]: join(fixture.root, "prepared-parameters"),
       BENCH_ZIGZAG_PARENT_CACHE_DIR: join(fixture.root, "prepared-parents"),
       DEVNET_TEST_EXPECTED_PARAMETER_DIR: join(fixture.root, "prepared-parameters"),
       DEVNET_TEST_EXPECTED_PARENT_DIR: join(fixture.root, "prepared-parents"),

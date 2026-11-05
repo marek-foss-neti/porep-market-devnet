@@ -2,11 +2,29 @@
 set -euo pipefail
 source "$(cd -L "$(dirname "${BASH_SOURCE[0]}")" && pwd -L)/devnet-common.sh"
 
-# Both entry points use this single comparison preset. Only sector geometry,
-# native profile selection and cache namespaces differ.
+# Share optimization settings; the 8 MiB development profile has a smaller
+# proof and memory budget than the 512 MiB / 32 GiB comparison profiles.
 sector_size="${1:-}"
-[[ "$#" == 1 ]] || devnet_die "usage: bench-zigzag.sh 512mib|32gib"
+[[ "$#" == 1 ]] || devnet_die "usage: bench-zigzag.sh 8mib|512mib|32gib"
+partitions=10
+minimum_challenges=176
+challenges=18
+default_memory_bytes=107374182400
+default_query_cache_bytes=21474836480
+default_setup_budget_bytes=42949672960
 case "${sector_size}" in
+  8mib)
+    baseline_profile=zigzag-8
+    microbench_profile=zigzag-8
+    sector_bytes=8388608
+    partitions=2
+    minimum_challenges=4
+    challenges=2
+    default_memory_bytes=12884901888
+    default_query_cache_bytes=1073741824
+    default_setup_budget_bytes=10737418240
+    parameter_dir="${BENCH_ZIGZAG_8_PARAMETER_DIR:-${DEVNET_ROOT}/.cache/zigzag-8-parameters}"
+    ;;
   512mib)
     baseline_profile=zigzag-512
     microbench_profile=zigzag-512
@@ -21,7 +39,7 @@ case "${sector_size}" in
     sector_bytes=34359738368
     parameter_dir="${BENCH_ZIGZAG_32G_PARAMETER_DIR:-${DEVNET_ROOT}/.cache/zigzag-32g-parameters}"
     ;;
-  *) devnet_die "unsupported ZigZag comparison sector: ${sector_size}; expected 512mib or 32gib" ;;
+  *) devnet_die "unsupported ZigZag benchmark sector: ${sector_size}; expected 8mib, 512mib or 32gib" ;;
 esac
 layers=17
 if [[ "${sector_size}" == 32gib ]]; then
@@ -101,9 +119,10 @@ for repetition in 1; do
     BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB="${BENCH_ZIGZAG_SNAPSHOT_BUFFER_MIB-64}" \
     BENCH_ZIGZAG_MALLOC_ARENA_MAX="${BENCH_ZIGZAG_MALLOC_ARENA_MAX-4}" \
     BENCH_ZIGZAG_PARAMETER_LOADER="${BENCH_ZIGZAG_PARAMETER_LOADER-compact}" \
-    BENCH_ZIGZAG_QUERY_CACHE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_BYTES-21474836480}" \
+    BENCH_ZIGZAG_QUERY_CACHE_BYTES="${BENCH_ZIGZAG_QUERY_CACHE_BYTES-${default_query_cache_bytes}}" \
     BENCH_ZIGZAG_GROTH16_BATCH_SIZE="${BENCH_ZIGZAG_GROTH16_BATCH_SIZE:-1}" \
-    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-107374182400}" \
+    BENCH_ZIGZAG_FULL_MEMORY_BYTES="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-${default_memory_bytes}}" \
+    BENCH_ZIGZAG_SETUP_BUDGET_BYTES="${BENCH_ZIGZAG_SETUP_BUDGET_BYTES:-${default_setup_budget_bytes}}" \
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \
     BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1 \
@@ -133,17 +152,18 @@ for repetition in 1; do
   # Rust serializes Backend::ZigZag with serde kebab-case as "zig-zag";
   # the CLI selector is "zigzag", but that is not the report's backend value.
   jq -e --arg sector "${sector_size}" --argjson bytes "${sector_bytes}" \
+    --argjson partitions "${partitions}" --argjson minimum "${minimum_challenges}" --argjson challenges "${challenges}" \
     --argjson unsealed "${unsealed_bytes}" --argjson layers "${layers}" '
     def geometry:
       .backend == "zig-zag" and .sector_size_label == $sector and .sector_size_bytes == $bytes
-      and .porep_layers == $layers and .porep_partitions == 10
-      and .minimum_total_challenges == 176 and .challenges_per_layer_per_partition == 18;
+      and .porep_layers == $layers and .porep_partitions == $partitions
+      and .minimum_total_challenges == $minimum and .challenges_per_layer_per_partition == $challenges;
     (.benchmark | geometry) and (.prewarm | geometry)
     and .benchmark.profile == .prewarm.profile
     and .benchmark.registered_seal_proof_id == .prewarm.registered_seal_proof_id
     and .prewarm.verifying_key_matches_params == true
     and .benchmark.verify_seal == true and .benchmark.raw_unseal_bytes_match == true
-    and .benchmark.proof_len == 1920 and .benchmark.unsealed_bytes == $unsealed
+    and .benchmark.proof_len == ($partitions * 192) and .benchmark.unsealed_bytes == $unsealed
   ' "${report}" >/dev/null || devnet_die "${baseline_profile} proof geometry or correctness validation failed"
   reports+=("${report}")
 done
@@ -185,7 +205,8 @@ jq -s \
     }]
   }
 ' "${reports[@]}" > "${baseline_dir}/baseline.json"
-jq -e --argjson layers "${layers}" '.completed_runs == 1 and all(.runs[]; .verified and .byte_match and .proof_bytes == 1920 and .total_challenge_instances == ($layers * 180))' \
+jq -e --argjson layers "${layers}" --argjson partitions "${partitions}" --argjson challenges "${challenges}" \
+  '.completed_runs == 1 and all(.runs[]; .verified and .byte_match and .proof_bytes == ($partitions * 192) and .total_challenge_instances == ($layers * $partitions * $challenges))' \
   "${baseline_dir}/baseline.json" >/dev/null || devnet_die "${baseline_profile} baseline validation failed"
 df -Pk "${DEVNET_ROOT}" "${parameter_dir}" "${parent_dir}" > "${baseline_dir}/filesystems-after.txt"
 printf '%s baseline: %s\n' "${baseline_profile}" "${baseline_dir}/baseline.json"

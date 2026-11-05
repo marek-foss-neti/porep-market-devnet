@@ -201,7 +201,19 @@ ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
 
-For development and production-size acceptance with the same ZigZag settings:
+For a lightweight local development cycle with 17 layers, 2 partitions and
+2 challenges per layer per partition:
+
+```sh
+just bench-zigzag-8
+```
+
+This 8 MiB profile uses the same optimization preset with a smaller proof budget,
+12 GiB prewarm limit and 13 GiB full-run limit including 1 GiB query cache.
+It requires the Rust `zigzag_bench::config_8mib` API in the pinned dependency and
+a rebuilt image. See [the development profile](docs/runtime/zigzag-benchmarks.md#8-mib-development-profile).
+
+For comparative development measurements and production-size acceptance:
 
 ```sh
 just bench-zigzag-512
@@ -211,8 +223,8 @@ just bench-zigzag-32g
 Run these sequentially on the remote machine. Both commands use the same
 comparison preset and dedicated image, run one full seal/prove/verify/unseal
 cycle, and default to prehash, binary TreeR with stream snapshots, automatic
-TreeR/prewarm workers, a 64 MiB snapshot buffer and 10 GiB query cache. RAM is
-60 GiB for the measured run (50 GiB base plus cache) and 50 GiB for prewarm.
+TreeR/prewarm workers, a 64 MiB snapshot buffer and 20 GiB query cache. RAM is
+120 GiB for the measured run (100 GiB base plus cache) and 100 GiB for prewarm.
 They differ in sector geometry and parameter-cache namespace. See
 [the shared benchmark commands](docs/runtime/zigzag-benchmarks.md) for cache
 reuse, overrides and the limits of extrapolating from 512 MiB to 32 GiB.
@@ -362,17 +374,15 @@ parameters, parent cache, and ZigZag sidecars, counting each configured path
 once. The prewarm process has a separate telemetry stream and is not folded
 into the measured sealing process.
 
-ZigZag benchmarks use a 50 GiB base RAM budget. Full runs add requested query
-cache on top: `BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512`
-uses 54 GiB for the measured container and 50 GiB for prewarm, with no extra
-swap. This also applies to 32 GiB sectors. The cache reserve follows the base;
-an explicit mismatched reserve is rejected. The current loader permits at most
-60 GiB base plus cache (10 GiB cache at the default base). See the
-[query-cache policy](docs/runtime/zigzag-query-cache.md). SDR and Curio service
-limits are unchanged. The shared `bench-zigzag-512` and `bench-zigzag-32g`
-preset requests 10 GiB cache by default, giving a 60 GiB full-run limit;
-`BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables it. The general runner defaults to
-cache off.
+The general ZigZag microbenchmark runner defaults to 50 GiB base RAM and cache
+off. The `bench-zigzag-512` and `bench-zigzag-32g` presets select 100 GiB base
+plus 20 GiB query cache; `bench-zigzag-8` selects 12 GiB plus 1 GiB. Full runs
+add query cache on top of the base; prewarm receives only the base, with no
+extra swap. The cache reserve follows the base; an explicit mismatched reserve
+is rejected. The loader permits at most 120 GiB base plus cache. See the
+[query-cache policy](docs/runtime/zigzag-query-cache.md).
+`BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables query cache. SDR and Curio service
+limits are unchanged.
 
 Each successful run publishes:
 

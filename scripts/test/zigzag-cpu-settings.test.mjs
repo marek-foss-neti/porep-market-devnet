@@ -269,7 +269,7 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
   const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; run_dir="$2"; sector_size="$3"; mode="$4"; backend="$5"; docker_common_args=(--user 1); ' + source.slice(start, end) +
     '\nprintf "%s\\0" MEASURED ${benchmark_limit_args[@]+"${benchmark_limit_args[@]}"} PREWARM ${prewarm_limit_args[@]+"${prewarm_limit_args[@]}"} COMMON "${docker_common_args[@]}" ${zigzag_setup_args[@]+"${zigzag_setup_args[@]}"}';
   const run = (sector, mode, backend, env = {}) => shell(code, env, [temporary, sector, mode, backend]);
-  function assertLimits(result, measured, prewarm = measured, extra = "0") {
+  function assertLimits(result, measured, prewarm = measured, extra = "0", setup = "42949672960") {
     assert.equal(result.status, 0, result.stderr);
     const args = result.stdout.split("\0").filter(Boolean);
     const measuredArgs = args.slice(1, args.indexOf("PREWARM"));
@@ -277,7 +277,7 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     assert.deepEqual(measuredArgs, ["--memory", measured, "--memory-swap", measured]);
     assert.deepEqual(prewarmArgs, ["--memory", prewarm, "--memory-swap", prewarm]);
     assert.ok(!args.slice(args.indexOf("COMMON") + 1).includes("--memory"));
-    assert.ok(args.includes("FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=42949672960"));
+    assert.ok(args.includes(`FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=${setup}`));
     assert.deepEqual(JSON.parse(readFileSync(join(temporary, "memory-budget.json"), "utf8")), {
       policy: "base-plus-query-cache", base_memory_bytes: Number(prewarm), query_cache_extra_bytes: Number(extra),
       measured_memory_limit_bytes: Number(measured), prewarm_memory_limit_bytes: Number(prewarm),
@@ -352,10 +352,67 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
       assertLimits(run(sector, "full", "zigzag", { ...preset, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "0" }), "107374182400");
       assert.notEqual(run(sector, "full", "zigzag", { ...preset, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "21474836481" }).status, 0);
     }
+    const development = assertLimits(run("8mib", "full", "zigzag", {
+      BENCH_ZIGZAG_FULL_MEMORY_BYTES: "12884901888", BENCH_ZIGZAG_QUERY_CACHE_BYTES: "1073741824",
+      BENCH_ZIGZAG_SETUP_BUDGET_BYTES: "10737418240",
+    }), "13958643712", "12884901888", "1073741824", "10737418240");
+    assert.ok(development.includes("FIL_PROOFS_ZIGZAG_SETUP_WORKERS=auto"));
+    assert.ok(development.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=12884901888"));
     // The real launch sites must use the same arrays exercised above.
     const launches = source.match(/(?:if )?docker run [\s\S]*?porep-proof-microbench/g) ?? [];
     assert.ok(launches.some((launch) => launch.includes('${benchmark_limit_args[@]+')));
     assert.equal((source.match(/\$\{prewarm_limit_args\[@\]\+/g) ?? []).length, 3);
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
+});
+
+test("fixed benchmark profiles reject stale proof budgets and incomplete unsealing", () => {
+  const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
+  const geometryStart = source.indexOf('bench_profile="');
+  const geometryEnd = source.indexOf('\nprofile_args=()', geometryStart);
+  const prewarmStart = source.indexOf('if [[ -n "${bench_profile}" ]]; then\n  jq -e --arg name');
+  const prewarmEnd = source.indexOf('\n\nif [[ "${mode}" == "prewarm-only" ]]', prewarmStart);
+  const resultStart = source.indexOf("jq -e '.verify_seal == true and .raw_unseal_bytes_match == true'");
+  const resultEnd = source.indexOf('\nif [[ "${backend}" == "zigzag" ]]', resultStart);
+  assert.ok(geometryStart > 0 && geometryEnd > geometryStart);
+  assert.ok(prewarmStart > 0 && prewarmEnd > prewarmStart);
+  assert.ok(resultStart > 0 && resultEnd > resultStart);
+  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; ' +
+    source.slice(geometryStart, geometryEnd) + '\n' + source.slice(prewarmStart, prewarmEnd) + '\n' + source.slice(resultStart, resultEnd);
+  const temporary = mkdtempSync(join(tmpdir(), "zigzag-profile-validation-"));
+  try {
+    for (const dev of [true, false]) {
+      const profile = {
+        name: dev ? "zigzag-8" : "zigzag-512", padded_sector_bytes: dev ? 8388608 : 536870912,
+        nodes: dev ? 262144 : 16777216, binary_tree_depth: dev ? 18 : 24, layers: 17,
+        partitions: dev ? 2 : 10, minimum_challenges: dev ? 4 : 176,
+        challenges_per_layer_per_partition: dev ? 2 : 18, total_challenge_instances: dev ? 68 : 3060,
+      };
+      const env = { BENCH_PROOF_MICRO_PROFILE: profile.name, backend: "zigzag", sector_size: dev ? "8mib" : "512mib", mode: "full",
+        prewarm_summary_json: join(temporary, "prewarm.json"), summary_json: join(temporary, "summary.json") };
+      const prewarm = { profile, verifying_key_matches_params: true };
+      const summary = { profile, porep_layers: 17, porep_partitions: profile.partitions,
+        minimum_total_challenges: profile.minimum_challenges, challenges_per_layer_per_partition: profile.challenges_per_layer_per_partition,
+        proof_len: profile.partitions * 192, unsealed_bytes: profile.padded_sector_bytes / 128 * 127,
+        verify_seal: true, raw_unseal_bytes_match: true };
+      const run = (warm = prewarm, measured = summary, overrides = {}) => {
+        writeFileSync(env.prewarm_summary_json, JSON.stringify(warm));
+        writeFileSync(env.summary_json, JSON.stringify(measured));
+        return shell(code, { ...env, ...overrides });
+      };
+      const valid = run();
+      assert.equal(valid.status, 0, valid.stderr);
+      for (const change of [{ partitions: 1 }, { minimum_challenges: 2 }, { challenges_per_layer_per_partition: 1 }, { layers: 2 }]) {
+        const stale = run({ ...prewarm, profile: { ...profile, ...change } });
+        assert.notEqual(stale.status, 0);
+        assert.match(stale.stderr, /prewarm used wrong parameters/);
+      }
+      for (const change of [{ porep_partitions: 1 }, { proof_len: 192 }, { unsealed_bytes: summary.unsealed_bytes - 1 }, { raw_unseal_bytes_match: false }]) {
+        assert.notEqual(run(prewarm, { ...summary, ...change }).status, 0, JSON.stringify(change));
+      }
+      for (const overrides of [{ backend: "stacked" }, { sector_size: "32gib" }, { mode: "unseal-only" }]) {
+        assert.notEqual(run(prewarm, summary, overrides).status, 0);
+      }
+    }
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 });
 

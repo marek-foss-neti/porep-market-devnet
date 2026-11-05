@@ -12,12 +12,28 @@ sector_size="$(devnet_normalize_sector_size "${sector_size}")"
 mode="${3:-full}"
 bench_profile="${BENCH_PROOF_MICRO_PROFILE:-}"
 case "${bench_profile}" in
-  ""|zigzag-512) ;;
+  ""|zigzag-8|zigzag-512) ;;
   *) devnet_die "unknown proof microbench profile: ${bench_profile}" ;;
 esac
-if [[ "${bench_profile}" == "zigzag-512" ]]; then
-  [[ "${backend}" == "zigzag" && "${sector_size}" == "512mib" && ( "${mode}" == "full" || "${mode}" == "prewarm-only" ) ]] ||
-    devnet_die "zigzag-512 requires zigzag 512mib full or prewarm-only"
+if [[ -n "${bench_profile}" ]]; then
+  profile_sector=512mib
+  profile_bytes=536870912
+  profile_nodes=16777216
+  profile_depth=24
+  profile_partitions=10
+  profile_minimum=176
+  profile_challenges=18
+  if [[ "${bench_profile}" == zigzag-8 ]]; then
+    profile_sector=8mib
+    profile_bytes=8388608
+    profile_nodes=262144
+    profile_depth=18
+    profile_partitions=2
+    profile_minimum=4
+    profile_challenges=2
+  fi
+  [[ "${backend}" == "zigzag" && "${sector_size}" == "${profile_sector}" && ( "${mode}" == "full" || "${mode}" == "prewarm-only" ) ]] ||
+    devnet_die "${bench_profile} requires zigzag ${profile_sector} full or prewarm-only"
 fi
 profile_args=()
 [[ -z "${bench_profile}" ]] || profile_args=(--profile "${bench_profile}")
@@ -34,7 +50,7 @@ if [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" 
   microbench_layers="11"
 fi
 if [[ -n "${bench_profile}" && -n "${microbench_layers}" ]]; then
-  devnet_die "zigzag-512 has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
+  devnet_die "${bench_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
 fi
 case "${microbench_layers}" in
   ""|2|11|15|17|19|22|25) ;;
@@ -1012,19 +1028,21 @@ else
   devnet_die "proof microbench parameter prewarm failed with exit code ${status}; see ${prewarm_stderr_log}"
 fi
 bench_finalize_telemetry "${prewarm_telemetry_ndjson}" "${prewarm_telemetry_summary_json}"
-if [[ "${bench_profile}" == "zigzag-512" ]]; then
-  jq -e '
-    .profile.name == "zigzag-512"
-    and .profile.padded_sector_bytes == 536870912
-    and .profile.nodes == 16777216
-    and .profile.binary_tree_depth == 24
+if [[ -n "${bench_profile}" ]]; then
+  jq -e --arg name "${bench_profile}" --argjson bytes "${profile_bytes}" \
+    --argjson nodes "${profile_nodes}" --argjson depth "${profile_depth}" \
+    --argjson partitions "${profile_partitions}" --argjson minimum "${profile_minimum}" --argjson challenges "${profile_challenges}" '
+    .profile.name == $name
+    and .profile.padded_sector_bytes == $bytes
+    and .profile.nodes == $nodes
+    and .profile.binary_tree_depth == $depth
     and .profile.layers == 17
-    and .profile.partitions == 10
-    and .profile.minimum_challenges == 176
-    and .profile.challenges_per_layer_per_partition == 18
-    and .profile.total_challenge_instances == 3060
+    and .profile.partitions == $partitions
+    and .profile.minimum_challenges == $minimum
+    and .profile.challenges_per_layer_per_partition == $challenges
+    and .profile.total_challenge_instances == (17 * $partitions * $challenges)
     and .verifying_key_matches_params == true
-  ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-512 prewarm used wrong parameters"
+  ' "${prewarm_summary_json}" >/dev/null || devnet_die "${bench_profile} prewarm used wrong parameters"
 fi
 
 if [[ "${mode}" == "prewarm-only" ]]; then
@@ -1109,16 +1127,16 @@ fi
 
 jq -e '.verify_seal == true and .raw_unseal_bytes_match == true' "${summary_json}" >/dev/null ||
   devnet_die "proof microbench correctness failed; see ${summary_json}"
-if [[ "${bench_profile}" == "zigzag-512" ]]; then
+if [[ -n "${bench_profile}" ]]; then
   jq -e --slurpfile prewarm "${prewarm_summary_json}" '
     .profile == $prewarm[0].profile
     and .porep_layers == 17
-    and .porep_partitions == 10
-    and .minimum_total_challenges == 176
-    and .challenges_per_layer_per_partition == 18
-    and .proof_len == 1920
-    and .unsealed_bytes == 532676608
-  ' "${summary_json}" >/dev/null || devnet_die "zigzag-512 seal/prove/verify/unseal parameters differ from prewarm"
+    and .porep_partitions == $prewarm[0].profile.partitions
+    and .minimum_total_challenges == $prewarm[0].profile.minimum_challenges
+    and .challenges_per_layer_per_partition == $prewarm[0].profile.challenges_per_layer_per_partition
+    and .proof_len == ($prewarm[0].profile.partitions * 192)
+    and .unsealed_bytes == ($prewarm[0].profile.padded_sector_bytes / 128 * 127)
+  ' "${summary_json}" >/dev/null || devnet_die "${bench_profile} seal/prove/verify/unseal parameters differ from prewarm"
 fi
 if [[ "${backend}" == "zigzag" ]]; then
   jq -e --argjson batch "${zigzag_groth16_batch_size}" \
