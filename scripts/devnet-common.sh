@@ -953,6 +953,7 @@ devnet_require_zigzag_apis() {
     zigzag_pre_commit_phase1_with_tree_d \
     zigzag_unseal_range_with_scratch \
     zigzag_unseal_range_with_block \
+    zigzag_unseal_range_streaming \
     zigzag_validate_commit_phase1; do
     grep -Eq "^[[:space:]]*pub fn ${api}[<(]" "${api_file}" ||
       devnet_die "ZigZag source lacks required API ${api}; select the Rust revision pinned in versions.lock.yaml or a compatible newer source. Optimization fallbacks are no longer supported."

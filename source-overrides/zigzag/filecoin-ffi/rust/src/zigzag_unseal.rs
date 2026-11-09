@@ -66,6 +66,7 @@ pub(crate) fn unseal_range<W: Write>(
         return Ok(count);
     }
     let decode = DecodeStateConfig::from_env()?;
+    let output_config = zigzag::ZigZagUnsealOutputConfig::from_env()?;
     if decode.mode == DecodeMode::Blockwise {
         let started = Instant::now();
         let block_bytes = decode.block_bytes(len)?;
@@ -84,7 +85,10 @@ pub(crate) fn unseal_range<W: Write>(
         let mut ram = if decode.storage != DecodeStorage::File {
             let admitted = DecodeRamAdmission::acquire(
                 len,
-                block_bytes,
+                // Include the bounded FR32 output in the owned-buffer budget.
+                block_bytes
+                    .checked_add(output_config.buffer_bytes(len)?)
+                    .context("ZigZag unseal buffer budget overflow")?,
                 parent_config.parent_buffer_mib * (1 << 20),
                 active_table_bytes,
             )
@@ -135,6 +139,22 @@ pub(crate) fn unseal_range<W: Write>(
             "scratch_allocated_bytes": scratch_allocated_bytes,
             "prepare_ns": started.elapsed().as_nanos(),
         }));
+        if output_config.mode == zigzag::ZigZagUnsealOutputMode::Stream {
+            return zigzag::zigzag_unseal_range_streaming::<zigzag::ZigZagTree, _>(
+                config,
+                prover_id,
+                sector_id,
+                ticket,
+                comm_d,
+                data,
+                &mut block,
+                DecodeMode::Blockwise,
+                output,
+                offset,
+                count,
+                None,
+            );
+        }
         return zigzag::zigzag_unseal_range_with_block::<zigzag::ZigZagTree, _>(
             config, prover_id, sector_id, ticket, comm_d, data, &mut block, output, offset, count,
         );
@@ -150,18 +170,35 @@ pub(crate) fn unseal_range<W: Write>(
         "storage": "file", "state_bytes": len, "secondary_state_bytes": len, "block_bytes": 0,
         "scratch_logical_bytes": 2 * sector_bytes,
     }));
-    let result = zigzag::zigzag_unseal_range_with_scratch::<zigzag::ZigZagTree, _>(
-        config,
-        prover_id,
-        sector_id,
-        ticket,
-        comm_d,
-        &mut data,
-        &mut scratch,
-        output,
-        offset,
-        count,
-    );
+    let result = if output_config.mode == zigzag::ZigZagUnsealOutputMode::Stream {
+        zigzag::zigzag_unseal_range_streaming::<zigzag::ZigZagTree, _>(
+            config,
+            prover_id,
+            sector_id,
+            ticket,
+            comm_d,
+            &mut data,
+            &mut scratch,
+            DecodeMode::PingPong,
+            output,
+            offset,
+            count,
+            None,
+        )
+    } else {
+        zigzag::zigzag_unseal_range_with_scratch::<zigzag::ZigZagTree, _>(
+            config,
+            prover_id,
+            sector_id,
+            ticket,
+            comm_d,
+            &mut data,
+            &mut scratch,
+            output,
+            offset,
+            count,
+        )
+    };
     if let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) {
         log::info!(target: "zigzag_unseal", "phase=unseal_scratch scratch_logical_bytes={} scratch_allocated_bytes={}",
             left.len() + right.len(), (left.blocks() + right.blocks()) * 512);

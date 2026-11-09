@@ -2621,6 +2621,50 @@ pub mod tests {
         }
         assert_eq!(fs::read_dir(root.path())?.count(), 1);
         assert_eq!(fs::read(&path)?, data);
+        // Pipe output has no path. It must use the explicit scratch directory,
+        // including when the final layer streams FR32 chunks directly to Write.
+        // The 2032-byte result fits in the minimum Linux/macOS pipe capacity.
+        for supplied_scratch in [std::path::Path::new(""), root.path()] {
+            use std::os::unix::io::FromRawFd;
+            let mut fds = [-1; 2];
+            ensure!(
+                unsafe { libc::pipe(fds.as_mut_ptr()) } == 0,
+                "create output pipe"
+            );
+            let mut reader = unsafe { fs::File::from_raw_fd(fds[0]) };
+            let writer = unsafe { fs::File::from_raw_fd(fds[1]) };
+            let response = unsafe {
+                unseal_range(
+                    registered,
+                    as_bytes(supplied_scratch).into(),
+                    sealed.as_raw_fd(),
+                    writer.as_raw_fd(),
+                    0,
+                    &prover,
+                    &ticket,
+                    &comm.comm_d,
+                    0,
+                    2032,
+                )
+            };
+            let valid = !supplied_scratch.as_os_str().is_empty();
+            assert_eq!(response.status_code == FCPResponseStatus::NoError, valid);
+            assert!(
+                writer.metadata().is_ok(),
+                "FFI must not close the caller's pipe"
+            );
+            drop(writer);
+            let mut recovered = Vec::new();
+            reader.read_to_end(&mut recovered)?;
+            if valid {
+                assert_eq!(recovered, raw);
+            } else {
+                assert!(recovered.is_empty());
+            }
+            assert_eq!(fs::read(&path)?, data);
+            assert_eq!(fs::read_dir(root.path())?.count(), 1);
+        }
+
         let response = unsafe {
             unseal_range(
                 registered,

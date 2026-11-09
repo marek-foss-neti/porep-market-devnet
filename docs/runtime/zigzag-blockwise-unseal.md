@@ -32,7 +32,8 @@ In blockwise mode:
 - `auto` prefers a private RAM sector after admission. It checks host
   `MemAvailable` and the tightest observable cgroup memory headroom, including
   ancestor limits, through the existing ZigZag setup resource reader. Admission
-  includes the sector, output block, configured parent-buffer budget, one active
+  includes the sector, output block, any optional FR32 output buffer,
+  configured parent-buffer budget, one active
   parent table, and a reserve of max(1 GiB, 10% of available memory). Only clean
   inactive cgroup file pages count as reclaimable. A process-local guard prevents
   two RAM unseals from concurrently admitting allocations from the same snapshot.
@@ -61,11 +62,15 @@ Parent sources are shared across layers as in the bounded-reader implementation;
 a fixed set of worker cursors is allocated once per layer and reused across its
 blocks. Rayon task splitting cannot multiply the parent-buffer budget.
 
-The result always resides in the private state, for odd and even layer counts.
+The blockwise in-place result resides in the private state, for odd and even layer counts.
 The new `zigzag_unseal_range_with_block` API accepts caller-owned state and block
 buffers. The existing `zigzag_unseal`/`zigzag_unseal_range` in-place API also
 honors blockwise mode; `zigzag_unseal_range_with_scratch` remains an explicit
-two-buffer reference. The ordinary FR32 writer is unchanged.
+two-buffer reference. The ordinary FR32 writer remains the default. The optional
+[parallel FR32 and streaming output](zigzag-unseal-output.md) adds a separate
+writer API which emits the last layer directly and does not retain a complete
+padded result. Its final layer omits copy-back; earlier layers use the ordering
+above. Existing in-place APIs retain their result-buffer contract.
 
 An error, cancellation or panic can leave earlier blocks of the private state
 decoded. The failing block is not copied back; all readers have joined before
@@ -88,7 +93,7 @@ observed RAM, CPU, faults and I/O. Parent read statistics remain separate.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`bd1fb47b4ea7ac82ecb052e66ebbbd285cec60a3`. The overlay requires
+`2e425aa7825f8a253f3991862eb7b1764f84b6b1`. The overlay requires
 `zigzag_unseal_range_with_block`. Make the commit available in the source
 repository, fetch the managed sources and rebuild the selected ZigZag image.
 No development-source override is required. An old image cannot exercise the

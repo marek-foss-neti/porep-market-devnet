@@ -107,6 +107,10 @@ export function parseDecodeStateDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_decode_state (\{.*\})\s*$/);
 }
 
+export function parseUnsealOutputDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_unseal_output (\{.*\})\s*$/);
+}
+
 export function parseSetupWorkerPlans(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_setup_workers (\{.*\})\s*$/)
     .map((plan) => ({ ...plan, source: "param-prewarm.stderr.log" }));
@@ -196,6 +200,7 @@ export function composeReport({
     layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
     decode_parent_reads: measuredLog === null ? [] : parseDecodeParentDiagnostics(measuredLog),
     decode_state: measuredLog === null ? [] : parseDecodeStateDiagnostics(measuredLog),
+    unseal_output: measuredLog === null ? [] : parseUnsealOutputDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
@@ -369,6 +374,15 @@ export function renderPhaseMarkdown(report) {
       ...(report.decode_state ?? []).map((entry) =>
         `| ${entry.event} | ${entry.storage ?? "—"} | ${entry.reversed ?? "—"} | ${value(entry.state_bytes)} | ${value(entry.block_bytes)} | ${value(entry.blocks)} | ${value(entry.decode_join_ns == null ? null : entry.decode_join_ns / 1e6)} | ${value(entry.copy_back_ns == null ? null : entry.copy_back_ns / 1e6)} | ${value(entry.prepare_ns == null ? null : entry.prepare_ns / 1e6)} |`), "",
       "Timers are nested in raw_unseal, not added to it. Decode + join includes the parallel barrier; copy-back begins only after all readers finish. RAM admission samples host/cgroup headroom and includes an active parent table, owned buffers and reserve; it is not an OS memory reservation. Actual storage, fallback reasons and allocation bounds are in decode_state; observed RAM/faults/I/O remain in phase telemetry. Ping-pong remains the reference default.");
+  }
+  if (report.cpu_configuration?.unseal_output || report.unseal_output?.length) {
+    lines.push("", "## Raw unseal FR32 and output", "",
+      `Requested configuration: \`${JSON.stringify(report.cpu_configuration?.unseal_output ?? null)}\`.`, "",
+      "| Actual mode | Completed | Written B | Output buffer B | Chunks | FR32 ms | Writer ms |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+      ...(report.unseal_output ?? []).map((entry) =>
+        `| ${entry.mode} | ${entry.stats?.completed} | ${value(entry.stats?.written_bytes)} | ${value(entry.output_buffer_bytes)} | ${value(entry.stats?.chunks)} | ${value(entry.stats?.fr32_ns == null ? null : entry.stats.fr32_ns / 1e6)} | ${value(entry.stats?.writer_ns == null ? null : entry.stats.writer_ns / 1e6)} |`), "",
+      "FR32 includes parallel work and joining. Writer time includes write calls, backpressure and any inline verification; it is not exclusive I/O wait. These timers are nested in raw unseal and must not be added to it. Stream mode emits increasing offsets from immutable final-layer input, with no final copy-back. One batch is in flight; a slow writer cannot grow a producer queue. No speedup is inferred from the configured mode.");
   }
   if (report.prewarm_worker_plans?.length) {
     lines.push("", "## Parameter prewarm workers", "",

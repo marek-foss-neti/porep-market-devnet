@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, parseDecodeStateDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, parseDecodeStateDiagnostics, parseUnsealOutputDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -32,6 +32,8 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_MODE, "ping_pong");
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_STORAGE, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB, "64");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT, "reference");
+  assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB, "64");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "legacy");
   assert.equal(env.FIL_PROOFS_ZIGZAG_LAYER_PIPELINE, "sequential");
   assert.equal(env.FIL_PROOFS_ZIGZAG_ENCODE_PREHASH, "0");
@@ -63,6 +65,8 @@ test("native variables and benchmark overrides reach explicit docker -e argument
     BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB: "8",
     BENCH_ZIGZAG_DECODE_MODE: "blockwise", BENCH_ZIGZAG_DECODE_STORAGE: "ram",
     FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB: "16", BENCH_ZIGZAG_DECODE_BLOCK_MIB: "256",
+    FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT: "parallel", BENCH_ZIGZAG_UNSEAL_OUTPUT: "stream",
+    FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "4", BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "8",
     FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "compact", BENCH_ZIGZAG_PARAMETER_LOADER: "mapped",
     BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4",
     FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", BENCH_ZIGZAG_TREE_R_BUILDER: "legacy",
@@ -80,7 +84,7 @@ test("native variables and benchmark overrides reach explicit docker -e argument
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=60129542144"));
   assert.equal(args[args.indexOf("MALLOC_ARENA_MAX=4") - 1], "-e");
   assert.ok(args.includes("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped"));
-  for (const setting of ["FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=buffered", "FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB=8", "FIL_PROOFS_ZIGZAG_DECODE_MODE=blockwise", "FIL_PROOFS_ZIGZAG_DECODE_STORAGE=ram", "FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB=256"]) {
+  for (const setting of ["FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=buffered", "FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB=8", "FIL_PROOFS_ZIGZAG_DECODE_MODE=blockwise", "FIL_PROOFS_ZIGZAG_DECODE_STORAGE=ram", "FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB=256", "FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT=stream", "FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB=8"]) {
     assert.ok(args.includes(setting));
     assert.equal(args[args.indexOf(setting) - 1], "-e");
   }
@@ -118,6 +122,8 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_DECODE_MODE: "" }, { BENCH_ZIGZAG_DECODE_MODE: "auto" },
     { BENCH_ZIGZAG_DECODE_STORAGE: "ram" }, { BENCH_ZIGZAG_DECODE_STORAGE: "unknown" },
     { BENCH_ZIGZAG_DECODE_BLOCK_MIB: "0" }, { BENCH_ZIGZAG_DECODE_BLOCK_MIB: "257" },
+    { BENCH_ZIGZAG_UNSEAL_OUTPUT: "" }, { BENCH_ZIGZAG_UNSEAL_OUTPUT: "auto" },
+    { BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "0" }, { BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "65" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "107374182401" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "-1" },
@@ -218,6 +224,27 @@ test("blockwise decode reports actual storage, fallback and copy-back without in
   assert.match(markdown, /## Raw unseal state and copy-back/);
   assert.match(markdown, /\| layer \| — \| true \| 2048 \| 512 \| 4 \| 6 \| 2 \|/);
   assert.match(markdown, /not an OS memory reservation/);
+});
+
+test("unseal output reports FR32 and writer times separately without inflating raw unseal", () => {
+  for (const mode of ["reference", "parallel", "stream"]) {
+    assert.equal(environment({ BENCH_ZIGZAG_UNSEAL_OUTPUT: mode }).FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT, mode);
+  }
+  const event = { event: "output", mode: "stream", output_buffer_bytes: 4064, max_inflight_chunks: 1,
+    stats: { completed: true, written_bytes: 2032, chunks: 2, fr32_ns: 2000000, writer_ns: 3000000 } };
+  const log = `INFO zigzag_unseal zigzag_unseal_output ${JSON.stringify(event)}`;
+  const entries = parseUnsealOutputDiagnostics(log);
+  assert.deepEqual(entries.map(({ source, line_number, ...entry }) => entry), [event]);
+  const telemetry = summarizeTelemetry(JSON.stringify({ schema_version: 1, sequence: 0, pid: 1, elapsed_ms: 0, timestamp_unix_ms: 1, sampling_interval_ms: 100, trigger: "session_start", phase: "startup", process: {}, cgroup: {}, disk: { paths: [] }, warnings: [] }));
+  const report = composeReport({ mode: "unseal-only", benchmark: {
+    cpu_configuration: { unseal_output: { mode: "stream", chunk_mib: 4 } },
+    phases: [{ name: "raw_unseal_retrieval", wall_ms: 10, cpu_ms: 30 }],
+  }, telemetry, provenance: { invocation: { outer_wall_ms: 10 } }, prewarm: null, prewarmTelemetry: null, measuredLog: log });
+  assert.deepEqual(report.unseal_output, entries);
+  assert.equal(report.phases[0].wall_ms, 10);
+  const markdown = renderPhaseMarkdown(report);
+  assert.match(markdown, /\| stream \| true \| 2032 \| 4064 \| 2 \| 2 \| 3 \|/);
+  assert.match(markdown, /not exclusive I\/O wait/);
 });
 
 test("96 and 128 worker settings pass through without enlarging snapshot buffers", () => {

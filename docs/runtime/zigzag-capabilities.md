@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`bd1fb47b4ea7ac82ecb052e66ebbbd285cec60a3`. This revision includes
+`2e425aa7825f8a253f3991862eb7b1764f84b6b1`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -50,12 +50,19 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Validated TreeD import | `zigzag_pre_commit_phase1_with_tree_d` |
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Optional blockwise unseal with one private state and bounded scratch | `zigzag_unseal_range_with_block` |
+| Optional parallel FR32 and direct final-layer output | `ZigZagUnsealOutputConfig`, `zigzag_unseal_range_streaming` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
 | Bounded per-C2 query cache, disabled by default in the native API | `parameters/query_cache.rs`, `QueryCacheConfig` |
 | Bounded binary CPU TreeR builder and explicit reference path | `merkle_builder.rs`, `TreeRBuilder` |
 | Bounded layer overlap and streaming snapshots | `layer_pipeline.rs`, `LayerPipelineConfig` |
 | Bounded SHA prefix preparation in encode feeders | `encode_prehash.rs`, `EncodePrehash` |
+
+The pin also includes the [FR32/streaming output API](zigzag-unseal-output.md)
+required by the dedicated overlay. Make the commit available in the source
+repository, fetch the managed sources and rebuild the ZigZag images.
+No development-source override is required. Both new output modes remain
+opt-in; `reference` is the default.
 
 The pin also includes [blockwise raw unseal](zigzag-blockwise-unseal.md), with
 RAM admission or a preallocated file state and copy-back after all block readers

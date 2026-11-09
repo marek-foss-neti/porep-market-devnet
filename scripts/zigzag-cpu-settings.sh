@@ -57,6 +57,10 @@ zigzag_bench_cpu_environment() {
   [[ "${decode_mode}" == blockwise || "${value}" != ram ]] || devnet_die "RAM decode storage requires blockwise mode"
   printf 'FIL_PROOFS_ZIGZAG_DECODE_STORAGE=%s\n' "${value}"
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB "${BENCH_ZIGZAG_DECODE_BLOCK_MIB-${FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB-64}}" 1 256 || return
+  value="${BENCH_ZIGZAG_UNSEAL_OUTPUT-${FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT-reference}}"
+  case "${value}" in reference|parallel|stream) ;; *) devnet_die "ZigZag unseal output must be reference, parallel or stream" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT=%s\n' "${value}"
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB "${BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB-${FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB-64}}" 1 64 || return
   value="${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy}}"
   case "${value}" in binary|legacy) ;; *) devnet_die "ZigZag TreeR builder must be binary or legacy" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=%s\n' "${value}"
