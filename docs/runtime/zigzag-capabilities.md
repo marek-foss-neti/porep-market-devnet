@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`2e425aa7825f8a253f3991862eb7b1764f84b6b1`. This revision includes
+`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -51,6 +51,7 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
 | Optional blockwise unseal with one private state and bounded scratch | `zigzag_unseal_range_with_block` |
 | Optional parallel FR32 and direct final-layer output | `ZigZagUnsealOutputConfig`, `zigzag_unseal_range_streaming` |
+| Optional CPU decode batching, prefix reuse and canonical scalar subtraction | `decode_cpu.rs`, `DecodeCpuConfig` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
 | Bounded per-C2 query cache, disabled by default in the native API | `parameters/query_cache.rs`, `QueryCacheConfig` |
@@ -68,6 +69,11 @@ The pin also includes [blockwise raw unseal](zigzag-blockwise-unseal.md), with
 RAM admission or a preallocated file state and copy-back after all block readers
 have joined. It remains opt-in; `ping_pong` is the reference default. The repin
 does not establish full Rust/FFI validation or a measured unseal speedup.
+
+The pin also includes the optional [CPU decode kernels](zigzag-decode-cpu.md)
+required by the dedicated overlay. Publish the pinned commit, fetch the managed
+sources and rebuild the ZigZag images; no development-source override is required.
+All CPU kernel experiments remain disabled by default pending validation.
 
 The pinned revision also includes the [binary TreeR builder](zigzag-merkle-builder.md),
 wired into the same PC1 path used by dedicated Curio. It remains opt-in in the

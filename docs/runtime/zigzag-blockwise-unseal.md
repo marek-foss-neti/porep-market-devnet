@@ -93,7 +93,7 @@ observed RAM, CPU, faults and I/O. Parent read statistics remain separate.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`2e425aa7825f8a253f3991862eb7b1764f84b6b1`. The overlay requires
+`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. The overlay requires
 `zigzag_unseal_range_with_block`. Make the commit available in the source
 repository, fetch the managed sources and rebuild the selected ZigZag image.
 No development-source override is required. An old image cannot exercise the

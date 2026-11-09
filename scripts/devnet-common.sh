@@ -985,6 +985,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${layer_pipeline}" && ! -L "${layer_pipeline}" ]] &&
     grep -Eq '^pub struct LayerPipelineConfig' "${layer_pipeline}" ||
     devnet_die "ZigZag source lacks the bounded layer pipeline; select the implementation source until its commit is pinned"
+  local decode_cpu="${source}/storage-proofs-porep/src/zigzag/decode_cpu.rs"
+  [[ -f "${decode_cpu}" && ! -L "${decode_cpu}" ]] &&
+    grep -Eq '^pub struct DecodeCpuConfig' "${decode_cpu}" ||
+    devnet_die "ZigZag source lacks the CPU decode kernel API; select the implementation source until its commit is pinned"
 }
 
 devnet_rust_fil_proofs_content_sha256() {

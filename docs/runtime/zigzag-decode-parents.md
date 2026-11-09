@@ -62,7 +62,7 @@ Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
 Devnet pins the committed implementation at Rust revision
-`2e425aa7825f8a253f3991862eb7b1764f84b6b1`. Fetch the managed sources and rebuild
+`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. Fetch the managed sources and rebuild
 the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
 image cannot exercise the new reader just by receiving its environment variables.
 

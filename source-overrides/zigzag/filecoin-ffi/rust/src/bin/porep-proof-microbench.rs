@@ -253,12 +253,17 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
     );
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     let sha_ni_eligible: Option<bool> = None;
+    #[cfg(target_arch = "aarch64")]
+    let arm_sha2_eligible = Some(std::arch::is_aarch64_feature_detected!("sha2"));
+    #[cfg(not(target_arch = "aarch64"))]
+    let arm_sha2_eligible: Option<bool> = None;
     Ok(serde_json::json!({
         "rayon_num_threads": rayon::current_num_threads(),
         "ec_gpu_num_threads": std::env::var("EC_GPU_NUM_THREADS").ok().and_then(|value| value.parse::<usize>().ok()),
         "available_parallelism": std::thread::available_parallelism().ok().map(|count| count.get()),
         "cpus_allowed_list": allowed,
         "sha_ni_eligible": sha_ni_eligible,
+        "arm_sha2_eligible": arm_sha2_eligible,
         "sha_backend_scope": "eligibility only; exact build features recorded in image cargo-features.txt",
         "multicore_encode": SETTINGS.zigzag_multicore_encode,
         "encode_affinity": SETTINGS.zigzag_multicore_encode_affinity,
@@ -272,6 +277,7 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
         "cache_policy": storage_proofs_porep_zigzag::zigzag::cache_policy::CachePolicy::from_env()?,
         "decode": storage_proofs_porep_zigzag::zigzag::DecodeConfig::from_env()?,
         "decode_state": storage_proofs_porep_zigzag::zigzag::decode_state::DecodeStateConfig::from_env()?,
+        "decode_cpu": storage_proofs_porep_zigzag::zigzag::decode_cpu::DecodeCpuConfig::from_env()?,
         "unseal_output": zigzag::ZigZagUnsealOutputConfig::from_env()?,
         "encode_prehash": storage_proofs_porep_zigzag::zigzag::encode_prehash::EncodePrehash::from_env()?,
         "layer_pipeline": storage_proofs_porep_zigzag::zigzag::layer_pipeline::LayerPipelineConfig::from_env()?,

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, parseDecodeStateDiagnostics, parseUnsealOutputDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
+import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, parseDecodeStateDiagnostics, parseUnsealOutputDiagnostics, parseDecodeCpuDiagnostics, renderPhaseMarkdown } from "../compose-proof-micro-report.mjs";
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -32,6 +32,9 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_MODE, "ping_pong");
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_STORAGE, "auto");
   assert.equal(env.FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB, "64");
+  for (const [name, value] of Object.entries({FIELD: "reference", SHA: "serial", BATCH_NODES: "1", PREFIX_REUSE: "0", PREFETCH: "0", PROFILE_EVERY: "0", THREADS: "auto"})) {
+    assert.equal(env[`FIL_PROOFS_ZIGZAG_DECODE_${name}`], value);
+  }
   assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT, "reference");
   assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB, "64");
   assert.equal(env.FIL_PROOFS_ZIGZAG_TREE_R_BUILDER, "legacy");
@@ -67,6 +70,11 @@ test("native variables and benchmark overrides reach explicit docker -e argument
     FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB: "16", BENCH_ZIGZAG_DECODE_BLOCK_MIB: "256",
     FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT: "parallel", BENCH_ZIGZAG_UNSEAL_OUTPUT: "stream",
     FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "4", BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "8",
+    FIL_PROOFS_ZIGZAG_DECODE_FIELD: "reference", BENCH_ZIGZAG_DECODE_FIELD: "limbs",
+    FIL_PROOFS_ZIGZAG_DECODE_SHA: "serial", BENCH_ZIGZAG_DECODE_SHA: "interleaved",
+    FIL_PROOFS_ZIGZAG_DECODE_BATCH_NODES: "1", BENCH_ZIGZAG_DECODE_BATCH_NODES: "8",
+    BENCH_ZIGZAG_DECODE_PREFIX_REUSE: "1", BENCH_ZIGZAG_DECODE_PREFETCH: "1",
+    BENCH_ZIGZAG_DECODE_PROFILE_EVERY: "64", BENCH_ZIGZAG_DECODE_THREADS: "96",
     FIL_PROOFS_ZIGZAG_PARAMETER_LOADER: "compact", BENCH_ZIGZAG_PARAMETER_LOADER: "mapped",
     BENCH_ZIGZAG_MALLOC_ARENA_MAX: "4",
     FIL_PROOFS_ZIGZAG_TREE_R_BUILDER: "binary", BENCH_ZIGZAG_TREE_R_BUILDER: "legacy",
@@ -87,6 +95,10 @@ test("native variables and benchmark overrides reach explicit docker -e argument
   for (const setting of ["FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=buffered", "FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB=8", "FIL_PROOFS_ZIGZAG_DECODE_MODE=blockwise", "FIL_PROOFS_ZIGZAG_DECODE_STORAGE=ram", "FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB=256", "FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT=stream", "FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB=8"]) {
     assert.ok(args.includes(setting));
     assert.equal(args[args.indexOf(setting) - 1], "-e");
+  }
+  for (const setting of ["FIELD=limbs", "SHA=interleaved", "BATCH_NODES=8", "PREFIX_REUSE=1", "PREFETCH=1", "PROFILE_EVERY=64", "THREADS=96"]) {
+    assert.ok(args.includes(`FIL_PROOFS_ZIGZAG_DECODE_${setting}`));
+    assert.equal(args[args.indexOf(`FIL_PROOFS_ZIGZAG_DECODE_${setting}`) - 1], "-e");
   }
   assert.equal(args[args.indexOf("FIL_PROOFS_ZIGZAG_PARAMETER_LOADER=mapped") - 1], "-e");
   for (const setting of ["RAYON_NUM_THREADS=6", "EC_GPU_NUM_THREADS=8", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY=0", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS=3", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE=17", "FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD=2048", "FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE=0", "FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES=32768", "FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED=1"]) {
@@ -122,6 +134,11 @@ test("invalid CPU settings fail before docker argv is constructed", () => {
     { BENCH_ZIGZAG_DECODE_MODE: "" }, { BENCH_ZIGZAG_DECODE_MODE: "auto" },
     { BENCH_ZIGZAG_DECODE_STORAGE: "ram" }, { BENCH_ZIGZAG_DECODE_STORAGE: "unknown" },
     { BENCH_ZIGZAG_DECODE_BLOCK_MIB: "0" }, { BENCH_ZIGZAG_DECODE_BLOCK_MIB: "257" },
+    { BENCH_ZIGZAG_DECODE_FIELD: "unknown" }, { BENCH_ZIGZAG_DECODE_SHA: "unknown" },
+    { BENCH_ZIGZAG_DECODE_BATCH_NODES: "0" }, { BENCH_ZIGZAG_DECODE_BATCH_NODES: "33" },
+    { BENCH_ZIGZAG_DECODE_PREFIX_REUSE: "2" }, { BENCH_ZIGZAG_DECODE_PREFETCH: "" },
+    { BENCH_ZIGZAG_DECODE_PROFILE_EVERY: "1048577" }, { BENCH_ZIGZAG_DECODE_THREADS: "129" },
+    { BENCH_ZIGZAG_DECODE_THREADS: "0" },
     { BENCH_ZIGZAG_UNSEAL_OUTPUT: "" }, { BENCH_ZIGZAG_UNSEAL_OUTPUT: "auto" },
     { BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "0" }, { BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB: "65" },
     { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "107374182401" },
@@ -606,4 +623,26 @@ test("build options have separate identities and reject unsupported values", () 
   });
   assert.equal(new Set(hashes).size, hashes.length);
   for (const env of [{ DEVNET_ZIGZAG_TARGET_CPU: "sha-ni" }, { DEVNET_ZIGZAG_LTO: "yes" }, { DEVNET_ZIGZAG_SHA_ASM: "true" }]) assert.notEqual(shell(code, env).status, 0);
+});
+
+test("decode CPU diagnostics preserve sampled timings, saved blocks and actual fallbacks", () => {
+  const event = {event: "layer", field: "limbs", workers: 4, prefix_setup_blocks: 7,
+    stats: {nodes: 100, sampled_nodes: 8, sampled_batches: 1, gather_ns: 2000000, sha_ns: 3000000, field_ns: 1000000, reused_sha_blocks: 50}};
+  const fallback = {event: "fallback", reason: "unsupported_parent_degree_or_replica_id_size"};
+  const log = [event, fallback].map((entry) => JSON.stringify({message: `zigzag_decode_cpu ${JSON.stringify(entry)}`})).join("\n");
+  const entries = parseDecodeCpuDiagnostics(log);
+  assert.deepEqual(entries.map(({source, line_number, ...entry}) => entry), [event, fallback]);
+  const telemetry = summarizeTelemetry(JSON.stringify({schema_version: 1, sequence: 0, pid: 1, elapsed_ms: 0, timestamp_unix_ms: 1, sampling_interval_ms: 100, trigger: "session_start", phase: "startup", process: {}, cgroup: {}, disk: {paths: []}, warnings: []}));
+  const report = composeReport({mode: "unseal-only", benchmark: {
+    cpu_configuration: {decode_cpu: {field: "limbs", batch_nodes: 8}},
+    phases: [{name: "raw_unseal_retrieval", wall_ms: 10, cpu_ms: 30}],
+  }, telemetry, provenance: {invocation: {outer_wall_ms: 10}}, prewarm: null, prewarmTelemetry: null, measuredLog: log});
+  assert.deepEqual(report.decode_cpu, entries);
+  assert.equal(report.derived.raw_unseal_wall_ms, 10);
+  const markdown = renderPhaseMarkdown(report);
+  assert.match(markdown, /\| layer \| limbs \| 4 \| 100 \| 8 \| 2 \| 3 \| 1 \| 50 \| 7 \|/);
+  assert.match(markdown, /can overlap across workers/);
+  assert.match(markdown, /Missing samples are unavailable, not zero/);
+  report.decode_cpu = [{...event, stats: {...event.stats, sampled_batches: 0, sampled_nodes: 0, gather_ns: 0, sha_ns: 0, field_ns: 0}}];
+  assert.doesNotMatch(renderPhaseMarkdown(report), /\| 0 \| 0 \| 0 \| 50 \|/);
 });

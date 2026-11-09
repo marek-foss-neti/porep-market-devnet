@@ -27,7 +27,7 @@ It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. The comparison preset
 enables 20 GiB query retention, encode prehash and the binary TreeR builder with
 the stream layer pipeline for both sector sizes.
-The current Rust pin is `2e425aa7825f8a253f3991862eb7b1764f84b6b1`, including the
+The current Rust pin is `46f7dd618ddfe9cfd11ada83434ac35f7a245990`, including the
 17-layer profile and larger query-cache budget. Fetch the managed sources
 and rebuild the images before running the new preset.
 Then run:

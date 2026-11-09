@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "2e425aa7825f8a253f3991862eb7b1764f84b6b1";
+const rustFilProofsSourceCommit = "46f7dd618ddfe9cfd11ada83434ac35f7a245990";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -1051,6 +1051,8 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     await writeFile(encodePrehashPath, "pub struct EncodePrehash;\n");
     const layerPipelinePath = join(source, "storage-proofs-porep/src/zigzag/layer_pipeline.rs");
     await writeFile(layerPipelinePath, "pub struct LayerPipelineConfig;\n");
+    const decodeCpuPath = join(source, "storage-proofs-porep/src/zigzag/decode_cpu.rs");
+    await writeFile(decodeCpuPath, "pub struct DecodeCpuConfig;\n");
     const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
     await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
     for (const missing of [null, ...apis]) {
@@ -1094,6 +1096,11 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const missingPrehash = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
     assert.notEqual(missingPrehash.status, 0);
     assert.match(missingPrehash.stderr, /lacks the ZigZag encode prehash API/);
+    await writeFile(encodePrehashPath, "pub struct EncodePrehash;\n");
+    await rm(decodeCpuPath);
+    const missingDecodeCpu = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+    assert.notEqual(missingDecodeCpu.status, 0);
+    assert.match(missingDecodeCpu.stderr, /lacks the CPU decode kernel API/);
   } finally {
     await rm(source, { recursive: true, force: true });
   }

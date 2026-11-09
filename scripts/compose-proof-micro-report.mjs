@@ -111,6 +111,10 @@ export function parseUnsealOutputDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_unseal_output (\{.*\})\s*$/);
 }
 
+export function parseDecodeCpuDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_decode_cpu (\{.*\})\s*$/);
+}
+
 export function parseSetupWorkerPlans(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_setup_workers (\{.*\})\s*$/)
     .map((plan) => ({ ...plan, source: "param-prewarm.stderr.log" }));
@@ -201,6 +205,7 @@ export function composeReport({
     decode_parent_reads: measuredLog === null ? [] : parseDecodeParentDiagnostics(measuredLog),
     decode_state: measuredLog === null ? [] : parseDecodeStateDiagnostics(measuredLog),
     unseal_output: measuredLog === null ? [] : parseUnsealOutputDiagnostics(measuredLog),
+    decode_cpu: measuredLog === null ? [] : parseDecodeCpuDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
@@ -383,6 +388,15 @@ export function renderPhaseMarkdown(report) {
       ...(report.unseal_output ?? []).map((entry) =>
         `| ${entry.mode} | ${entry.stats?.completed} | ${value(entry.stats?.written_bytes)} | ${value(entry.output_buffer_bytes)} | ${value(entry.stats?.chunks)} | ${value(entry.stats?.fr32_ns == null ? null : entry.stats.fr32_ns / 1e6)} | ${value(entry.stats?.writer_ns == null ? null : entry.stats.writer_ns / 1e6)} |`), "",
       "FR32 includes parallel work and joining. Writer time includes write calls, backpressure and any inline verification; it is not exclusive I/O wait. These timers are nested in raw unseal and must not be added to it. Stream mode emits increasing offsets from immutable final-layer input, with no final copy-back. One batch is in flight; a slow writer cannot grow a producer queue. No speedup is inferred from the configured mode.");
+  }
+  if (report.cpu_configuration?.decode_cpu || report.decode_cpu?.length) {
+    lines.push("", "## Raw unseal CPU kernel", "",
+      `Requested configuration: \`${JSON.stringify(report.cpu_configuration?.decode_cpu ?? null)}\`.`, "",
+      "| Event | Field | Workers | Nodes | Sampled nodes | Gather ms | SHA ms | Field ms | Reused SHA blocks | Prefix setup blocks |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+      ...(report.decode_cpu ?? []).map((entry) =>
+        `| ${entry.event} | ${entry.field ?? "—"} | ${value(entry.workers)} | ${value(entry.stats?.nodes)} | ${value(entry.stats?.sampled_nodes)} | ${value(entry.stats?.sampled_batches ? entry.stats.gather_ns / 1e6 : null)} | ${value(entry.stats?.sampled_batches ? entry.stats.sha_ns / 1e6 : null)} | ${value(entry.stats?.sampled_batches ? entry.stats.field_ns / 1e6 : null)} | ${value(entry.stats?.reused_sha_blocks)} | ${value(entry.prefix_setup_blocks)} |`), "",
+      "Timings cover sampled worker batches, can overlap across workers and include descheduling; they are not phase wall time or exclusive CPU time. Gather includes parent reads, validation, optional prefetch and message preparation. SHA uses the existing sha2 dispatch; interleaved means block-round-robin, not a custom SIMD kernel. Reused SHA blocks exclude the separately reported per-layer prefix setup work. No timers are added to raw unseal, and no speedup is inferred. Missing samples are unavailable, not zero. Actual fallbacks and bounded workspace are retained in decode_cpu.");
   }
   if (report.prewarm_worker_plans?.length) {
     lines.push("", "## Parameter prewarm workers", "",

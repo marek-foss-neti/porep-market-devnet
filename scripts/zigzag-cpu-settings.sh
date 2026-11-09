@@ -57,6 +57,19 @@ zigzag_bench_cpu_environment() {
   [[ "${decode_mode}" == blockwise || "${value}" != ram ]] || devnet_die "RAM decode storage requires blockwise mode"
   printf 'FIL_PROOFS_ZIGZAG_DECODE_STORAGE=%s\n' "${value}"
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB "${BENCH_ZIGZAG_DECODE_BLOCK_MIB-${FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB-64}}" 1 256 || return
+  value="${BENCH_ZIGZAG_DECODE_FIELD-${FIL_PROOFS_ZIGZAG_DECODE_FIELD-reference}}"
+  case "${value}" in reference|limbs) ;; *) devnet_die "ZigZag decode field must be reference or limbs" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_FIELD=%s\n' "${value}"
+  value="${BENCH_ZIGZAG_DECODE_SHA-${FIL_PROOFS_ZIGZAG_DECODE_SHA-serial}}"
+  case "${value}" in serial|interleaved) ;; *) devnet_die "ZigZag decode SHA must be serial or interleaved" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_SHA=%s\n' "${value}"
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_BATCH_NODES "${BENCH_ZIGZAG_DECODE_BATCH_NODES-${FIL_PROOFS_ZIGZAG_DECODE_BATCH_NODES-1}}" 1 32 || return
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_THREADS "${BENCH_ZIGZAG_DECODE_THREADS-${FIL_PROOFS_ZIGZAG_DECODE_THREADS-auto}}" auto 128 || return
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_PROFILE_EVERY "${BENCH_ZIGZAG_DECODE_PROFILE_EVERY-${FIL_PROOFS_ZIGZAG_DECODE_PROFILE_EVERY-0}}" 0 1048576 || return
+  value="$(zigzag_cpu_bool FIL_PROOFS_ZIGZAG_DECODE_PREFIX_REUSE "${BENCH_ZIGZAG_DECODE_PREFIX_REUSE-${FIL_PROOFS_ZIGZAG_DECODE_PREFIX_REUSE-0}}")" || return
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_PREFIX_REUSE=%s\n' "${value}"
+  value="$(zigzag_cpu_bool FIL_PROOFS_ZIGZAG_DECODE_PREFETCH "${BENCH_ZIGZAG_DECODE_PREFETCH-${FIL_PROOFS_ZIGZAG_DECODE_PREFETCH-0}}")" || return
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_PREFETCH=%s\n' "${value}"
   value="${BENCH_ZIGZAG_UNSEAL_OUTPUT-${FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT-reference}}"
   case "${value}" in reference|parallel|stream) ;; *) devnet_die "ZigZag unseal output must be reference, parallel or stream" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT=%s\n' "${value}"

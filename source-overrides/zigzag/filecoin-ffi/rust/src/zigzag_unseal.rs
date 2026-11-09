@@ -67,11 +67,13 @@ pub(crate) fn unseal_range<W: Write>(
     }
     let decode = DecodeStateConfig::from_env()?;
     let output_config = zigzag::ZigZagUnsealOutputConfig::from_env()?;
+    let cpu_config = storage_proofs_porep_zigzag::zigzag::decode_cpu::DecodeCpuConfig::from_env()?;
     if decode.mode == DecodeMode::Blockwise {
         let started = Instant::now();
         let block_bytes = decode.block_bytes(len)?;
         let parent_config = DecodeConfig::from_env()?;
         let params = zigzag::parameters::zigzag_public_params::<zigzag::ZigZagTree>(config)?;
+        let cpu_workspace = cpu_config.workspace_bytes(params.graph.degree())?;
         let active_table_bytes = if SETTINGS.use_zigzag_parent_cache {
             params
                 .graph
@@ -88,6 +90,7 @@ pub(crate) fn unseal_range<W: Write>(
                 // Include the bounded FR32 output in the owned-buffer budget.
                 block_bytes
                     .checked_add(output_config.buffer_bytes(len)?)
+                    .and_then(|bytes| bytes.checked_add(cpu_workspace))
                     .context("ZigZag unseal buffer budget overflow")?,
                 parent_config.parent_buffer_mib * (1 << 20),
                 active_table_bytes,
@@ -135,6 +138,7 @@ pub(crate) fn unseal_range<W: Write>(
             "event": "storage", "mode": decode.mode, "requested_storage": decode.storage,
             "storage": if use_ram { "ram" } else { "file" },
             "state_bytes": len, "block_bytes": block_bytes,
+            "cpu_workspace_budget_bytes": cpu_workspace,
             "scratch_logical_bytes": if use_ram { 0 } else { len },
             "scratch_allocated_bytes": scratch_allocated_bytes,
             "prepare_ns": started.elapsed().as_nanos(),
