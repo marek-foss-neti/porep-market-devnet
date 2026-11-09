@@ -11,6 +11,10 @@ This changes only ZigZag decoding. It does not change parent-table contents,
 encoding, the KDF, layer count, sector format, SDR, Groth16 or the two sector
 buffers. It does not apply encoder DONTNEED advice to shared parent tables.
 
+The optional [blockwise state decoder](zigzag-blockwise-unseal.md) reuses these
+readers with one sector state and a bounded output block. Its storage/mode
+controls are independent of parent-reader selection; ping-pong remains the default.
+
 ## Controls
 
 | Benchmark variable | Native variable | Default / values |
@@ -58,7 +62,7 @@ Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
 Devnet pins the committed implementation at Rust revision
-`fc8ae8fb1f7314da9baaf148ce0b31aef203fc70`. Fetch the managed sources and rebuild
+`bd1fb47b4ea7ac82ecb052e66ebbbd285cec60a3`. Fetch the managed sources and rebuild
 the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
 image cannot exercise the new reader just by receiving its environment variables.
 

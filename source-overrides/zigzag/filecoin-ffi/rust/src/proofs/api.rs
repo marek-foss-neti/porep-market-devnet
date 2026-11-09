@@ -3006,6 +3006,33 @@ pub mod tests {
         drop((left, right, filler));
         assert_eq!(fs::read_dir(&scratch)?.count(), 0);
         assert!(available(&disk)? >= initial_free);
+        // The blockwise fallback reserves just one sector. Insufficient space
+        // fails before reading sealed; reserved mmap pages remain writable at ENOSPC.
+        let filler = tempfile::tempfile_in(&scratch)?;
+        allocate(&filler, available(&disk)? - (4 << 20))?;
+        sealed.seek(std::io::SeekFrom::Start(17))?;
+        for _ in 0..2 {
+            let error = zigzag_unseal::prepare_blockwise_scratch(&sealed, &scratch, sector_bytes)
+                .unwrap_err();
+            assert!(format!("{error:#}").contains("No space left on device"));
+            assert_eq!(sealed.stream_position()?, 17);
+            assert_eq!(fs::read_dir(&scratch)?.count(), 0);
+        }
+        drop(filler);
+        let state = zigzag_unseal::prepare_blockwise_scratch(&sealed, &scratch, sector_bytes)?;
+        assert!(state.metadata()?.blocks() * 512 >= sector_bytes);
+        let filler = tempfile::tempfile_in(&scratch)?;
+        allocate(&filler, available(&disk)?)?;
+        assert_eq!(available(&disk)?, 0);
+        {
+            let mut mapping = unsafe { MmapOptions::new().map_mut(&state)? };
+            mapping.fill(7);
+            mapping.flush()?;
+            assert!(mapping.iter().all(|b| *b == 7));
+        }
+        drop((state, filler));
+        assert_eq!(fs::read_dir(&scratch)?.count(), 0);
+        assert!(available(&disk)? >= initial_free);
         sealed.rewind()?;
         let mut check = vec![0u8; sector_bytes as usize];
         sealed.read_exact(&mut check)?;

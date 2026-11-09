@@ -103,6 +103,10 @@ export function parseDecodeParentDiagnostics(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_decode_parents (\{.*\})\s*$/);
 }
 
+export function parseDecodeStateDiagnostics(raw) {
+  return parseJsonDiagnostics(raw, /\bzigzag_decode_state (\{.*\})\s*$/);
+}
+
 export function parseSetupWorkerPlans(raw) {
   return parseJsonDiagnostics(raw, /\bzigzag_setup_workers (\{.*\})\s*$/)
     .map((plan) => ({ ...plan, source: "param-prewarm.stderr.log" }));
@@ -191,6 +195,7 @@ export function composeReport({
     encode_prehash: measuredLog === null ? [] : parseEncodePrehashDiagnostics(measuredLog),
     layer_pipeline: measuredLog === null ? [] : parsePipelineDiagnostics(measuredLog),
     decode_parent_reads: measuredLog === null ? [] : parseDecodeParentDiagnostics(measuredLog),
+    decode_state: measuredLog === null ? [] : parseDecodeStateDiagnostics(measuredLog),
     tree_r_builds: measuredLog === null ? [] : parseMerkleDiagnostics(measuredLog),
     telemetry,
     prewarm,
@@ -355,6 +360,15 @@ export function renderPhaseMarkdown(report) {
       ...(report.decode_parent_reads ?? []).map((entry) =>
         `| ${entry.event} | ${entry.reader} | ${entry.reversed} | ${value(entry.layout?.readers)} | ${value(entry.layout?.buffer_bytes)} | ${value(entry.io?.read_calls)} | ${value(entry.io?.read_bytes)} | ${value(entry.mappings)} | ${value(entry.remaps)} | ${value(entry.elapsed_ns == null ? null : entry.elapsed_ns / 1e6)} |`), "",
       "Open/validation time is nested in the first layer using that orientation; do not add these timers to raw_unseal. Positional read counters are logical bytes/syscalls, not physical disk traffic; mmap reads use page faults instead. File-backed page cache is additional to the bounded owned buffers. Source-open lock waits are in decode_parent_reads in report.json; CPU system time, faults and pressure remain in the enclosing phase telemetry. Legacy counters are unavailable, not zero. Encoder parent-buffer and DONTNEED settings do not configure this reader.");
+  }
+  if (report.cpu_configuration?.decode_state || report.decode_state?.length) {
+    lines.push("", "## Raw unseal state and copy-back", "",
+      `Requested configuration: \`${JSON.stringify(report.cpu_configuration?.decode_state ?? null)}\`.`, "",
+      "| Event | Storage | Reversed | State B | Block B | Blocks | Decode + join ms | Copy-back ms | Preparation ms |",
+      "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+      ...(report.decode_state ?? []).map((entry) =>
+        `| ${entry.event} | ${entry.storage ?? "—"} | ${entry.reversed ?? "—"} | ${value(entry.state_bytes)} | ${value(entry.block_bytes)} | ${value(entry.blocks)} | ${value(entry.decode_join_ns == null ? null : entry.decode_join_ns / 1e6)} | ${value(entry.copy_back_ns == null ? null : entry.copy_back_ns / 1e6)} | ${value(entry.prepare_ns == null ? null : entry.prepare_ns / 1e6)} |`), "",
+      "Timers are nested in raw_unseal, not added to it. Decode + join includes the parallel barrier; copy-back begins only after all readers finish. RAM admission samples host/cgroup headroom and includes an active parent table, owned buffers and reserve; it is not an OS memory reservation. Actual storage, fallback reasons and allocation bounds are in decode_state; observed RAM/faults/I/O remain in phase telemetry. Ping-pong remains the reference default.");
   }
   if (report.prewarm_worker_plans?.length) {
     lines.push("", "## Parameter prewarm workers", "",

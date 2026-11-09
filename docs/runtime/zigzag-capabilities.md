@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`fc8ae8fb1f7314da9baaf148ce0b31aef203fc70`. This revision includes
+`bd1fb47b4ea7ac82ecb052e66ebbbd285cec60a3`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -49,12 +49,18 @@ decode for valid empty unseal ranges. Every dedicated ZigZag build includes:
 | Optional local TreeR eviction after C1 validation, before parameter loading | `zigzag_commit_phase2_with_cache` |
 | Validated TreeD import | `zigzag_pre_commit_phase1_with_tree_d` |
 | File-backed unseal with preallocated scratch | `zigzag_unseal_range_with_scratch` |
+| Optional blockwise unseal with one private state and bounded scratch | `zigzag_unseal_range_with_block` |
 | Semantic C1 validation before reuse | `zigzag_validate_commit_phase1` |
 | Selectable Groth16 parameter source in ordinary and split C2 | `ZigZagParameters`, `groth_parameters`, `circuit_proofs_with_parameters`, `prove_with_parameters` |
 | Bounded per-C2 query cache, disabled by default in the native API | `parameters/query_cache.rs`, `QueryCacheConfig` |
 | Bounded binary CPU TreeR builder and explicit reference path | `merkle_builder.rs`, `TreeRBuilder` |
 | Bounded layer overlap and streaming snapshots | `layer_pipeline.rs`, `LayerPipelineConfig` |
 | Bounded SHA prefix preparation in encode feeders | `encode_prehash.rs`, `EncodePrehash` |
+
+The pin also includes [blockwise raw unseal](zigzag-blockwise-unseal.md), with
+RAM admission or a preallocated file state and copy-back after all block readers
+have joined. It remains opt-in; `ping_pong` is the reference default. The repin
+does not establish full Rust/FFI validation or a measured unseal speedup.
 
 The pinned revision also includes the [binary TreeR builder](zigzag-merkle-builder.md),
 wired into the same PC1 path used by dedicated Curio. It remains opt-in in the

@@ -49,6 +49,14 @@ zigzag_bench_cpu_environment() {
   case "${value}" in legacy|buffered|mmap) ;; *) devnet_die "ZigZag decode parent reader must be legacy, buffered or mmap" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER=%s\n' "${value}"
   zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB "${BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB-${FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB-64}}" 1 256 || return
+  local decode_mode="${BENCH_ZIGZAG_DECODE_MODE-${FIL_PROOFS_ZIGZAG_DECODE_MODE-ping_pong}}"
+  case "${decode_mode}" in ping_pong|blockwise) ;; *) devnet_die "ZigZag decode mode must be ping_pong or blockwise" ;; esac
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_MODE=%s\n' "${decode_mode}"
+  value="${BENCH_ZIGZAG_DECODE_STORAGE-${FIL_PROOFS_ZIGZAG_DECODE_STORAGE-auto}}"
+  case "${value}" in auto|file|ram) ;; *) devnet_die "ZigZag decode storage must be auto, file or ram" ;; esac
+  [[ "${decode_mode}" == blockwise || "${value}" != ram ]] || devnet_die "RAM decode storage requires blockwise mode"
+  printf 'FIL_PROOFS_ZIGZAG_DECODE_STORAGE=%s\n' "${value}"
+  zigzag_emit_integer FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB "${BENCH_ZIGZAG_DECODE_BLOCK_MIB-${FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB-64}}" 1 256 || return
   value="${BENCH_ZIGZAG_TREE_R_BUILDER-${FIL_PROOFS_ZIGZAG_TREE_R_BUILDER-legacy}}"
   case "${value}" in binary|legacy) ;; *) devnet_die "ZigZag TreeR builder must be binary or legacy" ;; esac
   printf 'FIL_PROOFS_ZIGZAG_TREE_R_BUILDER=%s\n' "${value}"
