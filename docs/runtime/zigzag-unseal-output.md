@@ -10,13 +10,14 @@ unchanged.
 
 | Benchmark variable | Native variable | Default / values |
 | --- | --- | --- |
-| `BENCH_ZIGZAG_UNSEAL_OUTPUT` | `FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT` | `reference`; `reference`, `parallel`, `stream` |
+| `BENCH_ZIGZAG_UNSEAL_OUTPUT` | `FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT` | Benchmark: `stream`; native: `reference`; values: `reference`, `parallel`, `stream` |
 | `BENCH_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB` | `FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB` | `64`; 1–64 MiB of padded input per batch |
 
 `BENCH_*` overrides the native setting in dedicated full and unseal-only
 benchmarks. Parent-reader, decode mode and storage controls remain independent.
-The default stays `reference` until correctness and full-unseal performance
-acceptance; the new buffer is not allocated in that mode.
+The [benchmark preset](zigzag-benchmarks.md#shared-raw-unseal-defaults) selects
+`stream`; native Rust/Curio defaults stay `reference`, which does not allocate
+the new buffer.
 
 | Mode | Decode | Output |
 | --- | --- | --- |
@@ -90,7 +91,7 @@ all required layers and output; it is not replaced with a padded-only timer.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. The FFI overlay requires
+`1382a85216f15324b1b1cd140c78e375035783c8`. The FFI overlay requires
 `zigzag_unseal_range_streaming` and the output configuration API. Make this
 commit available in the source repository, fetch the managed sources and
 rebuild the dedicated ZigZag image. No development-source override is required.

@@ -2,16 +2,18 @@
 
 These optional experiments target the bulk decoder's parent gather, SHA-256 KDF
 and scalar subtraction. They apply to ping-pong, blockwise and streamed final-layer
-decode. The original decoder remains the default. Encoding, single-node
-verification, SDR, proof geometry and the sealed format are unchanged. No new
-default or speedup has been accepted without a full raw-unseal comparison.
+decode. Native Rust/Curio defaults retain the original decoder. Benchmarks now
+select `limbs`, batches of 8, `serial` SHA, prefix reuse and prefetch; see the
+[shared preset](zigzag-benchmarks.md#shared-raw-unseal-defaults).
+Encoding, single-node verification, SDR, proof geometry and the sealed format
+are unchanged.
 
 ## Controls
 
 Native variables start with `FIL_PROOFS_ZIGZAG_DECODE_`; corresponding
 `BENCH_ZIGZAG_DECODE_` variables override them in the dedicated runners.
 
-| Suffix | Default | Values and effect |
+| Suffix | Native default | Values and effect |
 | --- | --- | --- |
 | `FIELD` | `reference` | `reference` / `limbs`: original `Fr` conversion or canonical four-limb subtraction |
 | `SHA` | `serial` | `serial` / `interleaved`: finish each message or update active messages one SHA block at a time |
@@ -23,7 +25,7 @@ Native variables start with `FIL_PROOFS_ZIGZAG_DECODE_`; corresponding
 
 Native Boolean values are 0/1; benchmark aliases are normalized by the shell.
 Invalid values fail validation. Settings are snapshotted for a multilayer decode
-session. With every default, the previous path executes. Profiling or an explicit
+session. With every native default, the previous path executes. Profiling or an explicit
 thread cap also selects the instrumentable batched path, even with reference
 SHA and field arithmetic. `ENCODE_PREHASH` still affects only encoder feeders.
 No new global SHA Cargo feature, CPU target or GPU requirement is introduced.
@@ -92,7 +94,7 @@ not zero. Do not add/extrapolate them into total raw unseal. Prefix setup work
 is separate from reused blocks, so reuse counters alone are not a net speedup.
 
 Devnet pins the committed CPU decoder implementation at Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`, including the required
+`1382a85216f15324b1b1cd140c78e375035783c8`, including the required
 `decode_cpu::DecodeCpuConfig` API. Publish this commit, fetch the managed sources
 and rebuild the dedicated image; no development-source override is required.
 Flags alone cannot update an old image. The repin does not establish full

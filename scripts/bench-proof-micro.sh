@@ -10,6 +10,19 @@ backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
 sector_size="$(devnet_normalize_sector_size "${sector_size}")"
 mode="${3:-full}"
+# Host-side benchmark defaults also apply to fixture preparation and unseal-only.
+# Keep these out of the shared CPU helper, which is also used by Curio.
+if [[ "${backend}" == zigzag ]]; then
+  export POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS="${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-1}"
+  export BENCH_PRUNE_BUILDKIT_AFTER_BENCH="${BENCH_PRUNE_BUILDKIT_AFTER_BENCH:-0}"
+  export BENCH_ZIGZAG_DECODE_PARENT_READER="${BENCH_ZIGZAG_DECODE_PARENT_READER-${FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER-buffered}}"
+  export BENCH_ZIGZAG_DECODE_MODE="${BENCH_ZIGZAG_DECODE_MODE-${FIL_PROOFS_ZIGZAG_DECODE_MODE-blockwise}}"
+  export BENCH_ZIGZAG_DECODE_FIELD="${BENCH_ZIGZAG_DECODE_FIELD-${FIL_PROOFS_ZIGZAG_DECODE_FIELD-limbs}}"
+  export BENCH_ZIGZAG_DECODE_BATCH_NODES="${BENCH_ZIGZAG_DECODE_BATCH_NODES-${FIL_PROOFS_ZIGZAG_DECODE_BATCH_NODES-8}}"
+  export BENCH_ZIGZAG_DECODE_PREFIX_REUSE="${BENCH_ZIGZAG_DECODE_PREFIX_REUSE-${FIL_PROOFS_ZIGZAG_DECODE_PREFIX_REUSE-1}}"
+  export BENCH_ZIGZAG_DECODE_PREFETCH="${BENCH_ZIGZAG_DECODE_PREFETCH-${FIL_PROOFS_ZIGZAG_DECODE_PREFETCH-1}}"
+  export BENCH_ZIGZAG_UNSEAL_OUTPUT="${BENCH_ZIGZAG_UNSEAL_OUTPUT-${FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT-stream}}"
+fi
 bench_profile="${BENCH_PROOF_MICRO_PROFILE:-}"
 case "${bench_profile}" in
   ""|zigzag-8|zigzag-512) ;;
@@ -20,17 +33,14 @@ if [[ -n "${bench_profile}" ]]; then
   profile_bytes=536870912
   profile_nodes=16777216
   profile_depth=24
-  profile_partitions=10
-  profile_minimum=176
-  profile_challenges=18
+  profile_partitions=63
+  profile_minimum=750
+  profile_challenges=12
   if [[ "${bench_profile}" == zigzag-8 ]]; then
     profile_sector=8mib
     profile_bytes=8388608
     profile_nodes=262144
     profile_depth=18
-    profile_partitions=2
-    profile_minimum=4
-    profile_challenges=2
   fi
   [[ "${backend}" == "zigzag" && "${sector_size}" == "${profile_sector}" && ( "${mode}" == "full" || "${mode}" == "prewarm-only" ) ]] ||
     devnet_die "${bench_profile} requires zigzag ${profile_sector} full or prewarm-only"
@@ -46,11 +56,15 @@ if [[ "${mode}" == "prewarm-only" && "${backend}" != "zigzag" ]]; then
 fi
 
 microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
-if [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
+if [[ "${backend}" == zigzag && -z "${bench_profile}" ]]; then
+  microbench_layers="${microbench_layers:-17}"
+elif [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
   microbench_layers="11"
 fi
 if [[ -n "${bench_profile}" && -n "${microbench_layers}" ]]; then
-  devnet_die "${bench_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
+  [[ "${microbench_layers}" == 17 ]] || devnet_die "${bench_profile} has fixed 17 layers"
+  # The Rust profile supplies its own layer count and rejects an env override.
+  microbench_layers=""
 fi
 case "${microbench_layers}" in
   ""|2|11|15|17|19|22|25) ;;
@@ -195,10 +209,10 @@ if [[ "${backend}" == "zigzag" ]]; then
   # The base budget excludes retained C2 queries. Only the full measured
   # container gets the cache allowance; prewarm/fixture/unseal do not use it.
   memory_variable=BENCH_ZIGZAG_FULL_MEMORY_BYTES
-  base_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-53687091200}"
+  base_memory_bytes="${BENCH_ZIGZAG_FULL_MEMORY_BYTES:-107374182400}"
   if [[ "${mode}" == "prewarm-only" ]]; then
     memory_variable=BENCH_ZIGZAG_SETUP_MEMORY_BYTES
-    base_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-53687091200}"
+    base_memory_bytes="${BENCH_ZIGZAG_SETUP_MEMORY_BYTES:-107374182400}"
   fi
   [[ "${base_memory_bytes}" =~ ^[0-9]{1,12}$ ]] ||
     devnet_die "${memory_variable} must be positive and at most 100 GiB"
@@ -1043,6 +1057,13 @@ if [[ -n "${bench_profile}" ]]; then
     and .profile.total_challenge_instances == (17 * $partitions * $challenges)
     and .verifying_key_matches_params == true
   ' "${prewarm_summary_json}" >/dev/null || devnet_die "${bench_profile} prewarm used wrong parameters"
+elif [[ "${backend}" == zigzag && "${sector_size}" == 32gib ]]; then
+  jq -e --argjson layers "${microbench_layers}" '
+    .porep_layers == $layers and .porep_partitions == 63
+    and .minimum_total_challenges == 750
+    and .challenges_per_layer_per_partition == 12
+    and .verifying_key_matches_params == true
+  ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-32g prewarm used wrong parameters; rebuild with the updated Rust benchmark budget"
 fi
 
 if [[ "${mode}" == "prewarm-only" ]]; then

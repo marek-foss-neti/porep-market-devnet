@@ -1485,6 +1485,12 @@ fn zigzag_porep_config(args: &Args, registered_proof: RegisteredSealProof) -> zi
             zigzag_512_profile::config()
         };
     }
+    if args.backend == Backend::ZigZag && args.sector_size_bytes == SECTOR_SIZE_32_GIB {
+        return zigzag::zigzag_bench::config_32gib(
+            registered_proof.as_v1_config().porep_id,
+            ZigZagApiVersion::V1_2_0,
+        );
+    }
     zigzag::PoRepConfig::new_groth16(
         args.sector_size_bytes,
         registered_proof.as_v1_config().porep_id,

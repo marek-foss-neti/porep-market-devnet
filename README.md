@@ -201,17 +201,17 @@ ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
 
-For a lightweight local development cycle with 17 layers, 2 partitions and
-2 challenges per layer per partition:
+For a smaller sector with the same 17-layer, 63-partition proof budget:
 
 ```sh
 just bench-zigzag-8
 ```
 
-This 8 MiB profile uses the same optimization preset with a smaller proof budget,
-12 GiB prewarm limit and 13 GiB full-run limit including 1 GiB query cache.
-It requires the Rust `zigzag_bench::config_8mib` API in the pinned dependency and
-a rebuilt image. See [the development profile](docs/runtime/zigzag-benchmarks.md#8-mib-development-profile).
+This 8 MiB profile uses the same optimization preset, minimum 750 challenges,
+100 GiB limit and disabled query cache. This gives 12 challenges per layer
+per partition, or 756 per layer. This is heavier than the former small proof;
+the updated Rust benchmark budget is pinned, and requires an image rebuild
+with `just build`. See [the development profile](docs/runtime/zigzag-benchmarks.md#8-mib-development-profile).
 
 For comparative development measurements and production-size acceptance:
 
@@ -374,15 +374,21 @@ parameters, parent cache, and ZigZag sidecars, counting each configured path
 once. The prewarm process has a separate telemetry stream and is not folded
 into the measured sealing process.
 
-The general ZigZag microbenchmark runner defaults to 50 GiB base RAM and cache
-off. The `bench-zigzag-512` and `bench-zigzag-32g` presets select 100 GiB base
-plus 20 GiB query cache; `bench-zigzag-8` selects 12 GiB plus 1 GiB. Full runs
+All ZigZag microbenchmark runners, including `bench-zigzag-8`,
+`bench-zigzag-512`, `bench-zigzag-32g` and unseal-only, default to 100 GiB base
+RAM with query cache disabled. Full runs
 add query cache on top of the base; prewarm receives only the base, with no
 extra swap. The cache reserve follows the base; an explicit mismatched reserve
 is rejected. The loader permits at most 120 GiB base plus cache. See the
 [query-cache policy](docs/runtime/zigzag-query-cache.md).
 `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables query cache. SDR and Curio service
 limits are unchanged.
+
+ZigZag benchmarks use 17 layers, buffered parents, blockwise decode, automatic
+storage and streamed output by default, with limb arithmetic, batches of 8,
+serial SHA, prefix reuse and prefetch. See the
+[shared raw-unseal preset](docs/runtime/zigzag-benchmarks.md#shared-raw-unseal-defaults)
+for overrides, profile geometry and fixture compatibility.
 
 Each successful run publishes:
 

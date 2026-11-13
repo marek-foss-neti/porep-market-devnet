@@ -39,30 +39,31 @@ BENCH_STACKED_USE_MULTICORE_SDR=0 just bench-proof-micro stacked 8mib
 Each generated `summary.md` records both the Stacked SDR replication mode and
 the effective `FIL_PROOFS_USE_MULTICORE_SDR` value.
 
-By default the microbench is intentionally limited to `2kib` and `8mib` sectors,
-because it performs a complete local seal/prove/verify/unseal cycle, including
-the proof library's circuit and parameter memory requirements. Larger registered
-sector sizes can be enabled explicitly:
+ZigZag benchmarks enable large sectors by default; set
+`POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=0` to restore the size guard.
+SDR remains limited to `2kib` and `8mib` unless larger sectors are enabled
+explicitly. The combined-backend command also needs this opt-in for its SDR run:
 
 ```bash
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro zigzag 512mib
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 just bench-proof-micro-backends 512mib
 ```
 
-Use that opt-in only on a machine with enough memory, disk, proof parameters, and
+Use larger sectors on a machine with enough memory, disk, proof parameters, and
 time budget. The restore-zigzag overlay in this branch supports ZigZag for
 `2kib`, `8mib`, `512mib`, and `32gib`.
 
-All ZigZag benchmark modes and sector sizes default to a 53,687,091,200-byte
-(50 GiB) base RAM budget, with swap disabled. `BENCH_ZIGZAG_FULL_MEMORY_BYTES`
+All ZigZag benchmark modes and sector sizes default to a 107,374,182,400-byte
+(100 GiB) base RAM budget, with swap disabled. `BENCH_ZIGZAG_FULL_MEMORY_BYTES`
 sets this base. Full measured runs add `BENCH_ZIGZAG_QUERY_CACHE_BYTES` on top:
-4 GiB of cache gives a 54 GiB Docker limit and a 50 GiB cache reserve. Full-run
+query cache defaults to `0`; 4 GiB of cache gives a 104 GiB Docker limit and
+a 100 GiB cache reserve. Full-run
 prewarm, fixture preparation and `unseal-only` receive only the base budget.
 Standalone `prewarm-only` instead uses `BENCH_ZIGZAG_SETUP_MEMORY_BYTES`, also
-50 GiB. Active-cache runs must fit within the current loader's 60 GiB policy
+100 GiB. Active-cache runs must fit within the current loader's 120 GiB policy
 ceiling and any explicit cache reserve must equal the base; incompatible
 settings fail before the workload starts. Runs without active cache retain the
-80 GiB override ceiling. `memory-budget.json`, provenance and JSON/Markdown
+100 GiB override ceiling. `memory-budget.json`, provenance and JSON/Markdown
 reports distinguish the base, cache addition and prewarm limit. Docker enforces
 the sum, not separate base/cache partitions. The cap is per container, shared by
 all its processes and threads, not a combined budget for concurrent benchmarks.
@@ -73,7 +74,7 @@ or OOM kills, and zero swap usage. Its kernel cgroup memory peak reached the
 effective limit of 109,999,996,928 bytes (approximately 102.45 GiB), corresponding
 to the former 110 GB limit. This validates that historical run at its configured
 limit; it does not establish memory headroom or guarantee success with the
-current 50 GiB default or concurrent runs.
+current 100 GiB default or concurrent runs.
 The default setup allocation budget is 40 GiB
 (`BENCH_ZIGZAG_SETUP_BUDGET_BYTES=42949672960`); it checks an allocation lower
 bound and is not a runtime memory limit.
@@ -83,11 +84,13 @@ bytes as they are written, without retaining full input/output copies. The check
 is byte-for-byte and requires both the actual and API-reported output lengths to
 match the requested length. ZigZag keeps one mutable sector buffer during
 pre-commit and releases it after persisting the replica and before proving.
-With the dedicated ZigZag build, unseal copies the sealed file into a
-private temporary file and alternates two writable file mappings between layers.
-It writes the requested raw bytes directly from the final mapping. The sealed
-replica is never modified. Builds against older Rust sources retain heap-based
-full unseal and copy-on-write mmap in unseal-only mode.
+With the dedicated ZigZag build, unseal now defaults to buffered parent reads,
+blockwise decode with automatic RAM/file storage, and streamed final-layer
+output. CPU defaults select limb arithmetic, batches of 8, serial SHA, prefix
+reuse and prefetch. See the full [raw-unseal preset](zigzag-benchmarks.md#shared-raw-unseal-defaults).
+The sealed replica is never modified. The previous decoder remains available
+through explicit overrides. This preset needs an image containing fast-unseal
+stages 1–4; changing these shell defaults does not require another rebuild.
 
 `raw_unseal` includes the streaming byte check for both backends, as
 `raw_unseal_retrieval` already does in `unseal-only` mode. Older full-run reports
@@ -105,12 +108,13 @@ rustc --edition=2021 --test source-overrides/filecoin-ffi/rust/src/bin/support/p
 "$io_test_bin"
 ```
 
-The full `512mib` proof microbench is an experiment that runs both ZigZag and
-Stacked with 11 PoRep layers instead of the default small-sector value of 2.
-The wrapper sets `POREP_PROOF_MICROBENCH_LAYERS=11` for `full` `512mib` runs
-only, including both the prewarm container and the measured container. This does
-not affect devnet sealing or existing `unseal-only` fixtures. Set
-`BENCH_PROOF_MICRO_LAYERS=2` to run the old 512MiB control case. Layer override
+All ZigZag modes default to 17 layers, including fixture preparation and
+unseal-only. Existing fixtures with a different layer count require the matching
+`BENCH_PROOF_MICRO_LAYERS` override. The named `zigzag-8` / `zigzag-512` profiles
+retain fixed 17-layer geometry; an explicit matching `17` is accepted.
+The full Stacked `512mib` microbench retains its 11-layer default.
+These process-local settings do not affect devnet sealing. Set
+`BENCH_PROOF_MICRO_LAYERS=2` on the general runner for the old small-sector case. Layer override
 experiments are limited to `2`, `11`, `15`, `17`, `19`, `22`, and `25`.
 
 ```bash
@@ -179,7 +183,7 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`, including direct query decoding
+`1382a85216f15324b1b1cd140c78e375035783c8`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
 consistent Groth16 circuit/batch boundaries in both API paths. It also includes
 the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and
@@ -393,11 +397,11 @@ Set `BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1` or
 `BENCH_RETAIN_STACKED_WORK_ARTIFACTS=1` only when the corresponding exact run
 artifacts are required for debugging.
 
-Every successful proof microbench invocation also runs
-`docker buildx prune --force` after publishing its reports, removing unused
-BuildKit cache without deleting tagged images. Its output is retained in
-`buildkit-prune.log`. Set `BENCH_PRUNE_BUILDKIT_AFTER_BENCH=0` to retain the
-cache when investigating or optimizing image builds.
+ZigZag benchmarks retain BuildKit cache by default. Set
+`BENCH_PRUNE_BUILDKIT_AFTER_BENCH=1` to run `docker buildx prune --force` after
+publishing reports, removing unused BuildKit cache without deleting tagged
+images. SDR keeps pruning enabled by default; set the variable to `0` to retain
+its cache too. Pruning output is retained in `buildkit-prune.log`.
 
 On Docker Desktop for macOS, the virtualization process can keep deleted
 bind-mounted benchmark files open after the container exits. The run directory

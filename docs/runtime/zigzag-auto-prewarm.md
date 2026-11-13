@@ -15,7 +15,7 @@ SDR's generator is unchanged. Encoder feeders still default to two.
 | `FIL_PROOFS_ZIGZAG_SETUP_WORKERS` | Native equivalent, used when the benchmark override is absent; Rust also defaults to `auto` |
 | `BENCH_ZIGZAG_SETUP_BATCH_POINTS` | 65536; unchanged per-worker buffer capacity |
 | `BENCH_ZIGZAG_SETUP_BUDGET_BYTES` | 42949672960 (40 GiB); unchanged generator admission budget |
-| Prewarm container RAM | Dedicated presets: 107374182400 (100 GiB); general runner: 53687091200 (50 GiB). Query cache is not added during prewarm |
+| Prewarm container RAM | All ZigZag runners: 107374182400 (100 GiB). Query cache is not added during prewarm |
 
 Both `just bench-zigzag-512` and `just bench-zigzag-32g` inherit automatic workers
 from the general runner and set their own 100 GiB base/container budget. `BENCH_*` overrides the native worker setting.

@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "46f7dd618ddfe9cfd11ada83434ac35f7a245990";
+const rustFilProofsSourceCommit = "1382a85216f15324b1b1cd140c78e375035783c8";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -844,9 +844,9 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
 });
 
 for (const preset of [
-  { name: "zigzag-8", sector: "8mib", bytes: 8388608, nativeProfile: "zigzag-8", script: "bench-zigzag.sh", args: ["8mib"], partitions: 2, minimum: 4, challenges: 2, memory: 12884901888, cache: 1073741824, setup: 10737418240, parameterEnv: "BENCH_ZIGZAG_8_PARAMETER_DIR" },
-  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [], partitions: 10, minimum: 176, challenges: 18, memory: 107374182400, cache: 21474836480, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_512_PARAMETER_DIR" },
-  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"], partitions: 10, minimum: 176, challenges: 18, memory: 107374182400, cache: 21474836480, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_32G_PARAMETER_DIR" },
+  { name: "zigzag-8", sector: "8mib", bytes: 8388608, nativeProfile: "zigzag-8", script: "bench-zigzag.sh", args: ["8mib"], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_8_PARAMETER_DIR" },
+  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_512_PARAMETER_DIR" },
+  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_32G_PARAMETER_DIR" },
 ]) test(`${preset.name} baseline passes the shared preset and overrides and validates geometry and image revision`, async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
@@ -956,7 +956,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     for (const name of ["BENCH_PROOF_MICRO_LAYERS", "POREP_PROOF_MICROBENCH_LAYERS"]) {
       const invalid = run(commit, { [name]: "0" });
       assert.notEqual(invalid.status, 0);
-      assert.match(invalid.stderr, /has fixed layers|invalid zigzag-32g layers/);
+      assert.match(invalid.stderr, /has fixed 17 layers|invalid zigzag-32g layers/);
       const extended = run(commit, { [name]: "17" });
       if (preset.sector === "32gib") {
         assert.equal(extended.status, 0, extended.stderr);
@@ -964,13 +964,12 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
         assert.ok(path);
         const report = JSON.parse(await readFile(path, "utf8"));
         assert.equal(report.runs[0].porep_layers, 17);
-        assert.equal(report.runs[0].total_challenge_instances, 3060);
+        assert.equal(report.runs[0].total_challenge_instances, 17 * preset.partitions * preset.challenges);
         const stale = run(commit, { [name]: "17", DEVNET_TEST_REPORTED_LAYERS: "11" });
         assert.notEqual(stale.status, 0);
         assert.match(stale.stderr, /proof geometry or correctness validation failed/);
       } else {
-        assert.notEqual(extended.status, 0);
-        assert.match(extended.stderr, /has fixed layers/);
+        assert.equal(extended.status, 0, extended.stderr);
       }
     }
     if (preset.sector === "32gib") {
@@ -2089,7 +2088,7 @@ fi
       const log = await readFile(fixture.commandLog, "utf8");
       const prewarm = log.split("\n").find((line) => line.includes("<--cidfile>"));
       assert.ok(prewarm);
-      assert.match(prewarm, /<--memory> <53687091200> <--memory-swap> <53687091200>/);
+      assert.match(prewarm, /<--memory> <107374182400> <--memory-swap> <107374182400>/);
       assert.match(prewarm, /<FIL_PROOFS_ZIGZAG_SETUP_BUDGET_BYTES=42949672960>/);
       assert.doesNotMatch(prewarm, /<--rm>/);
       if (scenario === "inspect-unavailable") {

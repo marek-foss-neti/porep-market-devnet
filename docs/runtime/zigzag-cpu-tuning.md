@@ -30,7 +30,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_EC_GPU_NUM_THREADS` | `EC_GPU_NUM_THREADS` | `auto`, or 1–4096 |
 | `BENCH_ZIGZAG_PARAMETER_LOADER` | `FIL_PROOFS_ZIGZAG_PARAMETER_LOADER` | `compact`; `compact` or `mapped`, see [compact parameters](zigzag-compact-parameters.md) |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | 0; optional [per-C2 query cache](zigzag-query-cache.md), up to 100 GiB |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (presets 100 GiB, general runner 50 GiB); generic Rust/Curio: 56 GiB |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget (100 GiB by default); generic Rust/Curio: 56 GiB |
 | `BENCH_ZIGZAG_MULTICORE_ENCODE` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_AFFINITY` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_AFFINITY` | 1; boolean |
 | `BENCH_ZIGZAG_ENCODE_PRODUCERS` | `FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCERS` | 2; wrapper accepts 1–128, screen 1/2/3/4 |
@@ -39,7 +39,7 @@ measured processes. Native variables are supported; `BENCH_*` takes precedence.
 | `BENCH_ZIGZAG_USE_PARENT_CACHE` | `FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE` | 1; boolean |
 | `BENCH_PARENT_CACHE_WINDOW_NODES` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE` | Existing mmap window; screen 2048/32768/262144 |
 | `BENCH_ZIGZAG_PARENT_BUFFER_NODES` | `FIL_PROOFS_ZIGZAG_PARENT_BUFFER_NODES` | 0; 0–262144 per encode reader |
-| `BENCH_ZIGZAG_DECODE_PARENT_READER` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER` | `legacy`; `legacy`, `buffered`, `mmap`; [raw unseal readers](zigzag-decode-parents.md) |
+| `BENCH_ZIGZAG_DECODE_PARENT_READER` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER` | `buffered`; `legacy`, `buffered`, `mmap`; [raw unseal readers](zigzag-decode-parents.md) |
 | `BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | 64; 1–256 MiB total owned parent buffers per decode, independent of encoder settings |
 | `BENCH_ZIGZAG_PARENT_CACHE_DONTNEED` | `FIL_PROOFS_ZIGZAG_PARENT_CACHE_DONTNEED` | 0; boolean |
 | `BENCH_ZIGZAG_TREE_R_DONTNEED` | `FIL_PROOFS_ZIGZAG_TREE_R_DONTNEED` | 0; boolean |
@@ -231,7 +231,7 @@ inspect the actual graph/backend separately on other architectures.
 
 Run builds, Rust fixtures and benchmarks only in the checkout on the remote
 machine. The lock pins the published Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`, including the cache_policy module,
+`1382a85216f15324b1b1cd140c78e375035783c8`, including the cache_policy module,
 reader, encoder, feature and direct Groth16 query decoding, plus the optional
 per-C2 query cache with corrected cgroup-v2 root-limit detection and
 circuit-preparation measurements. Query retention remains off by default. Fetch the updated

@@ -5,10 +5,10 @@ output block. For 32 GiB with a 64 MiB block, these buffers occupy **32 GiB +
 64 MiB**, instead of two 32 GiB sector buffers. Parent buffers, resident parent
 tables, runtime overhead and the output writer are additional memory.
 
-The default remains `ping_pong`. A smaller working set is not a measured speedup:
-blockwise decoding adds a copy-back pass per layer. Full 32 GiB A/B acceptance
-must select the production mode and block size. The 64 MiB setting is an
-experimental starting point; compare 16, 64 and 256 MiB. For an 8 MiB sector,
+Native Rust/Curio defaults remain `ping_pong`; the [benchmark preset](zigzag-benchmarks.md#shared-raw-unseal-defaults)
+selects `blockwise`, `auto` storage and 64 MiB blocks. Blockwise decoding adds
+a copy-back pass per layer, so compare full raw-unseal time when tuning the
+block size. For an 8 MiB sector,
 all three are capped at the sector size, so they do not demonstrate the memory
 savings of a 32 GiB sector.
 
@@ -16,7 +16,7 @@ savings of a 32 GiB sector.
 
 | Benchmark variable | Native variable | Default / values |
 | --- | --- | --- |
-| `BENCH_ZIGZAG_DECODE_MODE` | `FIL_PROOFS_ZIGZAG_DECODE_MODE` | `ping_pong`; `ping_pong`, `blockwise` |
+| `BENCH_ZIGZAG_DECODE_MODE` | `FIL_PROOFS_ZIGZAG_DECODE_MODE` | Benchmark: `blockwise`; native: `ping_pong`; values: `ping_pong`, `blockwise` |
 | `BENCH_ZIGZAG_DECODE_BLOCK_MIB` | `FIL_PROOFS_ZIGZAG_DECODE_BLOCK_MIB` | `64`; 1–256 MiB total, capped at sector size |
 | `BENCH_ZIGZAG_DECODE_STORAGE` | `FIL_PROOFS_ZIGZAG_DECODE_STORAGE` | `auto`; `auto`, `file`, `ram` |
 
@@ -66,7 +66,7 @@ The blockwise in-place result resides in the private state, for odd and even lay
 The new `zigzag_unseal_range_with_block` API accepts caller-owned state and block
 buffers. The existing `zigzag_unseal`/`zigzag_unseal_range` in-place API also
 honors blockwise mode; `zigzag_unseal_range_with_scratch` remains an explicit
-two-buffer reference. The ordinary FR32 writer remains the default. The optional
+two-buffer reference. The ordinary FR32 writer remains the native default. The
 [parallel FR32 and streaming output](zigzag-unseal-output.md) adds a separate
 writer API which emits the last layer directly and does not retain a complete
 padded result. Its final layer omits copy-back; earlier layers use the ordering
@@ -93,7 +93,7 @@ observed RAM, CPU, faults and I/O. Parent read statistics remain separate.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. The overlay requires
+`1382a85216f15324b1b1cd140c78e375035783c8`. The overlay requires
 `zigzag_unseal_range_with_block`. Make the commit available in the source
 repository, fetch the managed sources and rebuild the selected ZigZag image.
 No development-source override is required. An old image cannot exercise the

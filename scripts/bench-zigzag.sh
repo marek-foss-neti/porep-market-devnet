@@ -2,27 +2,20 @@
 set -euo pipefail
 source "$(cd -L "$(dirname "${BASH_SOURCE[0]}")" && pwd -L)/devnet-common.sh"
 
-# Share optimization settings; the 8 MiB development profile has a smaller
-# proof and memory budget than the 512 MiB / 32 GiB comparison profiles.
+# Share proof/optimization settings and memory budgets across sector sizes.
 sector_size="${1:-}"
 [[ "$#" == 1 ]] || devnet_die "usage: bench-zigzag.sh 8mib|512mib|32gib"
-partitions=10
-minimum_challenges=176
-challenges=18
+partitions=63
+minimum_challenges=750
+challenges=12
 default_memory_bytes=107374182400
-default_query_cache_bytes=21474836480
+default_query_cache_bytes=0
 default_setup_budget_bytes=42949672960
 case "${sector_size}" in
   8mib)
     baseline_profile=zigzag-8
     microbench_profile=zigzag-8
     sector_bytes=8388608
-    partitions=2
-    minimum_challenges=4
-    challenges=2
-    default_memory_bytes=12884901888
-    default_query_cache_bytes=1073741824
-    default_setup_budget_bytes=10737418240
     parameter_dir="${BENCH_ZIGZAG_8_PARAMETER_DIR:-${DEVNET_ROOT}/.cache/zigzag-8-parameters}"
     ;;
   512mib)
@@ -33,8 +26,8 @@ case "${sector_size}" in
     ;;
   32gib)
     baseline_profile=zigzag-32g
-    # Native 32 GiB already has the reference proof budget; no benchmark-only
-    # Rust profile or different image is needed.
+    # The binary selects the benchmark-only 32 GiB proof budget; no named
+    # small-sector profile or different image is needed.
     microbench_profile=""
     sector_bytes=34359738368
     parameter_dir="${BENCH_ZIGZAG_32G_PARAMETER_DIR:-${DEVNET_ROOT}/.cache/zigzag-32g-parameters}"
@@ -50,8 +43,8 @@ if [[ "${sector_size}" == 32gib ]]; then
   esac
   export BENCH_PROOF_MICRO_LAYERS="${layers}"
 else
-  [[ -z "${BENCH_PROOF_MICRO_LAYERS:-}" && -z "${POREP_PROOF_MICROBENCH_LAYERS:-}" ]] ||
-    devnet_die "${baseline_profile} has fixed layers; unset BENCH_PROOF_MICRO_LAYERS and POREP_PROOF_MICROBENCH_LAYERS"
+  [[ "${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-17}}" == 17 ]] ||
+    devnet_die "${baseline_profile} has fixed 17 layers"
 fi
 unsealed_bytes=$((sector_bytes / 128 * 127))
 
@@ -126,8 +119,8 @@ for repetition in 1; do
     BENCH_PROOF_PARAMETERS_DIR="${parameter_dir}" \
     BENCH_ZIGZAG_PARENT_CACHE_DIR="${parent_dir}" \
     BENCH_RETAIN_ZIGZAG_WORK_ARTIFACTS=1 \
-    BENCH_PRUNE_BUILDKIT_AFTER_BENCH=0 \
-    POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 \
+    BENCH_PRUNE_BUILDKIT_AFTER_BENCH="${BENCH_PRUNE_BUILDKIT_AFTER_BENCH:-0}" \
+    POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS="${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS:-1}" \
     bash "${DEVNET_ROOT}/scripts/bench-proof-micro.sh" zigzag "${sector_size}" full
   )"
   printf '%s\n' "${output}" | tee "${baseline_dir}/run-${repetition}.log"

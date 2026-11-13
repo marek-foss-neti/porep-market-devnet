@@ -64,21 +64,21 @@ min(requested_cache, max(0, min(detected_cgroup_limit, 120 GiB) - reserve))
 ```
 
 The generic Rust/Curio reserve remains **56 GiB**. The benchmark runner instead
-sets it to the base budget: **100 GiB** in the two dedicated presets,
-**50 GiB** in the general runner, for witness, FFT/MSM, other
+sets it to the base budget: **100 GiB** by default in all ZigZag runners,
+for witness, FFT/MSM, other
 query families, transient decoding, mmap/file residency and allocator overhead.
-For full runs, requested cache is added **on top**: with the general runner's
-50 GiB base, a 4 GiB request gives a
-54 GiB measured container and a 50 GiB reserve, so the cache can retain up to
+For full runs, requested cache is added **on top**: with the default
+100 GiB base, a 4 GiB request gives a
+104 GiB measured container and a 100 GiB reserve, so the cache can retain up to
 4 GiB. Full-run prewarm, fixture preparation and standalone unseal receive only
-the base budget; standalone prewarm retains its separate 50 GiB default.
+the base budget; standalone prewarm also defaults to 100 GiB.
 This applies to all ZigZag sector sizes, including 512 MiB and 32 GiB.
 
 The reserve is a planning allowance, not a separate kernel-enforced partition
 or live-RSS measurement. Docker enforces the sum for the whole container.
 The Rust adapter clamps the total budget at 120 GiB: the runner rejects
-active-cache configurations whose base plus cache exceeds 120 GiB. The dedicated
-presets use 100 GiB base plus 20 GiB cache. An explicit reserve must equal the
+active-cache configurations whose base plus cache exceeds 120 GiB. All benchmark
+presets use 100 GiB base with cache disabled by default. An explicit reserve must equal the
 base; unset old reserve overrides when changing the base. Base-only limits and
 individual cache/reserve settings are capped at 100 GiB. Retaining
 points can increase reclaim even when anonymous RSS fits, so acceptance must
@@ -97,7 +97,7 @@ native source and does not use this adapter.
 | Benchmark override | Rust / dedicated Curio variable | General runner / native default |
 | --- | --- | ---: |
 | `BENCH_ZIGZAG_QUERY_CACHE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES` | `0` |
-| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, presets `107374182400` (100 GiB), general runner `53687091200` (50 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
+| `BENCH_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | `FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES` | Benchmark: base budget, default `107374182400` (100 GiB); generic Rust/Curio: `60129542144` (56 GiB) |
 
 Values are integer bytes, capped at 100 GiB; the reserve must be positive. The
 benchmark explicitly forwards both variables into its ZigZag containers and
@@ -112,9 +112,10 @@ BENCH_ZIGZAG_QUERY_CACHE_BYTES=4294967296 just bench-zigzag-512
 ```
 
 This requests 100 GiB base + 4 GiB cache = 104 GiB RAM, with swap disabled.
-The shared `just bench-zigzag-512` / `just bench-zigzag-32g` preset defaults to
-20 GiB cache and a 120 GiB full-run limit; `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0`
-disables it. The general runner and native defaults remain disabled. Changing
+All ZigZag benchmark commands, including `bench-zigzag-8`, default to disabled
+query cache and a 100 GiB container limit. An explicit
+`BENCH_ZIGZAG_QUERY_CACHE_BYTES=21474836480` enables 20 GiB and raises the full-run
+limit to 120 GiB. Native defaults remain disabled. Changing
 the Rust ceiling requires a dependency repin and image rebuild.
 
 `groth16_parameters` in `report.json` contains `query_cache` configuration,
@@ -133,7 +134,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 now pins the committed implementation, including the cgroup-root fix, at
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. Fetch the managed sources and rebuild
+`1382a85216f15324b1b1cd140c78e375035783c8`. Fetch the managed sources and rebuild
 the dedicated images to use this revision. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed
 checkout. The build guard requires the adapter API. Keep all development changes

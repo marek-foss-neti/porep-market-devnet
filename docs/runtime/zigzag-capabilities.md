@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. This revision includes
+`1382a85216f15324b1b1cd140c78e375035783c8`. This revision includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache

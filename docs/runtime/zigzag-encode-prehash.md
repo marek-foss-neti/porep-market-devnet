@@ -82,7 +82,7 @@ setting, stride and lookahead only after comparing the complete PC1 workload.
 
 The prehash implementation, including encoder wait metrics, is committed and
 pinned in devnet at Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. Fetch the managed sources and rebuild
+`1382a85216f15324b1b1cd140c78e375035783c8`. Fetch the managed sources and rebuild
 both dedicated images on the remote machine before running comparisons. Both
 build guards require `EncodePrehash`; this pin needs no development-source
 override. For future uncommitted changes, use an isolated source copy inside
@@ -98,7 +98,7 @@ BENCH_ZIGZAG_ENCODE_PREHASH=1 just bench-zigzag-512
 ```
 
 These are explicit comparison runs, not an automatic benchmark matrix. Keep
-the current 50 GiB base preset plus query cache (10 GiB by default) and no extra container swap; start only when the shared host
+the current 100 GiB base preset with query cache disabled and no extra container swap; start only when the shared host
 has enough headroom for its other services. Compare encode, full PC1 and total
 sealing. A histogram with many prepared blocks alone does not establish a
 benefit: feeders and the consumer still contend for CPU/cache bandwidth.

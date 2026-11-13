@@ -13,13 +13,14 @@ buffers. It does not apply encoder DONTNEED advice to shared parent tables.
 
 The optional [blockwise state decoder](zigzag-blockwise-unseal.md) reuses these
 readers with one sector state and a bounded output block. Its storage/mode
-controls are independent of parent-reader selection; ping-pong remains the default.
+controls are independent of parent-reader selection. Benchmarks default to
+blockwise decode; native Rust/Curio defaults remain ping-pong.
 
 ## Controls
 
 | Benchmark variable | Native variable | Default / values |
 | --- | --- | --- |
-| `BENCH_ZIGZAG_DECODE_PARENT_READER` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER` | `legacy`; `legacy`, `buffered`, `mmap` |
+| `BENCH_ZIGZAG_DECODE_PARENT_READER` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_READER` | Benchmark: `buffered`; native: `legacy`; values: `legacy`, `buffered`, `mmap` |
 | `BENCH_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | `FIL_PROOFS_ZIGZAG_DECODE_PARENT_BUFFER_MIB` | `64`; 1–256 MiB total per active decode |
 
 `BENCH_*` takes precedence. These controls reach both comparison presets and
@@ -43,9 +44,10 @@ machines. Rayon task splitting cannot create extra record buffers. Concurrent
 unseals each have their own budget. Sector buffers, small KDF scratch, descriptor
 metadata and page cache are additional memory; this setting is not a cgroup cap.
 
-`legacy` remains the default, including in `bench-zigzag-512` and `bench-zigzag-32g`,
-until full-sector A/B acceptance. Implementation and correctness tests alone do
-not establish which reader wins on the target storage and RAM limit.
+All ZigZag benchmarks now default to `buffered`; see the
+[shared raw-unseal preset](zigzag-benchmarks.md#shared-raw-unseal-defaults).
+Native Rust/Curio defaults stay `legacy`. Use explicit overrides for A/B
+comparisons on other storage and RAM configurations.
 
 ## Reports and comparison
 
@@ -62,7 +64,7 @@ Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
 Devnet pins the committed implementation at Rust revision
-`46f7dd618ddfe9cfd11ada83434ac35f7a245990`. Fetch the managed sources and rebuild
+`1382a85216f15324b1b1cd140c78e375035783c8`. Fetch the managed sources and rebuild
 the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
 image cannot exercise the new reader just by receiving its environment variables.
 
@@ -75,8 +77,8 @@ BENCH_ZIGZAG_DECODE_PARENT_READER=buffered just bench-zigzag-512
 Repeat with `mmap` and `legacy`. Prefer the existing unseal-only command when a
 valid prepared fixture is available, with identical geometry, parent tables,
 output, workers, memory budget and cache state for each candidate. No new sealing
-or parameter prewarm is needed for such a fixture. Promote a default only after
-the 32 GiB / 17-layer comparison at the agreed total memory limit of 120 GiB.
+or parameter prewarm is needed for such a fixture. The current comparison
+preset uses 32 GiB / 17 layers and a 100 GiB limit with query cache disabled.
 
 ## Validation status
 

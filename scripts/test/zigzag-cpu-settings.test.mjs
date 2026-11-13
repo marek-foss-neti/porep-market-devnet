@@ -9,7 +9,7 @@ import { composeReport, parseCpuDiagnostics, parseDecodeParentDiagnostics, parse
 import { summarizeTelemetry } from "../summarize-proof-micro-telemetry.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(BENCH_|FIL_PROOFS_|DEVNET_|RAYON_NUM_THREADS$|EC_GPU_NUM_THREADS$)/.test(name)));
+const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(BENCH_|FIL_PROOFS_|DEVNET_|POREP_PROOF_MICROBENCH_|RAYON_NUM_THREADS$|EC_GPU_NUM_THREADS$)/.test(name)));
 const settings = 'set -euo pipefail; devnet_die() { printf "%s\\n" "$*" >&2; exit 1; }; source "$1/scripts/zigzag-cpu-settings.sh"; zigzag_bench_cpu_environment';
 
 function shell(code, env = {}, args = []) {
@@ -48,6 +48,81 @@ test("defaults preserve encode settings and leave pool sizing to the container",
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_PRODUCER_STRIDE, "128");
   assert.equal(env.FIL_PROOFS_ZIGZAG_MULTICORE_ENCODE_LOOKAHEAD, "4096");
   for (const name of ["PARENT_BUFFER_NODES", "PARENT_CACHE_DONTNEED", "TREE_R_DONTNEED"]) assert.equal(env[`FIL_PROOFS_ZIGZAG_${name}`], "0");
+});
+
+test("ZigZag runner enables fast raw unseal in every mode without changing native defaults", () => {
+  const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
+  const defaults = source.slice(source.indexOf("# Host-side benchmark defaults"), source.indexOf('bench_profile="'));
+  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; ' + defaults +
+    '\nsource "$1/scripts/zigzag-cpu-settings.sh"; zigzag_bench_cpu_environment; ' +
+    'printf "large=%s\\nprune=%s\\n" "${POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS-unset}" "${BENCH_PRUNE_BUILDKIT_AFTER_BENCH-unset}"';
+  const read = (env) => {
+    const result = shell(code, env);
+    assert.equal(result.status, 0, result.stderr);
+    return Object.fromEntries(result.stdout.trim().split("\n").map((line) => line.split("=")));
+  };
+  for (const sector_size of ["8mib", "512mib", "32gib"]) {
+    for (const mode of ["full", "prewarm-only", "prepare-fixture", "unseal-only"]) {
+      const env = read({ backend: "zigzag", sector_size, mode });
+      for (const [name, value] of Object.entries({PARENT_READER: "buffered", PARENT_BUFFER_MIB: "64",
+        MODE: "blockwise", STORAGE: "auto", BLOCK_MIB: "64", FIELD: "limbs", BATCH_NODES: "8",
+        SHA: "serial", PREFIX_REUSE: "1", PREFETCH: "1", THREADS: "auto", PROFILE_EVERY: "0"})) {
+        assert.equal(env[`FIL_PROOFS_ZIGZAG_DECODE_${name}`], value);
+      }
+      assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT, "stream");
+      assert.equal(env.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT_CHUNK_MIB, "64");
+      assert.equal(env.FIL_PROOFS_USE_ZIGZAG_PARENT_CACHE, "1");
+      assert.equal(env.FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES, "0");
+      assert.equal(env.RAYON_NUM_THREADS, "auto");
+      assert.equal(env.large, "1");
+      assert.equal(env.prune, "0");
+    }
+  }
+  const override = read({ backend: "zigzag", BENCH_ZIGZAG_DECODE_MODE: "ping_pong",
+    BENCH_ZIGZAG_DECODE_PREFETCH: "0", FIL_PROOFS_ZIGZAG_DECODE_FIELD: "reference",
+    FIL_PROOFS_ZIGZAG_DECODE_SHA: "interleaved", BENCH_ZIGZAG_UNSEAL_OUTPUT: "parallel",
+    POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS: "0", BENCH_PRUNE_BUILDKIT_AFTER_BENCH: "1" });
+  assert.equal(override.FIL_PROOFS_ZIGZAG_DECODE_MODE, "ping_pong");
+  assert.equal(override.FIL_PROOFS_ZIGZAG_DECODE_PREFETCH, "0");
+  assert.equal(override.FIL_PROOFS_ZIGZAG_DECODE_FIELD, "reference");
+  assert.equal(override.FIL_PROOFS_ZIGZAG_DECODE_SHA, "interleaved");
+  assert.equal(override.FIL_PROOFS_ZIGZAG_UNSEAL_OUTPUT, "parallel");
+  assert.equal(override.large, "0");
+  assert.equal(override.prune, "1");
+  const stacked = read({ backend: "stacked" });
+  assert.equal(stacked.FIL_PROOFS_ZIGZAG_DECODE_MODE, "ping_pong");
+  assert.equal(stacked.large, "unset");
+  assert.equal(stacked.prune, "unset");
+});
+
+test("ZigZag defaults to 17 layers and accepts a matching fixed-profile override", () => {
+  const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
+  const start = source.indexOf('microbench_layers="');
+  const end = source.indexOf('\ntelemetry_interval_ms=', start);
+  const code = 'set -euo pipefail; source "$1/scripts/devnet-common.sh"; ' + source.slice(start, end) +
+    '\nprintf "%s" "${microbench_layers}"';
+  for (const sector_size of ["8mib", "512mib", "32gib"]) {
+    for (const mode of ["full", "prewarm-only", "prepare-fixture", "unseal-only"]) {
+      const env = { backend: "zigzag", sector_size, mode, bench_profile: "" };
+      for (const [override, expected] of [[{}, "17"], [{ BENCH_PROOF_MICRO_LAYERS: "11" }, "11"]]) {
+        const result = shell(code, { ...env, ...override });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, expected);
+      }
+    }
+  }
+  for (const bench_profile of ["zigzag-8", "zigzag-512"]) {
+    const env = { backend: "zigzag", bench_profile };
+    for (const override of [{}, { BENCH_PROOF_MICRO_LAYERS: "17" }]) {
+      const result = shell(code, { ...env, ...override });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+    }
+    assert.notEqual(shell(code, { ...env, BENCH_PROOF_MICRO_LAYERS: "11" }).status, 0);
+  }
+  const stacked = shell(code, { backend: "stacked", sector_size: "512mib", mode: "full", bench_profile: "" });
+  assert.equal(stacked.status, 0, stacked.stderr);
+  assert.equal(stacked.stdout, "11");
 });
 
 test("native variables and benchmark overrides reach explicit docker -e arguments", () => {
@@ -380,11 +455,11 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
     }
     for (const sector of ["2kib", "8mib", "512mib", "32gib"]) {
       for (const mode of ["full", "prepare-fixture", "unseal-only", "prewarm-only"]) {
-        assertLimits(run(sector, mode, "zigzag"), "53687091200");
+        assertLimits(run(sector, mode, "zigzag"), "107374182400");
         const extra = mode === "full" ? "4294967296" : "0";
         const args = assertLimits(run(sector, mode, "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" }),
-          mode === "full" ? "57982058496" : "53687091200", "53687091200", extra);
-        assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=53687091200"));
+          mode === "full" ? "111669149696" : "107374182400", "107374182400", extra);
+        assert.ok(args.includes("FIL_PROOFS_ZIGZAG_QUERY_CACHE_RESERVE_BYTES=107374182400"));
         if (mode !== "prewarm-only") {
           const stacked = run(sector, mode, "stacked", {
             BENCH_ZIGZAG_FULL_MEMORY_BYTES: "invalid", BENCH_ZIGZAG_SETUP_MEMORY_BYTES: "invalid",
@@ -407,10 +482,10 @@ test("ZigZag adds query cache above the base only for full runs, with separate p
       }
     }
     const native = { FIL_PROOFS_ZIGZAG_QUERY_CACHE_BYTES: "4294967296" };
-    assertLimits(run("32gib", "full", "zigzag", native), "57982058496", "53687091200", "4294967296");
-    assertLimits(run("32gib", "full", "zigzag", { ...native, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "0" }), "53687091200");
-    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "9663676416" }), "63350767616", "53687091200", "9663676416");
-    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418240" }), "64424509440", "53687091200", "10737418240");
+    assertLimits(run("32gib", "full", "zigzag", native), "111669149696", "107374182400", "4294967296");
+    assertLimits(run("32gib", "full", "zigzag", { ...native, BENCH_ZIGZAG_QUERY_CACHE_BYTES: "0" }), "107374182400");
+    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "9663676416" }), "117037858816", "107374182400", "9663676416");
+    assertLimits(run("512mib", "full", "zigzag", { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "10737418240" }), "118111600640", "107374182400", "10737418240");
     for (const env of [
       { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "75161927681" },
       { BENCH_ZIGZAG_QUERY_CACHE_BYTES: "" },
@@ -459,8 +534,8 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
       const profile = {
         name: dev ? "zigzag-8" : "zigzag-512", padded_sector_bytes: dev ? 8388608 : 536870912,
         nodes: dev ? 262144 : 16777216, binary_tree_depth: dev ? 18 : 24, layers: 17,
-        partitions: dev ? 2 : 10, minimum_challenges: dev ? 4 : 176,
-        challenges_per_layer_per_partition: dev ? 2 : 18, total_challenge_instances: dev ? 68 : 3060,
+        partitions: 63, minimum_challenges: 750,
+        challenges_per_layer_per_partition: 12, total_challenge_instances: 12852,
       };
       const env = { BENCH_PROOF_MICRO_PROFILE: profile.name, backend: "zigzag", sector_size: dev ? "8mib" : "512mib", mode: "full",
         prewarm_summary_json: join(temporary, "prewarm.json"), summary_json: join(temporary, "summary.json") };
@@ -476,7 +551,12 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
       };
       const valid = run();
       assert.equal(valid.status, 0, valid.stderr);
-      for (const change of [{ partitions: 1 }, { minimum_challenges: 2 }, { challenges_per_layer_per_partition: 1 }, { layers: 2 }]) {
+      for (const change of [{ partitions: 1 }, { minimum_challenges: 2 }, { challenges_per_layer_per_partition: 1 }, { layers: 2 },
+        { partitions: 47, minimum_challenges: 750, challenges_per_layer_per_partition: 16 },
+        { partitions: 45, minimum_challenges: 720, challenges_per_layer_per_partition: 16 },
+        { partitions: 45, minimum_challenges: 750, challenges_per_layer_per_partition: 17 },
+        { partitions: 10, minimum_challenges: 176, challenges_per_layer_per_partition: 18 },
+        { partitions: 2, minimum_challenges: 4, challenges_per_layer_per_partition: 2 }]) {
         const stale = run({ ...prewarm, profile: { ...profile, ...change } });
         assert.notEqual(stale.status, 0);
         assert.match(stale.stderr, /prewarm used wrong parameters/);
@@ -486,6 +566,24 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
       }
       for (const overrides of [{ backend: "stacked" }, { sector_size: "32gib" }, { mode: "unseal-only" }]) {
         assert.notEqual(run(prewarm, summary, overrides).status, 0);
+      }
+    }
+    const largeEnv = { backend: "zigzag", sector_size: "32gib", mode: "full", microbench_layers: "17",
+      prewarm_summary_json: join(temporary, "prewarm.json"), summary_json: join(temporary, "summary.json") };
+    writeFileSync(largeEnv.summary_json, JSON.stringify({ verify_seal: true, raw_unseal_bytes_match: true }));
+    const largePrewarm = { porep_layers: 17, porep_partitions: 63, minimum_total_challenges: 750,
+      challenges_per_layer_per_partition: 12, verifying_key_matches_params: true };
+    for (const change of [{}, { porep_partitions: 10, minimum_total_challenges: 176, challenges_per_layer_per_partition: 18 },
+      { porep_partitions: 47, minimum_total_challenges: 750, challenges_per_layer_per_partition: 16 },
+      { porep_partitions: 45, minimum_total_challenges: 720, challenges_per_layer_per_partition: 16 },
+      { porep_partitions: 45, minimum_total_challenges: 750, challenges_per_layer_per_partition: 17 },
+      { porep_layers: 11 }, { verifying_key_matches_params: false }]) {
+      writeFileSync(largeEnv.prewarm_summary_json, JSON.stringify({ ...largePrewarm, ...change }));
+      const result = shell(code, largeEnv);
+      if (Object.keys(change).length === 0) assert.equal(result.status, 0, result.stderr);
+      else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /zigzag-32g prewarm used wrong parameters/);
       }
     }
   } finally { rmSync(temporary, { recursive: true, force: true }); }

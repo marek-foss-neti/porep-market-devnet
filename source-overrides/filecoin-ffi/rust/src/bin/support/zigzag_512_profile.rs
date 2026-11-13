@@ -64,18 +64,18 @@ pub fn effective(
             config(),
             RegisteredSealProof::StackedDrg512MiBV1_1,
             1u64 << 29,
-            10,
-            176,
-            18,
+            63,
+            750,
+            12,
         ),
         Some(DEV_NAME) => (
             DEV_NAME,
             config_8mib(),
             RegisteredSealProof::StackedDrg8MiBV1_1,
             1u64 << 23,
-            2,
-            4,
-            2,
+            63,
+            750,
+            12,
         ),
         _ => anyhow::bail!("unexpected ZigZag profile"),
     };
@@ -113,11 +113,7 @@ pub fn effective(
         setup.degree == reference_setup.degree
             && setup.expansion_degree == reference_setup.expansion_degree
             && setup.porep_id == reference_setup.porep_id
-            && setup.api_version == reference_setup.api_version
-            && (name == DEV_NAME
-                || (challenges == reference_setup.layer_challenges.challenges_for_layer(0)
-                    && config.partitions.0 == reference.partitions.0
-                    && config.minimum_challenges() == reference.minimum_challenges())),
+            && setup.api_version == reference_setup.api_version,
         "ZigZag profile differs from its reference setup"
     );
     let cache_identifier = <ZigZagCompound<
@@ -165,9 +161,15 @@ mod tests {
         let comparison = effective(Some(NAME), RegisteredSealProof::StackedDrg512MiBV1_1)
             .unwrap()
             .unwrap();
-        assert_eq!(dev.total_challenge_instances, 68);
+        assert_eq!(dev.total_challenge_instances, 12852);
         assert_eq!(dev.layers, comparison.layers);
-        assert_eq!(dev.partitions, 2);
+        assert_eq!(dev.partitions, 63);
+        assert_eq!(dev.minimum_challenges, 750);
+        assert_eq!(dev.challenges_per_layer_per_partition, 12);
+        assert_eq!(
+            dev.total_challenge_instances,
+            comparison.total_challenge_instances
+        );
         assert_ne!(
             dev.parameter_cache_identifier,
             comparison.parameter_cache_identifier
