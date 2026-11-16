@@ -45,15 +45,18 @@ configurations, including SDR, are unchanged.
 
 `minimum_challenges=750` is split across 63 partitions by rounding up:
 `ceil(750 / 63) = 12`, giving 756 challenges per layer and 12,852 across 17 layers.
-This meets the report's numerical 750-per-layer target, but does not establish
-its security claim for the current filtered expander; that graph mismatch remains open.
-Registered SDR/Curio proof parameters are not changed.
+This meets the report's numerical 750-per-layer target. The pinned implementation
+uses the full Chung expander: both permutation directions contribute candidates,
+with 6 base parents and 16 expander slots (22 parent slots in total).
+Registered SDR proof parameters are not changed.
 
 The Rust implementation is committed and pinned; rebuild the images with
 `just build` to use it. Groth16 parameters depend on challenges per partition: previous 16-, 17- or 18-challenge
 circuits and the old 2-challenge 8 MiB circuit cannot supply the new
-12-challenge circuit. Prewarm generates the matching parameters on a cache miss;
-parent tables and same-geometry raw-unseal fixtures remain reusable.
+12-challenge circuit. The full graph also changes the circuit, replica bytes and
+cache identifiers. Prewarm generates matching Groth16 parameters and parent tables
+on a cache miss. Recreate raw-unseal fixtures from the half graph; they cannot be
+reused. Parent-table reuse across layer counts requires the same graph version.
 
 Both commands default to parent buffer 32768, parent and TreeR DONTNEED enabled,
 `MALLOC_ARENA_MAX=4`, compact loader, Groth16 batch 1, and 100 GiB base RAM.

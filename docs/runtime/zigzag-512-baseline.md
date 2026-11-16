@@ -15,8 +15,10 @@ The normal 512 MiB PoRep configuration and registered sector rules remain as
 they were. Its parameter cache identifier is derived from the effective 512 MiB
 graph and 17-by-12 circuit. Previous 17-by-16 / 17-by-17 / 17-by-18 SRS and the 32 GiB SRS must not be substituted.
 The proof contains 63 Groth16 proofs, or 12,096 bytes. This is a report-oriented
-performance budget meeting the numerical 750-challenge target; the current
-filtered expander still differs from the graph analysed by Irene and Luca.
+performance budget meeting the numerical 750-challenge target. The pinned
+full Chung expander uses 6 base parents and 16 expander slots (22 in total).
+Parameters, parent tables and raw-unseal fixtures from the half graph cannot be
+reused; prepare them with the rebuilt image.
 
 The reference commits before the adapter are `a169e1a00075287e3fd5645a565ea14c19b5dced`
 for `rust-fil-proofs` and `ec7c0b0dc45ac225792ae97834c2fef1a19bdade` for the
@@ -30,8 +32,8 @@ It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. The comparison preset
 disables query retention and enables encode prehash and the binary TreeR builder with
 the stream layer pipeline for both sector sizes.
-The Rust pin is `1382a85216f15324b1b1cd140c78e375035783c8`, including the
-17-layer profile, larger query-cache ceiling and the new 750/63 proof budget
+The Rust pin is `80b89a875cf69c4ffbc87630fa5d777ebebaaab1`, including the
+full Chung expander, 17-layer profile, larger query-cache ceiling and 750/63 proof budget
 (12 challenges per layer per partition, 756 per layer). Run `just build` to
 fetch the pinned sources and rebuild the images before running the new preset.
 Then run:
@@ -117,7 +119,8 @@ Keep CPU pool settings, host load and parameter-cache state comparable as well;
 the preset does not fix the machine's hardware or available CPU count.
 The pinned Rust revision includes the 17-layer profile and increased Rust cache
 ceiling; using them requires rebuilt images. Existing 11-layer parameters cannot be reused for
-17 layers; parent tables remain reusable. Historical 11-layer timings are not
+17 layers; parent tables remain reusable across layer counts within the same
+graph version. Historical 11-layer timings are not
 direct performance baselines for this preset.
 
 No sibling `../rust-fil-proofs` checkout is required. The baseline records the

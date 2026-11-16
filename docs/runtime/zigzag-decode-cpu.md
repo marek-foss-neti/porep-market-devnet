@@ -53,8 +53,8 @@ Prefix reuse caches incremental SHA states after complete 64-byte blocks of
 the original boundary before blockwise overwrite. A node reuses only blocks
 covered by its actual leading boundary-parent indices. Parent order, duplicates,
 remaining bytes, message length and SHA padding stay identical. The special node
-hashes only the 32-byte ID; the standard 14-parent message is still 480 bytes and
-eight compressions before reuse. Prefix construction is separately reported work.
+hashes only the 32-byte ID; the full graph uses a 22-parent message of 736 bytes
+and twelve SHA-256 compressions before reuse. Prefix construction is separately reported work.
 States cannot cross calls, replicas, orientations or layers. Intermediate layers
 retain reverse-topological traversal and join-before-copy-back; the streamed
 final layer reads immutable input.
@@ -94,7 +94,7 @@ not zero. Do not add/extrapolate them into total raw unseal. Prefix setup work
 is separate from reused blocks, so reuse counters alone are not a net speedup.
 
 Devnet pins the committed CPU decoder implementation at Rust revision
-`1382a85216f15324b1b1cd140c78e375035783c8`, including the required
+`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`, including the required
 `decode_cpu::DecodeCpuConfig` API. Publish this commit, fetch the managed sources
 and rebuild the dedicated image; no development-source override is required.
 Flags alone cannot update an old image. The repin does not establish full

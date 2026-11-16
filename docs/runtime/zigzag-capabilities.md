@@ -10,7 +10,10 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`1382a85216f15324b1b1cd140c78e375035783c8`. This revision includes
+`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`. This revision uses the full Chung expander
+with 22 parent slots and distinct Groth16/parent-table cache identifiers.
+Rebuild the images and prepare new parameters, parent tables and unseal fixtures
+when upgrading from the half graph. It also includes
 [compact Groth16 parameter indices](zigzag-compact-parameters.md), direct
 parallel query decoding into one initialized destination vector, C2
 parameter/query/batch measurement boundaries, memory-cache VK repair, cache
@@ -22,11 +25,11 @@ The revision also includes the optional [per-C2 query cache](zigzag-query-cache.
 corrected cgroup-v2 root-limit detection and circuit-preparation measurements.
 Query retention defaults to off in Rust, the general runner and Curio.
 The shared `just bench-zigzag-512` / `just bench-zigzag-32g`
-[comparison preset](zigzag-512-baseline.md) enables 20 GiB query cache, binary
-TreeR with stream snapshots and encode prehash. It uses automatic TreeR/setup
+[comparison preset](zigzag-512-baseline.md) disables query cache and enables
+binary TreeR with stream snapshots and encode prehash. It uses automatic TreeR/setup
 workers and a 64 MiB snapshot buffer. The pin also provides the benchmark-only
 [8 MiB development profile](zigzag-benchmarks.md#8-mib-development-profile),
-with 17 layers, 2 partitions and 2 challenges per layer per partition.
+with 17 layers, 63 partitions and 12 challenges per layer per partition.
 The current pin also includes [automatic parameter prewarm](zigzag-auto-prewarm.md)
 and increases ZigZag TreeR/setup worker limits to 128. Auto setup selects H and
 query concurrency using CPU and memory headroom; it does not autotune encoder
