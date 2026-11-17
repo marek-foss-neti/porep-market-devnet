@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "80b89a875cf69c4ffbc87630fa5d777ebebaaab1";
+const rustFilProofsSourceCommit = "4f4f209b1dd877efe6c630db9226f3ed449acf74";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -310,7 +310,7 @@ test("devnet build overlays ZigZag filecoin-ffi for Curio sealing and Lotus veri
   assert.match(filecoinFfiMicrobenchOverride, /seal_pre_commit_phase1/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS/);
   assert.match(filecoinFfiMicrobenchOverride, /POREP_PROOF_MICROBENCH_LAYERS/);
-  assert.match(filecoinFfiMicrobenchOverride, /matches!\(layers, 2 \| 11 \| 15 \| 17 \| 19 \| 22 \| 25\)/);
+  assert.match(filecoinFfiMicrobenchOverride, /matches!\(layers, 2 \| 11 \| 13 \| 15 \| 17 \| 19 \| 22 \| 25\)/);
   assert.match(filecoinFfiMicrobenchOverride, /current_porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /porep_layers/);
   assert.match(filecoinFfiMicrobenchOverride, /parameter_cache_identifier/);
@@ -759,7 +759,7 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
   assert.match(microScript, /BENCH_STACKED_PARENT_CACHE_DIR/);
   assert.match(microScript, /BENCH_UNSEAL_RANGE_SIZE/);
   assert.match(microScript, /BENCH_PROOF_MICRO_LAYERS/);
-  assert.match(microScript, /""\|2\|11\|15\|17\|19\|22\|25/);
+  assert.match(microScript, /""\|2\|11\|13\|15\|17\|19\|22\|25/);
   assert.match(microScript, /mode\}" == "full" && "\$\{sector_size\}" == "512mib"/);
   assert.match(microScript, /POREP_PROOF_MICROBENCH_LAYERS=\$\{microbench_layers\}/);
   assert.match(microScript, /PoRep layers override=\$\{microbench_layers\}/);
@@ -844,9 +844,9 @@ test("proof backend benchmark runner performs fresh isolated comparisons and agg
 });
 
 for (const preset of [
-  { name: "zigzag-8", sector: "8mib", bytes: 8388608, nativeProfile: "zigzag-8", script: "bench-zigzag.sh", args: ["8mib"], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_8_PARAMETER_DIR" },
-  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_512_PARAMETER_DIR" },
-  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"], partitions: 63, minimum: 750, challenges: 12, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_32G_PARAMETER_DIR" },
+  { name: "zigzag-8", sector: "8mib", bytes: 8388608, nativeProfile: "zigzag-8", script: "bench-zigzag.sh", args: ["8mib"], partitions: 36, minimum: 530, challenges: 15, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_8_PARAMETER_DIR" },
+  { name: "zigzag-512", sector: "512mib", bytes: 536870912, nativeProfile: "zigzag-512", script: "bench-zigzag-512.sh", args: [], partitions: 36, minimum: 530, challenges: 15, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_512_PARAMETER_DIR" },
+  { name: "zigzag-32g", sector: "32gib", bytes: 34359738368, nativeProfile: "", script: "bench-zigzag.sh", args: ["32gib"], partitions: 36, minimum: 530, challenges: 15, memory: 107374182400, cache: 0, setup: 42949672960, parameterEnv: "BENCH_ZIGZAG_32G_PARAMETER_DIR" },
 ]) test(`${preset.name} baseline passes the shared preset and overrides and validates geometry and image revision`, async () => {
   const fixture = await createLifecycleFixture();
   const commit = "a".repeat(40);
@@ -867,7 +867,7 @@ set -euo pipefail
 [[ "$*" == "zigzag ${preset.sector} full" ]] || exit 98
 [[ "$BENCH_PROOF_MICRO_PROFILE" == "${preset.nativeProfile}" ]] || exit 98
 [[ "$POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS" == 1 ]] || exit 98
-${preset.sector === "32gib" ? '[[ "$BENCH_PROOF_MICRO_LAYERS" =~ ^(2|11|15|17|19|22|25)$ ]] || exit 98' : ""}
+${preset.sector === "32gib" ? '[[ "$BENCH_PROOF_MICRO_LAYERS" =~ ^(2|11|13|15|17|19|22|25)$ ]] || exit 98' : ""}
 [[ "$BENCH_PROOF_PARAMETERS_DIR" == "\${DEVNET_TEST_EXPECTED_PARAMETER_DIR:-$DEVNET_TEST_ROOT/.cache/${preset.name}-parameters}" ]] || exit 98
 if [[ -n "\${DEVNET_TEST_EXPECTED_PARENT_DIR:-}" ]]; then
   [[ "$BENCH_ZIGZAG_PARENT_CACHE_DIR" == "$DEVNET_TEST_EXPECTED_PARENT_DIR" ]] || exit 98
@@ -894,13 +894,13 @@ jq -n --arg commit "\${DEVNET_TEST_REPORT_COMMIT}" --arg id "$(basename "$run_di
   --arg manifest "$manifest" --arg manifestSha "$(shasum -a 256 "$manifest" | awk '{print $1}')" \\
   --arg sourceSha "\${DEVNET_TEST_REPORT_SOURCE_SHA:-$(jq -r .rustFilProofsSourceSha256 "$manifest")}" \\
   --argjson sectorBytes "\${DEVNET_TEST_REPORTED_SECTOR_BYTES:-${preset.bytes}}" \\
-  --argjson layers "\${DEVNET_TEST_REPORTED_LAYERS:-\${BENCH_PROOF_MICRO_LAYERS:-\${POREP_PROOF_MICROBENCH_LAYERS:-17}}}" \\
+  --argjson layers "\${DEVNET_TEST_REPORTED_LAYERS:-\${BENCH_PROOF_MICRO_LAYERS:-\${POREP_PROOF_MICROBENCH_LAYERS:-13}}}" \\
   --arg backend "\${DEVNET_TEST_REPORTED_BACKEND:-zig-zag}" \\
   --arg image "$(jq -r .imageReference "$manifest")" --arg imageId "\${DEVNET_TEST_REPORT_IMAGE_ID:-sha256:fixture}" '
   {backend: $backend, sector_size_label: "${preset.sector}", sector_size_bytes: $sectorBytes,
    porep_layers: $layers, porep_partitions: ${preset.partitions}, minimum_total_challenges: ${preset.minimum},
    challenges_per_layer_per_partition: ${preset.challenges}, registered_seal_proof_id: 8,
-   profile: ${preset.nativeProfile ? `{total_challenge_instances: ${17 * preset.partitions * preset.challenges}}` : 'null'}} as $geometry |
+   profile: ${preset.nativeProfile ? `{total_challenge_instances: ${13 * preset.partitions * preset.challenges}}` : 'null'}} as $geometry |
   {provenance: {run_id: $id, build: {manifest: {rust_fil_proofs_commit: $commit, rust_fil_proofs_source_sha256: $sourceSha},
      image_manifest_path: $manifest, image_manifest_sha256: $manifestSha, image: {reference: $image, id: $imageId}}},
    prewarm: ($geometry + {verifying_key_matches_params: true}),
@@ -940,9 +940,9 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     assert.equal(baseline.completed_runs, 1);
     assert.equal(baseline.command, `just bench-${preset.name}`);
     assert.equal(baseline.runs[0].sector_size_bytes, preset.bytes);
-    assert.equal(baseline.runs[0].total_challenge_instances, 17 * preset.partitions * preset.challenges);
+    assert.equal(baseline.runs[0].total_challenge_instances, 13 * preset.partitions * preset.challenges);
     assert.equal(baseline.runs[0].proof_bytes, preset.partitions * 192);
-    assert.equal(baseline.runs[0].porep_layers, 17);
+    assert.equal(baseline.runs[0].porep_layers, 13);
     const staleDefault = run(commit, { DEVNET_TEST_REPORTED_LAYERS: "11" });
     assert.notEqual(staleDefault.status, 0);
     assert.match(staleDefault.stderr, /proof geometry or correctness validation failed/);
@@ -956,16 +956,16 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
     for (const name of ["BENCH_PROOF_MICRO_LAYERS", "POREP_PROOF_MICROBENCH_LAYERS"]) {
       const invalid = run(commit, { [name]: "0" });
       assert.notEqual(invalid.status, 0);
-      assert.match(invalid.stderr, /has fixed 17 layers|invalid zigzag-32g layers/);
-      const extended = run(commit, { [name]: "17" });
+      assert.match(invalid.stderr, /has fixed 13 layers|invalid zigzag-32g layers/);
+      const extended = run(commit, { [name]: "13" });
       if (preset.sector === "32gib") {
         assert.equal(extended.status, 0, extended.stderr);
         const path = extended.stdout.match(/^zigzag-32g baseline: (.+)$/m)?.[1];
         assert.ok(path);
         const report = JSON.parse(await readFile(path, "utf8"));
-        assert.equal(report.runs[0].porep_layers, 17);
-        assert.equal(report.runs[0].total_challenge_instances, 17 * preset.partitions * preset.challenges);
-        const stale = run(commit, { [name]: "17", DEVNET_TEST_REPORTED_LAYERS: "11" });
+        assert.equal(report.runs[0].porep_layers, 13);
+        assert.equal(report.runs[0].total_challenge_instances, 13 * preset.partitions * preset.challenges);
+        const stale = run(commit, { [name]: "13", DEVNET_TEST_REPORTED_LAYERS: "11" });
         assert.notEqual(stale.status, 0);
         assert.match(stale.stderr, /proof geometry or correctness validation failed/);
       } else {
@@ -973,7 +973,7 @@ printf 'proof microbenchmark: %s/summary.md\\n' "$run_dir"
       }
     }
     if (preset.sector === "32gib") {
-      for (const layers of ["2", "11", "15", "19", "22", "25"]) {
+      for (const layers of ["2", "11", "15", "17", "19", "22", "25"]) {
         const selected = run(commit, { BENCH_PROOF_MICRO_LAYERS: layers });
         assert.equal(selected.status, 0, selected.stderr);
       }

@@ -91,13 +91,13 @@ all required layers and output; it is not replaced with a padded-only timer.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`. The FFI overlay requires
+`4f4f209b1dd877efe6c630db9226f3ed449acf74`. The FFI overlay requires
 `zigzag_unseal_range_streaming` and the output configuration API. Make this
 commit available in the source repository, fetch the managed sources and
 rebuild the dedicated ZigZag image. No development-source override is required.
 The repin does not establish full Rust/FFI validation or a measured speedup.
 
-For an existing 512 MiB / 17-layer fixture, compare the following three values
+For an existing 512 MiB / 13-layer fixture, compare the following three values
 of `BENCH_ZIGZAG_UNSEAL_OUTPUT`: `reference`, `parallel`, then `stream`. Keep all
 other settings and cache conditions identical. Example for streaming:
 

@@ -14,7 +14,7 @@ Both use [bench-zigzag.sh](../../scripts/bench-zigzag.sh), the same dedicated
 ZigZag image and the same [comparison preset](zigzag-512-baseline.md).
 Changing a default in that runner applies to both commands. Existing `BENCH_*`
 overrides work for both; use identical overrides when comparing improvements.
-The 750-challenge / 63-partition preset requires the updated Rust
+The 530-challenge / 36-partition preset requires the updated Rust
 dependency pin and an image rebuild; changing shell defaults alone is insufficient.
 
 | Property | `bench-zigzag-512` | `bench-zigzag-32g` |
@@ -22,38 +22,40 @@ dependency pin and an image rebuild; changing shell defaults alone is insufficie
 | Padded sector | 512 MiB | 32 GiB |
 | Graph nodes | 2^24 | 2^30 |
 | Binary Merkle depth | 24 | 30 |
-| Layers / partitions | 17 / 63 | 17 / 63 |
-| Minimum challenges per layer across partitions | 750 | 750 |
-| Challenges per layer per partition | 12 | 12 |
-| Actual challenges per layer across partitions | 756 | 756 |
-| Total challenge instances / proof bytes | 12,852 / 12,096 | 12,852 / 12,096 |
+| Layers / partitions | 13 / 36 | 13 / 36 |
+| Minimum challenges per layer across partitions | 530 | 530 |
+| Challenges per layer per partition | 15 | 15 |
+| Actual challenges per layer across partitions | 540 | 540 |
+| Total challenge instances / proof bytes | 7,020 / 6,912 | 7,020 / 6,912 |
 | Default parameter directory | `.cache/zigzag-512-parameters` | `.cache/zigzag-32g-parameters` |
 | Parameter-directory override | `BENCH_ZIGZAG_512_PARAMETER_DIR` | `BENCH_ZIGZAG_32G_PARAMETER_DIR` |
 
 512 MiB uses the existing benchmark-only `zigzag-512` proof profile. The 32 GiB
 command uses native 32 GiB data geometry with a benchmark-only proof budget and
-a process-local 17-layer override. It does not pass a named `--profile` to the binary. Its
+a process-local 13-layer override. It does not pass a named `--profile` to the binary. Its
 `benchmark.profile` remains null; sector and proof-budget fields remain explicit
 in `report.json`, and the wrapper aggregate is named `zigzag-32g`. Both wrappers
 validate the reported geometry, prewarm agreement,
 proof length, verification and recovered byte count.
 
-The 32 GiB command accepts `2`, `11`, `15`, `17`, `19`, `22`, or `25` layers
-(default: `17`), e.g. `BENCH_PROOF_MICRO_LAYERS=11 just bench-zigzag-32g`.
-The benchmark-only 512 MiB profile has a fixed 17 layers. Registered sector
+The 32 GiB command accepts `2`, `11`, `13`, `15`, `17`, `19`, `22`, or `25` layers
+(default: `13`), e.g. `BENCH_PROOF_MICRO_LAYERS=11 just bench-zigzag-32g`.
+The benchmark-only 512 MiB profile has a fixed 13 layers. Registered sector
 configurations, including SDR, are unchanged.
 
-`minimum_challenges=750` is split across 63 partitions by rounding up:
-`ceil(750 / 63) = 12`, giving 756 challenges per layer and 12,852 across 17 layers.
-This meets the report's numerical 750-per-layer target. The pinned implementation
+`minimum_challenges=530` is split across 36 partitions by rounding up:
+`ceil(530 / 36) = 15`, giving 540 challenges per layer and 7,020 across 13 layers.
+This meets the 530-per-layer minimum of the [undirected expansion bound](zigzag-undirected-bound.md)
+for 13 layers at `delta = 0.013` (540 challenges cover `delta = 0.01275`); the
+report's earlier 17-layer target was 750. The pinned implementation
 uses the full Chung expander: both permutation directions contribute candidates,
 with 6 base parents and 16 expander slots (22 parent slots in total).
 Registered SDR proof parameters are not changed.
 
 The Rust implementation is committed and pinned; rebuild the images with
-`just build` to use it. Groth16 parameters depend on challenges per partition: previous 16-, 17- or 18-challenge
-circuits and the old 2-challenge 8 MiB circuit cannot supply the new
-12-challenge circuit. The full graph also changes the circuit, replica bytes and
+`just build` to use it. Groth16 parameters depend on layers and challenges per partition: previous 17-layer
+circuits (12, 16, 17 or 18 challenges) and the old 2-challenge 8 MiB circuit cannot
+supply the new 13-layer, 15-challenge circuit. The full graph also changes the circuit, replica bytes and
 cache identifiers. Prewarm generates matching Groth16 parameters and parent tables
 on a cache miss. Recreate raw-unseal fixtures from the half graph; they cannot be
 reused. Parent-table reuse across layer counts requires the same graph version.
@@ -88,7 +90,7 @@ runner and unseal-only default to an empty `BENCH_PROOF_MICRO_PROFILE`.
 
 | Setting | Default |
 | --- | --- |
-| Layers | `17` (fixed for the named 8 MiB / 512 MiB profiles) |
+| Layers | `13` (fixed for the named 8 MiB / 512 MiB profiles) |
 | Base RAM / query cache | `107374182400` bytes (100 GiB) / `0` |
 | Large sectors / parent cache | Enabled |
 | Rayon / decode threads | `auto` / `auto` |
@@ -114,8 +116,8 @@ Unlike adding the shared command, this Rust change requires fetching the updated
 pinned source and rebuilding the image. Rust tests and
 fresh-parameter acceptance are deferred until the active remote benchmark ends.
 
-Parameter files depend on sector geometry and layer count. The former 11-layer
-SRS cannot serve 17 layers; parent tables can be reused across layer counts. Prewarm validates/reuses the proper
+Parameter files depend on sector geometry and layer count. The former 11- and 17-layer
+SRS cannot serve 13 layers; parent tables can be reused across layer counts. Prewarm validates/reuses the proper
 files or generates missing ones; the 512 MiB and 32 GiB SRS are not interchangeable.
 To reuse prepared 32 GiB caches instead of starting with the new default directory:
 
@@ -149,7 +151,7 @@ just bench-zigzag-8
 ```
 
 This runs the same full prewarm / PC1 / PC2 / vanilla C1 / Groth16 C2 / verify /
-raw unseal workflow in the dedicated ZigZag image. It keeps 17 layers and the
+raw unseal workflow in the dedicated ZigZag image. It keeps 13 layers and the
 optimization settings of the larger commands, including prehash, binary TreeR,
 stream snapshots, automatic TreeR/prewarm workers, compact parameters and
 Groth16 batch size 1. Its proof budget now matches the larger benchmarks, so it
@@ -158,10 +160,10 @@ is no longer the former lightweight 2-partition / 2-challenge proof.
 | Property | Development value |
 | --- | --- |
 | Padded sector / nodes / binary Merkle depth | 8 MiB / 2^18 / 18 |
-| Layers / partitions | 17 / 63 |
-| Minimum challenges / challenges per layer per partition | 750 / 12 |
-| Actual challenges per layer / total challenge instances | 756 / 12,852 |
-| Proof bytes | 12,096 |
+| Layers / partitions | 13 / 36 |
+| Minimum challenges / challenges per layer per partition | 530 / 15 |
+| Actual challenges per layer / total challenge instances | 540 / 7,020 |
+| Proof bytes | 6,912 |
 | Prewarm RAM limit / setup allocation budget | 100 GiB / 40 GiB |
 | Full-run RAM limit | 100 GiB; query cache disabled |
 | Parameter directory | `.cache/zigzag-8-parameters` |

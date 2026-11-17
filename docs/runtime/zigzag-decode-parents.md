@@ -64,7 +64,7 @@ Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
 Devnet pins the committed implementation at Rust revision
-`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`. Fetch the managed sources and rebuild
+`4f4f209b1dd877efe6c630db9226f3ed449acf74`. Fetch the managed sources and rebuild
 the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
 image cannot exercise the new reader just by receiving its environment variables.
 
@@ -78,7 +78,7 @@ Repeat with `mmap` and `legacy`. Prefer the existing unseal-only command when a
 valid prepared fixture is available, with identical geometry, parent tables,
 output, workers, memory budget and cache state for each candidate. No new sealing
 or parameter prewarm is needed for such a fixture. The current comparison
-preset uses 32 GiB / 17 layers and a 100 GiB limit with query cache disabled.
+preset uses 32 GiB / 13 layers and a 100 GiB limit with query cache disabled.
 
 ## Validation status
 
