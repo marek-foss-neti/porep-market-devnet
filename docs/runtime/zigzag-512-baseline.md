@@ -33,7 +33,7 @@ It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. The comparison preset
 disables query retention and enables encode prehash and the binary TreeR builder with
 the stream layer pipeline for both sector sizes.
-The Rust pin is `4f4f209b1dd877efe6c630db9226f3ed449acf74`, including the
+The Rust pin is `71f811d1c0b2cae4ace38ebea1afbf81fdf4b7b3`, including the
 full Chung expander, 13-layer profile, larger query-cache ceiling and 530/36 proof budget
 (15 challenges per layer per partition, 540 per layer). Run `just build` to
 fetch the pinned sources and rebuild the images before running the new preset.
