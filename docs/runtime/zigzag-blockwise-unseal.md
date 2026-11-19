@@ -33,8 +33,11 @@ In blockwise mode:
   `MemAvailable` and the tightest observable cgroup memory headroom, including
   ancestor limits, through the existing ZigZag setup resource reader. Admission
   includes the sector, output block, any optional FR32 output buffer,
-  configured parent-buffer budget, one active
-  parent table, and a reserve of max(1 GiB, 10% of available memory). Only clean
+  CPU decode workspace, configured parent-buffer budget, and a reserve of
+  max(1 GiB, 10% of available memory). For `buffered`, the complete parent table
+  is **not** an additional required resident allocation: records are read through
+  bounded buffers and clean page-cache pages remain reclaimable. `legacy` and
+  `mmap` retain the conservative allowance for one active parent table. Only clean
   inactive cgroup file pages count as reclaimable. A process-local guard prevents
   two RAM unseals from concurrently admitting allocations from the same snapshot.
   Unavailable counters, insufficient headroom, a busy RAM decoder or a fallible
@@ -43,6 +46,16 @@ In blockwise mode:
   back. It requires blockwise mode. These checks are **not an OS reservation or
   an OOM guarantee** against changing load in other processes. They do not raise
   `memory.max` or allocate an artificial Groth16 query cache.
+
+For a full-graph 32 GiB sector the parent table is 88 GiB per orientation.
+Requiring that table plus the 32 GiB private state previously forced `auto`
+to use file storage under a 100 GiB limit. With buffered parents, admission now
+counts the private state, bounded buffers and headroom instead. Using the
+Vilnus6 admission snapshot, this reduces the estimate from about 129 GiB to
+41 GiB. This is a budget correction, not a measured speedup or a hard bound on
+total page-cache residency. Buffered reads request Linux `NOREUSE` advice to
+avoid promoting streaming pages during reclaim; they do not forcibly evict
+shared tables. See [parent readers](zigzag-decode-parents.md).
 
 Ping-pong uses the existing two preallocated files; `auto` does not change that
 reference path. Passing `ram` with `ping_pong` is rejected. Native callers which
@@ -89,13 +102,17 @@ counts, decode-plus-join time and copy-back time. The join timer includes worker
 computation and the barrier, not exclusive idle time. All timers are nested in
 raw unseal and must not be added to its total. Existing phase telemetry retains
 observed RAM, CPU, faults and I/O. Parent read statistics remain separate.
+Admission diagnostics also split the state, block/output/workspace, parent buffer,
+table allowance and headroom reserve. The storage event records the requested
+parent reader, full table size and the amount actually reserved for that table.
 
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`71f811d1c0b2cae4ace38ebea1afbf81fdf4b7b3`. The overlay requires
-`zigzag_unseal_range_with_block`. Make the commit available in the source
-repository, fetch the managed sources and rebuild the selected ZigZag image.
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`. The overlay requires
+`zigzag_unseal_range_with_block` and `DecodeConfig::parent_table_reserve_bytes`;
+the pinned revision includes the buffered-admission correction. Fetch the managed
+sources and rebuild the selected ZigZag image.
 No development-source override is required. An old image cannot exercise the
 new mode just by receiving environment variables.
 
@@ -117,6 +134,17 @@ whose geometry is known, keeping output, cache state, workers and memory limit
 identical. Do not infer 32 GiB speedup from an 8 MiB run.
 
 ## Validation
+
+Buffered-admission correction: nine isolated local Rust tests passed, using the
+actual admission/resource modules and reader configuration extracted unchanged
+from the source. They cover the full-graph budget, insufficient headroom, mapped
+reader allowances, bounded buffers and cgroup handling. The required-API build
+guard, 20 measurement tests and two targeted parent-reader/admission report tests
+also passed. The latter preserve missing budget fields in historical reports.
+Full PoRep/FFI compilation, the Linux `NOREUSE` test and
+remote performance acceptance remain pending; no benchmark was run for this fix.
+
+Earlier blockwise implementation validation:
 
 - Passed locally: 37 lightweight CPU-setting/report tests and the targeted
   required-API build guard test; shell/JavaScript syntax and Rust parsing.

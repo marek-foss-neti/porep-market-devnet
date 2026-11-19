@@ -378,7 +378,12 @@ export function renderPhaseMarkdown(report) {
       "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
       ...(report.decode_state ?? []).map((entry) =>
         `| ${entry.event} | ${entry.storage ?? "—"} | ${entry.reversed ?? "—"} | ${value(entry.state_bytes)} | ${value(entry.block_bytes)} | ${value(entry.blocks)} | ${value(entry.decode_join_ns == null ? null : entry.decode_join_ns / 1e6)} | ${value(entry.copy_back_ns == null ? null : entry.copy_back_ns / 1e6)} | ${value(entry.prepare_ns == null ? null : entry.prepare_ns / 1e6)} |`), "",
-      "Timers are nested in raw_unseal, not added to it. Decode + join includes the parallel barrier; copy-back begins only after all readers finish. RAM admission samples host/cgroup headroom and includes an active parent table, owned buffers and reserve; it is not an OS memory reservation. Actual storage, fallback reasons and allocation bounds are in decode_state; observed RAM/faults/I/O remain in phase telemetry. Ping-pong remains the reference default.");
+      "Timers are nested in raw_unseal, not added to it. Decode + join includes the parallel barrier; copy-back begins only after all readers finish. RAM admission samples host/cgroup headroom and includes owned buffers, a reader-specific table allowance and headroom reserve; it is not an OS memory reservation. Updated buffered readers need no complete resident table; legacy/mmap retain the conservative allowance. Use the recorded budget below for this run; missing fields in older reports are unavailable, not zero. Actual storage, fallback reasons and allocation bounds are in decode_state; observed RAM/faults/I/O remain in phase telemetry. Ping-pong remains the reference default.");
+    const admissions = (report.decode_state ?? []).filter((entry) => entry.event === "ram_admission");
+    if (admissions.length) lines.push("",
+      "| RAM accepted | Available B | Required B | Parent table reserve B | Headroom reserve B |",
+      "| --- | ---: | ---: | ---: | ---: |",
+      ...admissions.map((entry) => `| ${entry.accepted ?? "unavailable"} | ${value(entry.available_bytes)} | ${value(entry.required_bytes)} | ${value(entry.parent_table_reserve_bytes)} | ${value(entry.headroom_reserve_bytes)} |`));
   }
   if (report.cpu_configuration?.unseal_output || report.unseal_output?.length) {
     lines.push("", "## Raw unseal FR32 and output", "",

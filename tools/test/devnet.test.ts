@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "71f811d1c0b2cae4ace38ebea1afbf81fdf4b7b3";
+const rustFilProofsSourceCommit = "cb3131680127c8bd4ea4f60d4348feb3b3e57d6d";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",
@@ -1052,6 +1052,9 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     await writeFile(layerPipelinePath, "pub struct LayerPipelineConfig;\n");
     const decodeCpuPath = join(source, "storage-proofs-porep/src/zigzag/decode_cpu.rs");
     await writeFile(decodeCpuPath, "pub struct DecodeCpuConfig;\n");
+    const decodeParentsPath = join(source, "storage-proofs-porep/src/zigzag/vanilla/decode_parents.rs");
+    await mkdir(dirname(decodeParentsPath), { recursive: true });
+    await writeFile(decodeParentsPath, "    pub fn parent_table_reserve_bytes(self, table_bytes: usize) -> usize {}\n");
     const compactApis = ["groth_parameters", "circuit_proofs_with_parameters", "prove_with_parameters"];
     await writeFile(compoundPath, compactApis.map((api) => `pub fn ${api}<T>() {}\n`).join(""));
     for (const missing of [null, ...apis]) {
@@ -1100,6 +1103,13 @@ test("dedicated ZigZag builds reject sources missing mandatory APIs", async () =
     const missingDecodeCpu = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
     assert.notEqual(missingDecodeCpu.status, 0);
     assert.match(missingDecodeCpu.stderr, /lacks the CPU decode kernel API/);
+    await writeFile(decodeCpuPath, "pub struct DecodeCpuConfig;\n");
+    for (const content of ["", "// pub fn parent_table_reserve_bytes(self, table_bytes: usize) -> usize {}\n"]) {
+      await writeFile(decodeParentsPath, content);
+      const missingAdmission = spawnSync("bash", ["-c", 'source "$1"; devnet_require_zigzag_apis "$2"', "api-check", join(repositoryRoot, "scripts/devnet-common.sh"), source], { encoding: "utf8" });
+      assert.notEqual(missingAdmission.status, 0);
+      assert.match(missingAdmission.stderr, /lacks buffered unseal RAM admission/);
+    }
   } finally {
     await rm(source, { recursive: true, force: true });
   }

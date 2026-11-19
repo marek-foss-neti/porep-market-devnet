@@ -297,7 +297,7 @@ test("raw unseal reports retain actual reader, bounded memory and nested open co
 
 test("blockwise decode reports actual storage, fallback and copy-back without inflating totals", () => {
   const events = [
-    { event: "ram_admission", accepted: false, available_bytes: 3000, required_bytes: 5000 },
+    { event: "ram_admission", accepted: false, available_bytes: 3000, required_bytes: 5000, parent_table_reserve_bytes: 0, headroom_reserve_bytes: 1000 },
     { event: "fallback", storage: "file", reason: "insufficient headroom" },
     { event: "storage", mode: "blockwise", requested_storage: "auto", storage: "file", state_bytes: 2048, block_bytes: 512, prepare_ns: 1000000 },
     { event: "layer", mode: "blockwise", reversed: true, blocks: 4, state_bytes: 2048, block_bytes: 512, decode_join_ns: 6000000, copy_back_ns: 2000000 },
@@ -316,6 +316,11 @@ test("blockwise decode reports actual storage, fallback and copy-back without in
   assert.match(markdown, /## Raw unseal state and copy-back/);
   assert.match(markdown, /\| layer \| — \| true \| 2048 \| 512 \| 4 \| 6 \| 2 \|/);
   assert.match(markdown, /not an OS memory reservation/);
+  assert.match(markdown, /\| false \| 3000 \| 5000 \| 0 \| 1000 \|/);
+  // Historical admission records must not acquire a fictitious zero-byte allowance.
+  delete report.decode_state[0].parent_table_reserve_bytes;
+  delete report.decode_state[0].headroom_reserve_bytes;
+  assert.match(renderPhaseMarkdown(report), /\| false \| 3000 \| 5000 \| unavailable \| unavailable \|/);
 });
 
 test("unseal output reports FR32 and writer times separately without inflating raw unseal", () => {

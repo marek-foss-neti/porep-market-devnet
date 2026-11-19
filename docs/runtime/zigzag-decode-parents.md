@@ -31,9 +31,15 @@ the requested reader; the actual selection is logged.
 - `legacy` keeps the original windowed reader and Rayon initializer path for A/B.
 - `buffered` uses positional reads into reusable byte buffers, decodes little-endian
   records, and handles interrupted/short reads and EOF without exposing partially
-  filled records. The shared file seek position is never modified.
+  filled records. The shared file seek position is never modified. RAM admission
+  counts the bounded buffers, not a complete resident parent table. On Linux the
+  validated descriptor receives best-effort `POSIX_FADV_NOREUSE` advice: since
+  Linux 6.3, the kernel can avoid promoting pages accessed through this stream
+  during reclaim. It does not eagerly evict shared pages or change file contents;
+  an unsupported/ignored hint does not fail unseal. This is not a page-cache cap.
+  See the [Linux manual](https://man7.org/linux/man-pages/man2/posix_fadvise.2.html).
 - `mmap` retains one full read-only mapping per orientation, with no window remaps.
-  It owns no parent-record buffers. Mapping 56 GiB is not an allocation of 56 GiB
+  It owns no parent-record buffers. Mapping 88 GiB is not an allocation of 88 GiB
   RSS, but resident file pages still count toward the container's memory usage.
 
 The new paths allocate a fixed set of cursors before scheduling output stripes.
@@ -54,7 +60,9 @@ comparisons on other storage and RAM configurations.
 `summary.json` records `cpu_configuration.decode` for full ZigZag and unseal-only
 runs. `report.json` adds `decode_parent_reads`; Markdown contains the same reader
 diagnostics. Open events record source opens, mapping count, elapsed time and
-process/publication-lock waits. Layer events record actual reader, orientation,
+process/publication-lock waits, plus `page_cache_advice` (`noreuse_requested`,
+`unavailable` or `unchanged`; requested advice does not prove kernel support).
+Layer events record actual reader, orientation,
 reader count, owned buffer bytes, positional read calls/bytes and remaps.
 
 Source opening is nested in the first layer using that orientation. Do not sum
@@ -64,7 +72,7 @@ Legacy read/remap counts are unavailable, not zero. Use the existing phase
 telemetry for CPU user/system time, RAM, faults and pressure.
 
 Devnet pins the committed implementation at Rust revision
-`71f811d1c0b2cae4ace38ebea1afbf81fdf4b7b3`. Fetch the managed sources and rebuild
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`. Fetch the managed sources and rebuild
 the ZigZag images: the FFI overlay uses the new Rust `DecodeConfig` API. An old
 image cannot exercise the new reader just by receiving its environment variables.
 

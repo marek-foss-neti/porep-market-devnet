@@ -91,7 +91,7 @@ all required layers and output; it is not replaced with a padded-only timer.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`71f811d1c0b2cae4ace38ebea1afbf81fdf4b7b3`. The FFI overlay requires
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`. The FFI overlay requires
 `zigzag_unseal_range_streaming` and the output configuration API. Make this
 commit available in the source repository, fetch the managed sources and
 rebuild the dedicated ZigZag image. No development-source override is required.
