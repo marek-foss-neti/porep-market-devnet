@@ -74,7 +74,7 @@ pub(crate) fn unseal_range<W: Write>(
         let parent_config = DecodeConfig::from_env()?;
         let params = zigzag::parameters::zigzag_public_params::<zigzag::ZigZagTree>(config)?;
         let cpu_workspace = cpu_config.workspace_bytes(params.graph.degree())?;
-        let active_table_bytes = if SETTINGS.use_zigzag_parent_cache {
+        let parent_table_bytes = if SETTINGS.use_zigzag_parent_cache {
             params
                 .graph
                 .size()
@@ -84,6 +84,9 @@ pub(crate) fn unseal_range<W: Write>(
         } else {
             0
         };
+        // Buffered positional reads need the owned buffer budget below, not a
+        // resident copy of the complete parent table. Clean page cache is reclaimable.
+        let parent_table_reserve = parent_config.parent_table_reserve_bytes(parent_table_bytes);
         let mut ram = if decode.storage != DecodeStorage::File {
             let admitted = DecodeRamAdmission::acquire(
                 len,
@@ -93,7 +96,7 @@ pub(crate) fn unseal_range<W: Write>(
                     .and_then(|bytes| bytes.checked_add(cpu_workspace))
                     .context("ZigZag unseal buffer budget overflow")?,
                 parent_config.parent_buffer_mib * (1 << 20),
-                active_table_bytes,
+                parent_table_reserve,
             )
             .and_then(|admission| {
                 Ok(RamState {
@@ -139,6 +142,9 @@ pub(crate) fn unseal_range<W: Write>(
             "storage": if use_ram { "ram" } else { "file" },
             "state_bytes": len, "block_bytes": block_bytes,
             "cpu_workspace_budget_bytes": cpu_workspace,
+            "parent_reader": parent_config.parent_reader,
+            "parent_table_bytes": parent_table_bytes,
+            "parent_table_reserve_bytes": parent_table_reserve,
             "scratch_logical_bytes": if use_ram { 0 } else { len },
             "scratch_allocated_bytes": scratch_allocated_bytes,
             "prepare_ns": started.elapsed().as_nanos(),

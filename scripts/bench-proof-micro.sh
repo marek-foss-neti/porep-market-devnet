@@ -33,9 +33,9 @@ if [[ -n "${bench_profile}" ]]; then
   profile_bytes=536870912
   profile_nodes=16777216
   profile_depth=24
-  profile_partitions=63
-  profile_minimum=750
-  profile_challenges=12
+  profile_partitions=36
+  profile_minimum=530
+  profile_challenges=15
   if [[ "${bench_profile}" == zigzag-8 ]]; then
     profile_sector=8mib
     profile_bytes=8388608
@@ -57,18 +57,18 @@ fi
 
 microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
 if [[ "${backend}" == zigzag && -z "${bench_profile}" ]]; then
-  microbench_layers="${microbench_layers:-17}"
+  microbench_layers="${microbench_layers:-13}"
 elif [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
   microbench_layers="11"
 fi
 if [[ -n "${bench_profile}" && -n "${microbench_layers}" ]]; then
-  [[ "${microbench_layers}" == 17 ]] || devnet_die "${bench_profile} has fixed 17 layers"
+  [[ "${microbench_layers}" == 13 ]] || devnet_die "${bench_profile} has fixed 13 layers"
   # The Rust profile supplies its own layer count and rejects an env override.
   microbench_layers=""
 fi
 case "${microbench_layers}" in
-  ""|2|11|15|17|19|22|25) ;;
-  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 15, 17, 19, 22, 25" ;;
+  ""|2|11|13|15|17|19|22|25) ;;
+  *) devnet_die "invalid proof microbench layer override: ${microbench_layers}; expected one of: 2, 11, 13, 15, 17, 19, 22, 25" ;;
 esac
 
 telemetry_interval_ms="${BENCH_TELEMETRY_INTERVAL_MS:-500}"
@@ -1050,18 +1050,18 @@ if [[ -n "${bench_profile}" ]]; then
     and .profile.padded_sector_bytes == $bytes
     and .profile.nodes == $nodes
     and .profile.binary_tree_depth == $depth
-    and .profile.layers == 17
+    and .profile.layers == 13
     and .profile.partitions == $partitions
     and .profile.minimum_challenges == $minimum
     and .profile.challenges_per_layer_per_partition == $challenges
-    and .profile.total_challenge_instances == (17 * $partitions * $challenges)
+    and .profile.total_challenge_instances == (13 * $partitions * $challenges)
     and .verifying_key_matches_params == true
   ' "${prewarm_summary_json}" >/dev/null || devnet_die "${bench_profile} prewarm used wrong parameters"
 elif [[ "${backend}" == zigzag && "${sector_size}" == 32gib ]]; then
   jq -e --argjson layers "${microbench_layers}" '
-    .porep_layers == $layers and .porep_partitions == 63
-    and .minimum_total_challenges == 750
-    and .challenges_per_layer_per_partition == 12
+    .porep_layers == $layers and .porep_partitions == 36
+    and .minimum_total_challenges == 530
+    and .challenges_per_layer_per_partition == 15
     and .verifying_key_matches_params == true
   ' "${prewarm_summary_json}" >/dev/null || devnet_die "zigzag-32g prewarm used wrong parameters; rebuild with the updated Rust benchmark budget"
 fi
@@ -1151,7 +1151,7 @@ jq -e '.verify_seal == true and .raw_unseal_bytes_match == true' "${summary_json
 if [[ -n "${bench_profile}" ]]; then
   jq -e --slurpfile prewarm "${prewarm_summary_json}" '
     .profile == $prewarm[0].profile
-    and .porep_layers == 17
+    and .porep_layers == 13
     and .porep_partitions == $prewarm[0].profile.partitions
     and .minimum_total_challenges == $prewarm[0].profile.minimum_challenges
     and .challenges_per_layer_per_partition == $prewarm[0].profile.challenges_per_layer_per_partition

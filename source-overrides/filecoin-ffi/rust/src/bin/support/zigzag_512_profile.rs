@@ -64,18 +64,18 @@ pub fn effective(
             config(),
             RegisteredSealProof::StackedDrg512MiBV1_1,
             1u64 << 29,
-            63,
-            750,
-            12,
+            36,
+            530,
+            15,
         ),
         Some(DEV_NAME) => (
             DEV_NAME,
             config_8mib(),
             RegisteredSealProof::StackedDrg8MiBV1_1,
             1u64 << 23,
-            63,
-            750,
-            12,
+            36,
+            530,
+            15,
         ),
         _ => anyhow::bail!("unexpected ZigZag profile"),
     };
@@ -100,7 +100,7 @@ pub fn effective(
         "wrong graph geometry"
     );
     ensure!(
-        layers == 17 && partitions == expected_partitions && config.minimum_challenges() == minimum,
+        layers == 13 && partitions == expected_partitions && config.minimum_challenges() == minimum,
         "wrong ZigZag proof budget"
     );
     ensure!(
@@ -161,11 +161,11 @@ mod tests {
         let comparison = effective(Some(NAME), RegisteredSealProof::StackedDrg512MiBV1_1)
             .unwrap()
             .unwrap();
-        assert_eq!(dev.total_challenge_instances, 12852);
+        assert_eq!(dev.total_challenge_instances, 7020);
         assert_eq!(dev.layers, comparison.layers);
-        assert_eq!(dev.partitions, 63);
-        assert_eq!(dev.minimum_challenges, 750);
-        assert_eq!(dev.challenges_per_layer_per_partition, 12);
+        assert_eq!(dev.partitions, 36);
+        assert_eq!(dev.minimum_challenges, 530);
+        assert_eq!(dev.challenges_per_layer_per_partition, 15);
         assert_eq!(
             dev.total_challenge_instances,
             comparison.total_challenge_instances

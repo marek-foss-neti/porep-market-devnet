@@ -5,9 +5,9 @@ source "$(cd -L "$(dirname "${BASH_SOURCE[0]}")" && pwd -L)/devnet-common.sh"
 # Share proof/optimization settings and memory budgets across sector sizes.
 sector_size="${1:-}"
 [[ "$#" == 1 ]] || devnet_die "usage: bench-zigzag.sh 8mib|512mib|32gib"
-partitions=63
-minimum_challenges=750
-challenges=12
+partitions=36
+minimum_challenges=530
+challenges=15
 default_memory_bytes=107374182400
 default_query_cache_bytes=0
 default_setup_budget_bytes=42949672960
@@ -34,17 +34,17 @@ case "${sector_size}" in
     ;;
   *) devnet_die "unsupported ZigZag benchmark sector: ${sector_size}; expected 8mib, 512mib or 32gib" ;;
 esac
-layers=17
+layers=13
 if [[ "${sector_size}" == 32gib ]]; then
-  layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-17}}"
+  layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-13}}"
   case "${layers}" in
-    2|11|15|17|19|22|25) ;;
-    *) devnet_die "invalid zigzag-32g layers: ${layers}; expected one of: 2, 11, 15, 17, 19, 22, 25" ;;
+    2|11|13|15|17|19|22|25) ;;
+    *) devnet_die "invalid zigzag-32g layers: ${layers}; expected one of: 2, 11, 13, 15, 17, 19, 22, 25" ;;
   esac
   export BENCH_PROOF_MICRO_LAYERS="${layers}"
 else
-  [[ "${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-17}}" == 17 ]] ||
-    devnet_die "${baseline_profile} has fixed 17 layers"
+  [[ "${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-13}}" == 13 ]] ||
+    devnet_die "${baseline_profile} has fixed 13 layers"
 fi
 unsealed_bytes=$((sector_bytes / 128 * 127))
 

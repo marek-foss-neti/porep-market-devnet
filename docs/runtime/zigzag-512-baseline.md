@@ -5,17 +5,18 @@ explicit pool, feeder, cache and build options for conscious A/B comparisons;
 reports record the selected and effective settings without adding phase-only modes.
 
 This is one additional baseline benchmark profile. It runs ZigZag only,
-using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag benchmark configuration: 17 layers, 63 partitions, minimum 750 challenges per layer, and 12
-challenges per layer in each partition (756 per layer, 12,852 instances). The graph has
+using the CPU path. The padded sector is 512 MiB, while the PoRep proof budget follows the 32 GiB ZigZag benchmark configuration: 13 layers, 36 partitions, minimum 530 challenges per layer, and 15
+challenges per layer in each partition (540 per layer, 7,020 instances). The graph has
 16,777,216 nodes and binary tree paths of depth 24. The graph degrees, hashers,
 KDF, API version, PoRep variant, and `porep_id` follow the 32 GiB reference.
 
 The profile is compiled only with the `filecoin-proofs/zigzag-bench` feature.
 The normal 512 MiB PoRep configuration and registered sector rules remain as
 they were. Its parameter cache identifier is derived from the effective 512 MiB
-graph and 17-by-12 circuit. Previous 17-by-16 / 17-by-17 / 17-by-18 SRS and the 32 GiB SRS must not be substituted.
-The proof contains 63 Groth16 proofs, or 12,096 bytes. This is a report-oriented
-performance budget meeting the numerical 750-challenge target. The pinned
+graph and 13-by-15 circuit. Previous 17-by-12 / 17-by-16 / 17-by-17 / 17-by-18 SRS and the 32 GiB SRS must not be substituted.
+The proof contains 36 Groth16 proofs, or 6,912 bytes. This is a report-oriented
+performance budget meeting the 530-challenge minimum of the
+[undirected expansion bound](zigzag-undirected-bound.md) for 13 layers. The pinned
 full Chung expander uses 6 base parents and 16 expander slots (22 in total).
 Parameters, parent tables and raw-unseal fixtures from the half graph cannot be
 reused; prepare them with the rebuilt image.
@@ -32,9 +33,9 @@ It also includes the optional per-C2 query cache with corrected cgroup-v2
 root-limit detection and circuit-preparation measurements. The comparison preset
 disables query retention and enables encode prehash and the binary TreeR builder with
 the stream layer pipeline for both sector sizes.
-The Rust pin is `80b89a875cf69c4ffbc87630fa5d777ebebaaab1`, including the
-full Chung expander, 17-layer profile, larger query-cache ceiling and 750/63 proof budget
-(12 challenges per layer per partition, 756 per layer). Run `just build` to
+The Rust pin is `cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`, including the
+full Chung expander, 13-layer profile, larger query-cache ceiling and 530/36 proof budget
+(15 challenges per layer per partition, 540 per layer). Run `just build` to
 fetch the pinned sources and rebuild the images before running the new preset.
 Then run:
 
@@ -117,9 +118,9 @@ override, use the general runner with `BENCH_PROOF_MICRO_PROFILE=zigzag-512` and
 
 Keep CPU pool settings, host load and parameter-cache state comparable as well;
 the preset does not fix the machine's hardware or available CPU count.
-The pinned Rust revision includes the 17-layer profile and increased Rust cache
-ceiling; using them requires rebuilt images. Existing 11-layer parameters cannot be reused for
-17 layers; parent tables remain reusable across layer counts within the same
+The pinned Rust revision includes the 13-layer profile and increased Rust cache
+ceiling; using them requires rebuilt images. Existing 11- or 17-layer parameters cannot be reused for
+13 layers; parent tables remain reusable across layer counts within the same
 graph version. Historical 11-layer timings are not
 direct performance baselines for this preset.
 

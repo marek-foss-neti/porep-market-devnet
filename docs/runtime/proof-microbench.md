@@ -108,14 +108,14 @@ rustc --edition=2021 --test source-overrides/filecoin-ffi/rust/src/bin/support/p
 "$io_test_bin"
 ```
 
-All ZigZag modes default to 17 layers, including fixture preparation and
+All ZigZag modes default to 13 layers, including fixture preparation and
 unseal-only. Existing fixtures with a different layer count require the matching
 `BENCH_PROOF_MICRO_LAYERS` override. The named `zigzag-8` / `zigzag-512` profiles
-retain fixed 17-layer geometry; an explicit matching `17` is accepted.
+retain fixed 13-layer geometry; an explicit matching `13` is accepted.
 The full Stacked `512mib` microbench retains its 11-layer default.
 These process-local settings do not affect devnet sealing. Set
 `BENCH_PROOF_MICRO_LAYERS=2` on the general runner for the old small-sector case. Layer override
-experiments are limited to `2`, `11`, `15`, `17`, `19`, `22`, and `25`.
+experiments are limited to `2`, `11`, `13`, `15`, `17`, `19`, `22`, and `25`.
 
 ```bash
 POREP_PROOF_MICROBENCH_ALLOW_LARGE_SECTORS=1 BENCH_PROOF_MICRO_LAYERS=15 just bench-proof-micro zigzag 32gib
@@ -183,7 +183,7 @@ Image builds, full PoRep tests and benchmark acceptance run only on the
 authorized remote machine in `~/filecoin/porep-market-devnet`. Small local loader
 tests are authorized for the compact parameter implementation. The lock pins
 the measurement observer, CPU/cache controls and compact Groth16 parameters at
-`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`, including direct query decoding
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`, including direct query decoding
 into one initialized destination vector, cache recovery after panics and
 consistent Groth16 circuit/batch boundaries in both API paths. It also includes
 the optional per-C2 query cache, corrected cgroup-v2 root-limit detection and

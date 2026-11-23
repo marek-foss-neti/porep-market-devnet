@@ -94,13 +94,13 @@ not zero. Do not add/extrapolate them into total raw unseal. Prefix setup work
 is separate from reused blocks, so reuse counters alone are not a net speedup.
 
 Devnet pins the committed CPU decoder implementation at Rust revision
-`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`, including the required
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`, including the required
 `decode_cpu::DecodeCpuConfig` API. Publish this commit, fetch the managed sources
 and rebuild the dedicated image; no development-source override is required.
 Flags alone cannot update an old image. The repin does not establish full
 Rust/FFI validation or a measured speedup.
 
-Candidate command for an existing 512 MiB / 17-layer fixture:
+Candidate command for an existing 512 MiB / 13-layer fixture:
 
 ```sh
 BENCH_ZIGZAG_DECODE_FIELD=limbs \
@@ -128,7 +128,7 @@ identical. First isolate `FIELD=limbs`; then compare batches 1/4/8/16, prefix
 off/on, prefetch off/on and serial/interleaved SHA. Use `PROFILE_EVERY=64` for
 diagnosis and disable profiling for acceptance. Compare thread caps separately;
 physical-core/SMT and NUMA first-touch tests must record topology and placement.
-Validate 512 MiB, then full 32 GiB / 17-layer raw unseal before choosing defaults.
+Validate 512 MiB, then full 32 GiB / 13-layer raw unseal before choosing defaults.
 
 ## Validation — 9 November 2026
 

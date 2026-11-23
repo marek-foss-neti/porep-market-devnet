@@ -95,7 +95,7 @@ test("ZigZag runner enables fast raw unseal in every mode without changing nativ
   assert.equal(stacked.prune, "unset");
 });
 
-test("ZigZag defaults to 17 layers and accepts a matching fixed-profile override", () => {
+test("ZigZag defaults to 13 layers and accepts a matching fixed-profile override", () => {
   const source = readFileSync(join(root, "scripts/bench-proof-micro.sh"), "utf8");
   const start = source.indexOf('microbench_layers="');
   const end = source.indexOf('\ntelemetry_interval_ms=', start);
@@ -104,7 +104,7 @@ test("ZigZag defaults to 17 layers and accepts a matching fixed-profile override
   for (const sector_size of ["8mib", "512mib", "32gib"]) {
     for (const mode of ["full", "prewarm-only", "prepare-fixture", "unseal-only"]) {
       const env = { backend: "zigzag", sector_size, mode, bench_profile: "" };
-      for (const [override, expected] of [[{}, "17"], [{ BENCH_PROOF_MICRO_LAYERS: "11" }, "11"]]) {
+      for (const [override, expected] of [[{}, "13"], [{ BENCH_PROOF_MICRO_LAYERS: "11" }, "11"]]) {
         const result = shell(code, { ...env, ...override });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, expected);
@@ -113,7 +113,7 @@ test("ZigZag defaults to 17 layers and accepts a matching fixed-profile override
   }
   for (const bench_profile of ["zigzag-8", "zigzag-512"]) {
     const env = { backend: "zigzag", bench_profile };
-    for (const override of [{}, { BENCH_PROOF_MICRO_LAYERS: "17" }]) {
+    for (const override of [{}, { BENCH_PROOF_MICRO_LAYERS: "13" }]) {
       const result = shell(code, { ...env, ...override });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "");
@@ -297,7 +297,7 @@ test("raw unseal reports retain actual reader, bounded memory and nested open co
 
 test("blockwise decode reports actual storage, fallback and copy-back without inflating totals", () => {
   const events = [
-    { event: "ram_admission", accepted: false, available_bytes: 3000, required_bytes: 5000 },
+    { event: "ram_admission", accepted: false, available_bytes: 3000, required_bytes: 5000, parent_table_reserve_bytes: 0, headroom_reserve_bytes: 1000 },
     { event: "fallback", storage: "file", reason: "insufficient headroom" },
     { event: "storage", mode: "blockwise", requested_storage: "auto", storage: "file", state_bytes: 2048, block_bytes: 512, prepare_ns: 1000000 },
     { event: "layer", mode: "blockwise", reversed: true, blocks: 4, state_bytes: 2048, block_bytes: 512, decode_join_ns: 6000000, copy_back_ns: 2000000 },
@@ -316,6 +316,11 @@ test("blockwise decode reports actual storage, fallback and copy-back without in
   assert.match(markdown, /## Raw unseal state and copy-back/);
   assert.match(markdown, /\| layer \| — \| true \| 2048 \| 512 \| 4 \| 6 \| 2 \|/);
   assert.match(markdown, /not an OS memory reservation/);
+  assert.match(markdown, /\| false \| 3000 \| 5000 \| 0 \| 1000 \|/);
+  // Historical admission records must not acquire a fictitious zero-byte allowance.
+  delete report.decode_state[0].parent_table_reserve_bytes;
+  delete report.decode_state[0].headroom_reserve_bytes;
+  assert.match(renderPhaseMarkdown(report), /\| false \| 3000 \| 5000 \| unavailable \| unavailable \|/);
 });
 
 test("unseal output reports FR32 and writer times separately without inflating raw unseal", () => {
@@ -533,14 +538,14 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
     for (const dev of [true, false]) {
       const profile = {
         name: dev ? "zigzag-8" : "zigzag-512", padded_sector_bytes: dev ? 8388608 : 536870912,
-        nodes: dev ? 262144 : 16777216, binary_tree_depth: dev ? 18 : 24, layers: 17,
-        partitions: 63, minimum_challenges: 750,
-        challenges_per_layer_per_partition: 12, total_challenge_instances: 12852,
+        nodes: dev ? 262144 : 16777216, binary_tree_depth: dev ? 18 : 24, layers: 13,
+        partitions: 36, minimum_challenges: 530,
+        challenges_per_layer_per_partition: 15, total_challenge_instances: 7020,
       };
       const env = { BENCH_PROOF_MICRO_PROFILE: profile.name, backend: "zigzag", sector_size: dev ? "8mib" : "512mib", mode: "full",
         prewarm_summary_json: join(temporary, "prewarm.json"), summary_json: join(temporary, "summary.json") };
       const prewarm = { profile, verifying_key_matches_params: true };
-      const summary = { profile, porep_layers: 17, porep_partitions: profile.partitions,
+      const summary = { profile, porep_layers: 13, porep_partitions: profile.partitions,
         minimum_total_challenges: profile.minimum_challenges, challenges_per_layer_per_partition: profile.challenges_per_layer_per_partition,
         proof_len: profile.partitions * 192, unsealed_bytes: profile.padded_sector_bytes / 128 * 127,
         verify_seal: true, raw_unseal_bytes_match: true };
@@ -552,6 +557,7 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
       const valid = run();
       assert.equal(valid.status, 0, valid.stderr);
       for (const change of [{ partitions: 1 }, { minimum_challenges: 2 }, { challenges_per_layer_per_partition: 1 }, { layers: 2 },
+        { layers: 17, partitions: 63, minimum_challenges: 750, challenges_per_layer_per_partition: 12, total_challenge_instances: 12852 },
         { partitions: 47, minimum_challenges: 750, challenges_per_layer_per_partition: 16 },
         { partitions: 45, minimum_challenges: 720, challenges_per_layer_per_partition: 16 },
         { partitions: 45, minimum_challenges: 750, challenges_per_layer_per_partition: 17 },
@@ -568,12 +574,13 @@ test("fixed benchmark profiles reject stale proof budgets and incomplete unseali
         assert.notEqual(run(prewarm, summary, overrides).status, 0);
       }
     }
-    const largeEnv = { backend: "zigzag", sector_size: "32gib", mode: "full", microbench_layers: "17",
+    const largeEnv = { backend: "zigzag", sector_size: "32gib", mode: "full", microbench_layers: "13",
       prewarm_summary_json: join(temporary, "prewarm.json"), summary_json: join(temporary, "summary.json") };
     writeFileSync(largeEnv.summary_json, JSON.stringify({ verify_seal: true, raw_unseal_bytes_match: true }));
-    const largePrewarm = { porep_layers: 17, porep_partitions: 63, minimum_total_challenges: 750,
-      challenges_per_layer_per_partition: 12, verifying_key_matches_params: true };
+    const largePrewarm = { porep_layers: 13, porep_partitions: 36, minimum_total_challenges: 530,
+      challenges_per_layer_per_partition: 15, verifying_key_matches_params: true };
     for (const change of [{}, { porep_partitions: 10, minimum_total_challenges: 176, challenges_per_layer_per_partition: 18 },
+      { porep_partitions: 63, minimum_total_challenges: 750, challenges_per_layer_per_partition: 12 },
       { porep_partitions: 47, minimum_total_challenges: 750, challenges_per_layer_per_partition: 16 },
       { porep_partitions: 45, minimum_total_challenges: 720, challenges_per_layer_per_partition: 16 },
       { porep_partitions: 45, minimum_total_challenges: 750, challenges_per_layer_per_partition: 17 },

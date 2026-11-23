@@ -201,15 +201,15 @@ ZigZag in this branch is wired for `2kib`, `8mib`, `512mib`, and `32gib`.
 `32gib` is the larger production-size target; use it only with enough Docker
 memory, disk, proof parameters, and time budget.
 
-For a smaller sector with the same 17-layer, 63-partition proof budget:
+For a smaller sector with the same 13-layer, 36-partition proof budget:
 
 ```sh
 just bench-zigzag-8
 ```
 
-This 8 MiB profile uses the same optimization preset, minimum 750 challenges,
-100 GiB limit and disabled query cache. This gives 12 challenges per layer
-per partition, or 756 per layer. This is heavier than the former small proof;
+This 8 MiB profile uses the same optimization preset, minimum 530 challenges,
+100 GiB limit and disabled query cache. This gives 15 challenges per layer
+per partition, or 540 per layer. This is heavier than the former small proof;
 the updated Rust benchmark budget is pinned, and requires an image rebuild
 with `just build`. See [the development profile](docs/runtime/zigzag-benchmarks.md#8-mib-development-profile).
 
@@ -384,7 +384,7 @@ is rejected. The loader permits at most 120 GiB base plus cache. See the
 `BENCH_ZIGZAG_QUERY_CACHE_BYTES=0` disables query cache. SDR and Curio service
 limits are unchanged.
 
-ZigZag benchmarks use 17 layers, buffered parents, blockwise decode, automatic
+ZigZag benchmarks use 13 layers, buffered parents, blockwise decode, automatic
 storage and streamed output by default, with limb arithmetic, batches of 8,
 serial SHA, prefix reuse and prefetch. See the
 [shared raw-unseal preset](docs/runtime/zigzag-benchmarks.md#shared-raw-unseal-defaults)

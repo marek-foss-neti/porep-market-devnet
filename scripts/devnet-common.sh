@@ -989,6 +989,10 @@ devnet_require_zigzag_apis() {
   [[ -f "${decode_cpu}" && ! -L "${decode_cpu}" ]] &&
     grep -Eq '^pub struct DecodeCpuConfig' "${decode_cpu}" ||
     devnet_die "ZigZag source lacks the CPU decode kernel API; select the implementation source until its commit is pinned"
+  local decode_parents="${source}/storage-proofs-porep/src/zigzag/vanilla/decode_parents.rs"
+  [[ -f "${decode_parents}" && ! -L "${decode_parents}" ]] &&
+    grep -Eq '^[[:space:]]*pub fn parent_table_reserve_bytes\(' "${decode_parents}" ||
+    devnet_die "ZigZag source lacks buffered unseal RAM admission; commit and repin the updated Rust source or select an explicit development source"
 }
 
 devnet_rust_fil_proofs_content_sha256() {

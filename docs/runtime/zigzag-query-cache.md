@@ -134,7 +134,7 @@ is significant.
 
 Run Rust builds, tests and full benchmarks only on the remote machine. Devnet
 now pins the committed implementation, including the cgroup-root fix, at
-`80b89a875cf69c4ffbc87630fa5d777ebebaaab1`. Fetch the managed sources and rebuild
+`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`. Fetch the managed sources and rebuild
 the dedicated images to use this revision. For further uncommitted changes,
 use an isolated source copy via `DEVNET_RUST_FIL_PROOFS_SOURCE`, not a managed
 checkout. The build guard requires the adapter API. Keep all development changes
@@ -157,7 +157,7 @@ The current presets use 100 GiB with cache off and 120 GiB with the default
 a fixed total RAM limit. For a fixed-total 100 GiB comparison, use a 100 GiB
 base with cache off versus an 80 GiB base plus 20 GiB cache; record the different
 base budgets. The historical 60 GiB, 11-layer run does not validate either
-17-layer configuration. Keep batch 1 and other settings identical. Check the
+13-layer configuration. Keep batch 1 and other settings identical. Check the
 reported family selection, one decode per retained family followed by hits,
 all ten proofs, verification and unseal. Compare
 C2 and the full sealing path with comparable host load/cache state. Batch 2
