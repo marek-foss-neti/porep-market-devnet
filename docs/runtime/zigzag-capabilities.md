@@ -10,7 +10,7 @@ builds the ZigZag microbench and Curio images; `just build` also builds them
 alongside the standard images.
 
 The lock pins `rust-fil-proofs` to
-`cb3131680127c8bd4ea4f60d4348feb3b3e57d6d`. This revision uses the full Chung expander
+`41f4789bcd69e3ec70cc7154f358abf953423bfb`. This revision uses the full Chung expander
 with 22 parent slots and distinct Groth16/parent-table cache identifiers.
 Rebuild the images and prepare new parameters, parent tables and unseal fixtures
 when upgrading from the half graph. It also includes
