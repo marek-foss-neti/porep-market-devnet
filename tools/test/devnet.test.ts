@@ -152,7 +152,7 @@ const writeProofMicroProvenanceScriptPath = join(
   "write-proof-micro-provenance.mjs",
 );
 const curioSourceCommit = "ce15c0c92209366a5523b803e9c159baa2ffb66a";
-const rustFilProofsSourceCommit = "41f4789bcd69e3ec70cc7154f358abf953423bfb";
+const rustFilProofsSourceCommit = "20eabca3c6e30cff681fbd0b8bb73d17a2a13a44";
 const derivedImageServices = [
   "lotus",
   "contracts-bootstrap",

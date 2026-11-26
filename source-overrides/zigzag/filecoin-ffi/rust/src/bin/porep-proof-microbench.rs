@@ -54,6 +54,8 @@ const SECTOR_SIZE_512_MIB: u64 = 512 * 1024 * 1024;
 const SECTOR_SIZE_32_GIB: u64 = 32 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_LOCAL_SECTOR_SIZE: u64 = SECTOR_SIZE_8_MIB;
 const MICROBENCH_LAYERS_ENV: &str = "POREP_PROOF_MICROBENCH_LAYERS";
+const SDR_V2_MODES: &str =
+    "the sdr-v2 backend supports only --prepare-fixture and --unseal-only: it has no commitments or proofs yet";
 
 #[path = "support/zigzag_512_profile.rs"]
 mod zigzag_512_profile;
@@ -71,6 +73,8 @@ enum Mode {
 enum Backend {
     Stacked,
     ZigZag,
+    /// SDR v2 (keyed-PRP labels, parallel decoding): fixture preparation and unseal only.
+    SdrV2,
 }
 
 #[derive(Debug, Serialize)]
@@ -132,6 +136,11 @@ struct FixtureManifest {
     proof_cache_artifacts: Vec<String>,
     unpadded_bytes: u64,
     deterministic_pattern: String,
+    /// SDR v2 only: the two parameters that fix the bytes of the replica.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sdr_v2_layers: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sdr_v2_key_blocks: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,6 +178,9 @@ struct UnsealOnlySummary {
     raw_unseal_bytes_match: bool,
     mismatch_at: Option<u64>,
     throughput_mib_per_s: Option<f64>,
+    /// SDR v2 only: replica parameters and decoder settings of this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sdr_v2: Option<serde_json::Value>,
     phases: Vec<PhaseMetric>,
 }
 
@@ -299,7 +311,7 @@ fn cpu_configuration(sector_size_bytes: u64) -> Result<serde_json::Value> {
 
 fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1).collect())?;
-    if matches!(args.backend, Backend::ZigZag) {
+    if matches!(args.backend, Backend::ZigZag | Backend::SdrV2) {
         fil_logger::init();
         configure_cpu_runtime(args.sector_size_bytes)?;
     }
@@ -311,7 +323,7 @@ fn main() -> Result<()> {
         &proof_parameter_cache_dir(),
         &parent_cache_dir(),
     )?;
-    if telemetry.is_some() && matches!(args.backend, Backend::ZigZag) {
+    if telemetry.is_some() && matches!(args.backend, Backend::ZigZag | Backend::SdrV2) {
         use storage_proofs_porep_zigzag::zigzag::measurements::{
             set_operation_observer, OperationBoundary,
         };
@@ -349,6 +361,7 @@ fn main() -> Result<()> {
             let summary = match args.backend {
                 Backend::Stacked => run_stacked(&args)?,
                 Backend::ZigZag => run_zigzag(&args)?,
+                Backend::SdrV2 => bail!(SDR_V2_MODES),
             };
             serde_json::to_string_pretty(&summary)?
         }
@@ -422,7 +435,7 @@ impl Args {
                     )?);
                 }
                 "--help" | "-h" => {
-                    println!("usage: porep-proof-microbench --backend stacked|zigzag --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-8|zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
+                    println!("usage: porep-proof-microbench --backend stacked|zigzag|sdr-v2 --sector-size 2kib|8mib|512mib|32gib --work-dir PATH [--profile zigzag-8|zigzag-512] [--prewarm-only|--prepare-fixture|--unseal-only] [--range-offset BYTES --range-size BYTES]");
                     std::process::exit(0);
                 }
                 _ => bail!("unknown argument: {arg}"),
@@ -444,6 +457,16 @@ impl Args {
             )
         {
             bail!("ZigZag microbench supports only 2KiB, 8MiB, 512MiB, and 32GiB sectors in this restore-zigzag overlay");
+        }
+        if backend == Backend::SdrV2 {
+            ensure!(
+                matches!(mode, Mode::PrepareFixture | Mode::UnsealOnly),
+                SDR_V2_MODES
+            );
+            ensure!(
+                profile.is_none(),
+                "the sdr-v2 backend has no benchmark profiles"
+            );
         }
         let work_dir = work_dir.unwrap_or_else(default_work_dir);
         if let Some(ref name) = profile {
@@ -562,6 +585,7 @@ fn parse_backend(value: &str) -> Result<Backend> {
     match value.to_ascii_lowercase().as_str() {
         "stacked" | "sdr" => Ok(Backend::Stacked),
         "zigzag" => Ok(Backend::ZigZag),
+        "sdr-v2" | "sdrv2" => Ok(Backend::SdrV2),
         _ => bail!("invalid backend: {value}"),
     }
 }
@@ -619,6 +643,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
     let prewarm = match args.backend {
         Backend::Stacked => prewarm_stacked_params(args, registered_proof)?,
         Backend::ZigZag => prewarm_zigzag_params(args, registered_proof)?,
+        Backend::SdrV2 => bail!(SDR_V2_MODES),
     };
     if let Some(ref profile) = profile {
         ensure!(
@@ -647,7 +672,7 @@ fn prewarm_params(args: &Args) -> Result<ParamPrewarmSummary> {
         parent_cache: parent_cache_dir().display().to_string(),
         parent_cache_window_nodes: parent_cache_window_nodes(args.backend),
         zigzag_parent_cache: match args.backend {
-            Backend::Stacked => None,
+            Backend::Stacked | Backend::SdrV2 => None,
             Backend::ZigZag => Some(parent_cache_dir().display().to_string()),
         },
         parameter_cache_identifier: prewarm.cache_identifier,
@@ -893,6 +918,7 @@ fn prepare_fixture(args: &Args) -> Result<FixtureSummary> {
     let fixture = match args.backend {
         Backend::Stacked => prepare_stacked_fixture(args, registered_proof, &mut phases)?,
         Backend::ZigZag => prepare_zigzag_fixture(args, registered_proof, &mut phases)?,
+        Backend::SdrV2 => prepare_sdr_v2_fixture(args, registered_proof, &mut phases)?,
     };
     let manifest_path = fixture_manifest_path(args);
     let mut manifest = File::create(&manifest_path)
@@ -1071,6 +1097,88 @@ fn prepare_zigzag_fixture(
     )
 }
 
+/// The SDR v2 replica format of a sector size: the SDR graph of the registered proof, with the
+/// given layers and key blocks.
+fn sdr_v2_config(
+    sector_size_bytes: u64,
+    registered_proof: RegisteredSealProof,
+    settings: &zigzag::SdrV2Settings,
+) -> Result<zigzag::SdrV2Config> {
+    zigzag::SdrV2Config::new(
+        sector_size_bytes,
+        registered_proof.as_v1_config().porep_id,
+        ZigZagApiVersion::V1_2_0,
+        settings,
+    )
+}
+
+/// A minimal unseal fixture: deterministic data sealed with the simple SDR v2 encoder. There are
+/// no trees and no proofs; the encoder runs one sequential thread per layer.
+fn prepare_sdr_v2_fixture(
+    args: &Args,
+    registered_proof: RegisteredSealProof,
+    phases: &mut Vec<PhaseMetric>,
+) -> Result<FixtureManifest> {
+    let cache_dir = args.work_dir.join("sdr-v2-cache");
+    fs::create_dir_all(&cache_dir).context("create SDR v2 fixture cache")?;
+    let sealed_path = args.work_dir.join("sdr-v2-sealed.dat");
+    let settings = zigzag::SdrV2Settings::from_env()?;
+    let config = sdr_v2_config(args.sector_size_bytes, registered_proof, &settings)?;
+    let raw_len = unpadded_bytes_for_sector_size(args.sector_size_bytes);
+
+    eprintln!(
+        "preparing SDR v2 minimal unseal fixture: add_piece sector_size={} raw_bytes={} layers={} key_blocks={}",
+        args.sector_size_label, raw_len, settings.layers, settings.key_blocks
+    );
+    let piece_info = measure(phases, "prepare_fixture_add_piece", || {
+        let mut sealed = File::create(&sealed_path).context("create SDR v2 fixture sector")?;
+        let (piece_info, _written) = zigzag::add_piece(
+            DeterministicReader::new(0, raw_len),
+            &mut sealed,
+            zigzag::UnpaddedBytesAmount(raw_len),
+            &[],
+        )?;
+        sealed.flush().context("flush SDR v2 fixture sector")?;
+        Ok(piece_info)
+    })?;
+    let comm_d = piece_info.commitment;
+    let sector_id = 0;
+    let replica_id = zigzag::sdr_v2_replica_id(
+        &config,
+        PROVER_ID,
+        ZigZagSectorId::from(sector_id),
+        TICKET,
+        comm_d,
+    );
+
+    eprintln!("preparing SDR v2 minimal unseal fixture: encoding layers");
+    measure(phases, "prepare_fixture_encode_layers", || {
+        let sealed = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&sealed_path)
+            .with_context(|| format!("open SDR v2 fixture sector {}", sealed_path.display()))?;
+        zigzag::sdr_v2_seal_file(&config, &replica_id, &sealed)
+            .with_context(|| format!("seal SDR v2 fixture {}", sealed_path.display()))
+    })?;
+
+    let mut manifest = fixture_manifest(
+        args,
+        registered_proof,
+        &sealed_path,
+        &cache_dir,
+        sector_id,
+        comm_d,
+        None,
+        None,
+        Vec::new(),
+        raw_len,
+    )?;
+    manifest.sdr_v2_layers = Some(settings.layers);
+    manifest.sdr_v2_key_blocks = Some(settings.key_blocks);
+    Ok(manifest)
+}
+
 fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
     let manifest_path = fixture_manifest_path(args);
     let manifest = read_fixture_manifest(&manifest_path)?;
@@ -1105,6 +1213,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
     let cache_dir = manifest.cache_dir.clone();
     let mut phases = Vec::new();
     let mut verifier = DeterministicVerifySink::new(range_offset);
+    let mut sdr_v2_summary = None;
 
     let unsealed_bytes = match manifest.backend {
         Backend::Stacked => {
@@ -1158,6 +1267,64 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
             })?;
             amount.0
         }
+        Backend::SdrV2 => {
+            // The replica format comes from the fixture; the environment may only repeat it.
+            let mut settings = zigzag::SdrV2Settings::from_env()?;
+            let layers = manifest
+                .sdr_v2_layers
+                .context("fixture manifest has no SDR v2 layer count")?;
+            let key_blocks = manifest
+                .sdr_v2_key_blocks
+                .context("fixture manifest has no SDR v2 key blocks")?;
+            for (name, requested, fixture) in [
+                ("FIL_PROOFS_SDRV2_LAYERS", settings.layers, layers),
+                ("FIL_PROOFS_SDRV2_KEY_BLOCKS", settings.key_blocks, key_blocks),
+            ] {
+                ensure!(
+                    std::env::var(name).map_or(true, |value| value.trim().is_empty())
+                        || requested == fixture,
+                    "{name}={requested} does not match the fixture, which was sealed with {fixture}"
+                );
+            }
+            settings.layers = layers;
+            settings.key_blocks = key_blocks;
+            let config = sdr_v2_config(manifest.sector_size_bytes, registered_proof, &settings)?;
+            let replica_id = zigzag::sdr_v2_replica_id(
+                &config,
+                prover_id,
+                ZigZagSectorId::from(sector_id),
+                ticket,
+                comm_d,
+            );
+            sdr_v2_summary = Some(serde_json::json!({
+                "layers": settings.layers,
+                "key_blocks": settings.key_blocks,
+                "parent_labels_per_key": config.params.parent_labels(),
+                "decode_batch": settings.decode_batch,
+                "huge_pages_requested": settings.huge_pages,
+                "drg_parent_table_requested": settings.drg_parent_table,
+                "rayon_num_threads": rayon::current_num_threads(),
+            }));
+            let amount = measure(&mut phases, "raw_unseal_retrieval", || {
+                eprintln!(
+                    "running SDR v2 raw unseal/retrieval: opening sealed sector sector_size={} layers={} key_blocks={} range_offset={} range_size={}",
+                    manifest.sector_size_label, layers, key_blocks, range_offset, range_size
+                );
+                let sealed = OpenOptions::new()
+                    .read(true)
+                    .open(&sealed_path)
+                    .with_context(|| format!("open SDR v2 sealed fixture {}", sealed_path))?;
+                zigzag::sdr_v2_unseal_range(
+                    &config,
+                    &sealed,
+                    &mut verifier,
+                    &replica_id,
+                    zigzag::UnpaddedByteIndex(range_offset),
+                    zigzag::UnpaddedBytesAmount(range_size),
+                )
+            })?;
+            amount.0
+        }
     };
 
     let unseal_phase = phases
@@ -1171,6 +1338,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
     let unseal_path = match backend {
         Backend::Stacked => "Stacked get_unsealed_range_mapped",
         Backend::ZigZag => "ZigZag zigzag_unseal_range",
+        Backend::SdrV2 => "SDR v2 sdr_v2_unseal_range",
     };
     let parent_cache_window_nodes = parent_cache_window_nodes(backend);
 
@@ -1203,6 +1371,7 @@ fn run_unseal_only(args: &Args) -> Result<UnsealOnlySummary> {
         raw_unseal_bytes_match,
         mismatch_at: verifier.mismatch_at,
         throughput_mib_per_s,
+        sdr_v2: sdr_v2_summary,
         phases,
     })
 }
@@ -1596,6 +1765,8 @@ fn fixture_manifest(
         proof_cache_artifacts,
         unpadded_bytes,
         deterministic_pattern: "byte(i)=(i*31+(i>>3)+17)&0xff".to_string(),
+        sdr_v2_layers: None,
+        sdr_v2_key_blocks: None,
     })
 }
 
@@ -1683,6 +1854,8 @@ fn parent_cache_window_nodes(backend: Backend) -> u32 {
     let variable = match backend {
         Backend::Stacked => "FIL_PROOFS_SDR_PARENTS_CACHE_SIZE",
         Backend::ZigZag => "FIL_PROOFS_ZIGZAG_PARENT_CACHE_SIZE",
+        // SDR v2 computes its parents on the fly and has no parent cache.
+        Backend::SdrV2 => return 0,
     };
     std::env::var(variable)
         .ok()

@@ -94,7 +94,7 @@ not zero. Do not add/extrapolate them into total raw unseal. Prefix setup work
 is separate from reused blocks, so reuse counters alone are not a net speedup.
 
 Devnet pins the committed CPU decoder implementation at Rust revision
-`41f4789bcd69e3ec70cc7154f358abf953423bfb`, including the required
+`20eabca3c6e30cff681fbd0b8bb73d17a2a13a44`, including the required
 `decode_cpu::DecodeCpuConfig` API. Publish this commit, fetch the managed sources
 and rebuild the dedicated image; no development-source override is required.
 Flags alone cannot update an old image. The repin does not establish full

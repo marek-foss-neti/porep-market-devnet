@@ -109,7 +109,7 @@ parent reader, full table size and the amount actually reserved for that table.
 ## Build and comparison
 
 Devnet pins the committed implementation at Rust revision
-`41f4789bcd69e3ec70cc7154f358abf953423bfb`. The overlay requires
+`20eabca3c6e30cff681fbd0b8bb73d17a2a13a44`. The overlay requires
 `zigzag_unseal_range_with_block` and `DecodeConfig::parent_table_reserve_bytes`;
 the pinned revision includes the buffered-admission correction. Fetch the managed
 sources and rebuild the selected ZigZag image.

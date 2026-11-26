@@ -6,7 +6,18 @@ devnet_require_command docker
 devnet_require_command jq
 devnet_require_command node
 
-backend="$(devnet_normalize_proof_backend "${1:-${DEVNET_PROOF_BACKEND:-stacked}}")"
+requested_backend="${1:-${DEVNET_PROOF_BACKEND:-stacked}}"
+# SDR v2 has no devnet integration: it runs in the ZigZag microbench image with the ZigZag
+# container settings, and only the --backend given to the binary differs.
+microbench_backend=""
+case "${requested_backend}" in
+  sdr-v2|sdrv2)
+    microbench_backend="sdr-v2"
+    requested_backend="zigzag"
+    ;;
+esac
+backend="$(devnet_normalize_proof_backend "${requested_backend}")"
+microbench_backend="${microbench_backend:-${backend}}"
 sector_size="${2:-${DEVNET_SECTOR_SIZE:-8mib}}"
 sector_size="$(devnet_normalize_sector_size "${sector_size}")"
 mode="${3:-full}"
@@ -54,9 +65,17 @@ esac
 if [[ "${mode}" == "prewarm-only" && "${backend}" != "zigzag" ]]; then
   devnet_die "prewarm-only mode is reserved for ZigZag setup"
 fi
+if [[ "${microbench_backend}" == sdr-v2 ]]; then
+  [[ "${mode}" == "prepare-fixture" || "${mode}" == "unseal-only" ]] ||
+    devnet_die "sdr-v2 supports only prepare-fixture and unseal-only: it has no commitments or proofs yet"
+  [[ -z "${bench_profile}" ]] || devnet_die "sdr-v2 has no benchmark profiles"
+fi
 
 microbench_layers="${BENCH_PROOF_MICRO_LAYERS:-${POREP_PROOF_MICROBENCH_LAYERS:-}}"
-if [[ "${backend}" == zigzag && -z "${bench_profile}" ]]; then
+if [[ "${microbench_backend:-${backend}}" == sdr-v2 ]]; then
+  # SDR v2 takes its layer count from BENCH_SDRV2_LAYERS, not from the ZigZag override.
+  microbench_layers=""
+elif [[ "${backend}" == zigzag && -z "${bench_profile}" ]]; then
   microbench_layers="${microbench_layers:-13}"
 elif [[ -z "${microbench_layers}" && -z "${bench_profile}" && "${mode}" == "full" && "${sector_size}" == "512mib" ]]; then
   microbench_layers="11"
@@ -104,6 +123,27 @@ if [[ "${backend}" == "stacked" ]]; then
   fi
 fi
 
+sdrv2_layers=""
+sdrv2_key_blocks=""
+sdrv2_decode_batch=""
+sdrv2_huge_pages=""
+sdrv2_drg_parent_table=""
+if [[ "${microbench_backend}" == sdr-v2 ]]; then
+  sdrv2_integer() {
+    local label="$1" value="$2" minimum="$3" maximum="$4"
+    [[ "${value}" =~ ^[0-9]{1,3}$ ]] && ((10#${value} >= minimum && 10#${value} <= maximum)) ||
+      devnet_die "${label} must be between ${minimum} and ${maximum}"
+    printf '%s\n' "$((10#${value}))"
+  }
+  # Layers and key blocks fix the bytes of the replica, so a fixture is tied to them.
+  sdrv2_layers="$(sdrv2_integer BENCH_SDRV2_LAYERS "${BENCH_SDRV2_LAYERS:-${FIL_PROOFS_SDRV2_LAYERS:-11}}" 1 64)"
+  sdrv2_key_blocks="$(sdrv2_integer BENCH_SDRV2_KEY_BLOCKS "${BENCH_SDRV2_KEY_BLOCKS:-${FIL_PROOFS_SDRV2_KEY_BLOCKS:-16}}" 5 21)"
+  sdrv2_decode_batch="$(sdrv2_integer BENCH_SDRV2_DECODE_BATCH "${BENCH_SDRV2_DECODE_BATCH:-${FIL_PROOFS_SDRV2_DECODE_BATCH:-8}}" 1 64)"
+  sdrv2_huge_pages="$(normalize_microbench_bool "${BENCH_SDRV2_HUGE_PAGES:-${FIL_PROOFS_SDRV2_HUGE_PAGES:-1}}" "BENCH_SDRV2_HUGE_PAGES")"
+  # Parents of the sector kept in memory (20 bytes per node) instead of computed in every layer.
+  sdrv2_drg_parent_table="$(normalize_microbench_bool "${BENCH_SDRV2_DRG_PARENT_TABLE:-${FIL_PROOFS_SDRV2_DRG_PARENT_TABLE:-1}}" "BENCH_SDRV2_DRG_PARENT_TABLE")"
+fi
+
 devnet_prepare_runtime
 
 image_manifest="$(devnet_proof_microbench_manifest_for_backend "${backend}")"
@@ -111,7 +151,7 @@ image="$(devnet_proof_microbench_image_for_backend "${backend}")"
 
 timestamp="$(date -u +%Y-%m-%dT%H-%M-%S-%3NZ)"
 safe_sector="$(printf '%s' "${sector_size}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
-run_name="bench-proof-micro-${backend}-${safe_sector}"
+run_name="bench-proof-micro-${microbench_backend}-${safe_sector}"
 [[ -z "${bench_profile}" ]] || run_name="${run_name}-${bench_profile}"
 if [[ "${mode}" != "full" ]]; then
   run_name="${run_name}-${mode}"
@@ -142,7 +182,10 @@ stderr_log="${run_dir}/stderr.log"
 unseal_cidfile="${run_dir}/unseal.cid"
 measured_cidfile="${run_dir}/container.cid"
 work_dir="${run_dir}/work"
-if [[ "${backend}" == "zigzag" ]]; then
+if [[ "${microbench_backend}" == sdr-v2 ]]; then
+  fixture_override="${BENCH_SDRV2_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
+  parent_cache_override="${BENCH_ZIGZAG_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
+elif [[ "${backend}" == "zigzag" ]]; then
   fixture_override="${BENCH_ZIGZAG_MICRO_FIXTURE_DIR:-${BENCH_MICRO_FIXTURE_DIR:-}}"
   parent_cache_override="${BENCH_ZIGZAG_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
 else
@@ -150,6 +193,10 @@ else
   parent_cache_override="${BENCH_STACKED_PARENT_CACHE_DIR:-${BENCH_PARENT_CACHE_DIR:-}}"
 fi
 fixture_host="${4:-${fixture_override:-${DEVNET_ROOT}/.runtime/proof-micro-fixtures/${backend}-${safe_sector}-minimal-unseal}}"
+if [[ "${microbench_backend}" == sdr-v2 ]]; then
+  # A fixture is one replica format: the directory name carries the layers and key blocks.
+  fixture_host="${4:-${fixture_override:-${DEVNET_ROOT}/.runtime/proof-micro-fixtures/sdr-v2-${safe_sector}-l${sdrv2_layers}-b${sdrv2_key_blocks}-minimal-unseal}}"
+fi
 parameter_cache_host="${DEVNET_PROOF_PARAMETERS_DIR}"
 if [[ "${backend}" == "stacked" ]]; then
   parameter_cache_host="${run_dir}/stacked-proof-parameter-cache"
@@ -202,6 +249,15 @@ docker_common_args=(
   -v "${run_dir}:/bench-run:rw"
   "${docker_parent_cache_args[@]}"
 )
+if [[ "${microbench_backend}" == sdr-v2 ]]; then
+  docker_common_args+=(
+    -e "FIL_PROOFS_SDRV2_LAYERS=${sdrv2_layers}"
+    -e "FIL_PROOFS_SDRV2_KEY_BLOCKS=${sdrv2_key_blocks}"
+    -e "FIL_PROOFS_SDRV2_DECODE_BATCH=${sdrv2_decode_batch}"
+    -e "FIL_PROOFS_SDRV2_HUGE_PAGES=${sdrv2_huge_pages}"
+    -e "FIL_PROOFS_SDRV2_DRG_PARENT_TABLE=${sdrv2_drg_parent_table}"
+  )
+fi
 benchmark_limit_args=()
 prewarm_limit_args=()
 if [[ "${backend}" == "zigzag" ]]; then
@@ -258,7 +314,7 @@ if [[ "${backend}" == "zigzag" ]]; then
     zigzag_malloc_arena_max="$(zigzag_cpu_setting BENCH_ZIGZAG_MALLOC_ARENA_MAX "${BENCH_ZIGZAG_MALLOC_ARENA_MAX}" 1 256)"
     docker_common_args+=(-e "MALLOC_ARENA_MAX=${zigzag_malloc_arena_max}")
   fi
-  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_setup=info,zigzag_precommit=info,zigzag_unseal=info,bellperson::groth16::prover=info")
+  docker_common_args+=(-e "RUST_LOG=zigzag_cpu=info,zigzag_cache=info,zigzag_parameters=info,zigzag_merkle=info,zigzag_pipeline=info,zigzag_setup=info,zigzag_precommit=info,zigzag_unseal=info,sdrv2=info,bellperson::groth16::prover=info")
 fi
 zigzag_setup_args=()
 if [[ "${backend}" == "zigzag" ]]; then
@@ -724,7 +780,7 @@ run_prepare_fixture() {
   local cidfile="$4"
   local fixture_pid fixture_progress_pid status
   rm -f -- "${cidfile}"
-  devnet_progress "bench-proof-micro: preparing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
+  devnet_progress "bench-proof-micro: preparing ${microbench_backend} ${sector_size} unseal fixture at ${fixture_host}"
   measured_started_ms="$(bench_epoch_ms)"
   docker run --rm \
     --cidfile "${cidfile}" \
@@ -734,7 +790,7 @@ run_prepare_fixture() {
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
     porep-proof-microbench \
-      --backend "${backend}" \
+      --backend "${microbench_backend}" \
       --sector-size "${sector_size}" \
       --work-dir /bench-fixture \
       --prepare-fixture \
@@ -743,13 +799,13 @@ run_prepare_fixture() {
   fixture_progress_pid=""
   bench_start_fixture_progress \
     fixture_progress_pid \
-    "bench-proof-micro: ${backend} ${sector_size} unseal fixture preparation" \
+    "bench-proof-micro: ${microbench_backend} ${sector_size} unseal fixture preparation" \
     "${output_stderr}" \
     "${fixture_host}"
   if wait "${fixture_pid}"; then
     measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${fixture_progress_pid}"
-    devnet_progress "bench-proof-micro: ${backend} ${sector_size} unseal fixture preparation complete; summary=${output_json}"
+    devnet_progress "bench-proof-micro: ${microbench_backend} ${sector_size} unseal fixture preparation complete; summary=${output_json}"
     return 0
   else
     status=$?
@@ -763,9 +819,14 @@ run_unseal_only_benchmark() {
   local status unseal_pid unseal_progress_pid range_label
   range_label="$(bench_unseal_range_label "${fixture_host}/fixture.json")"
   rm -f -- "${unseal_cidfile}"
-  devnet_progress "bench-proof-micro: starting measured ${backend} ${sector_size} unseal-only benchmark; range=${range_label}; fixture=${fixture_host}; summary=${summary_json}"
-  if [[ "${backend}" == "zigzag" ]]; then
-    devnet_progress "bench-proof-micro: ZigZag unseal-only decodes the full sealed sector before writing the requested range"
+  if [[ "${microbench_backend}" == sdr-v2 ]]; then
+    devnet_progress "bench-proof-micro: starting measured sdr-v2 ${sector_size} unseal-only benchmark; range=${range_label}; fixture=${fixture_host}; summary=${summary_json}"
+    devnet_progress "bench-proof-micro: SDR v2 unseal-only decodes the full sealed sector before writing the requested range; layers=${sdrv2_layers} key_blocks=${sdrv2_key_blocks}"
+  else
+    devnet_progress "bench-proof-micro: starting measured ${backend} ${sector_size} unseal-only benchmark; range=${range_label}; fixture=${fixture_host}; summary=${summary_json}"
+    if [[ "${backend}" == "zigzag" ]]; then
+      devnet_progress "bench-proof-micro: ZigZag unseal-only decodes the full sealed sector before writing the requested range"
+    fi
   fi
   measured_started_ms="$(bench_epoch_ms)"
   docker run --rm \
@@ -776,7 +837,7 @@ run_unseal_only_benchmark() {
     -v "${fixture_host}:/bench-fixture:rw" \
     "${image}" \
     porep-proof-microbench \
-      --backend "${backend}" \
+      --backend "${microbench_backend}" \
       --sector-size "${sector_size}" \
       --work-dir /bench-fixture \
       --unseal-only \
@@ -786,14 +847,14 @@ run_unseal_only_benchmark() {
   unseal_progress_pid=""
   bench_start_unseal_progress \
     unseal_progress_pid \
-    "bench-proof-micro: ${backend} ${sector_size} measured unseal-only" \
+    "bench-proof-micro: ${microbench_backend} ${sector_size} measured unseal-only" \
     "${stderr_log}" \
     "${summary_json}" \
     "${unseal_cidfile}"
   if wait "${unseal_pid}"; then
     measured_finished_ms="$(bench_epoch_ms)"
     devnet_stop_prewarm_progress "${unseal_progress_pid}"
-    devnet_progress "bench-proof-micro: ${backend} ${sector_size} measured unseal-only complete; summary=${summary_json}"
+    devnet_progress "bench-proof-micro: ${microbench_backend} ${sector_size} measured unseal-only complete; summary=${summary_json}"
     return 0
   else
     status=$?
@@ -811,7 +872,7 @@ if [[ -n "${BENCH_UNSEAL_RANGE_SIZE:-}" ]]; then
   range_args+=(--range-size "${BENCH_UNSEAL_RANGE_SIZE}")
 fi
 
-devnet_progress "bench-proof-micro: backend=${backend} sector_size=${sector_size} image=${image}"
+devnet_progress "bench-proof-micro: backend=${microbench_backend} sector_size=${sector_size} image=${image}"
 if [[ -n "${microbench_layers}" ]]; then
   devnet_progress "bench-proof-micro: PoRep layers override=${microbench_layers}"
 fi
@@ -913,7 +974,7 @@ if [[ "${mode}" == "unseal-only" ]]; then
     if ! jq -e '.fixture_kind == "minimal-unseal"' "${fixture_host}/fixture.json" >/dev/null; then
       devnet_die "existing fixture at ${fixture_host} is not a minimal-unseal fixture; choose an empty fixture directory or recreate it with just bench-proof-micro-prepare-fixture"
     fi
-    devnet_progress "bench-proof-micro: reusing ${backend} ${sector_size} unseal fixture at ${fixture_host}"
+    devnet_progress "bench-proof-micro: reusing ${microbench_backend} ${sector_size} unseal fixture at ${fixture_host}"
   fi
 
   if run_unseal_only_benchmark; then
